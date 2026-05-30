@@ -1,0 +1,139 @@
+# ModelBridge (cnagent) — config.yaml 示例
+#
+# 这份文件是参考样例，cnagent init 会写一份精简版到 ~/.cnagent/config.yaml。
+# 你可以照着这里的字段把 routing / security / cache 配满。
+
+# 默认使用的模型 (来自 models.yaml 中的 name)
+default_model: deepseek-chat
+
+# 多模型路由：根据任务复杂度 / 类型分配不同等级
+# v0.1 仅保存配置，未生效；v0.3 开始正式启用。
+routing:
+  mode: balanced            # balanced | cheap-first | quality-first | local-first
+  levels:
+    tiny: local-qwen
+    cheap: deepseek-chat
+    coder: qwen-coder
+    agent: minimax-agent
+    expert: kimi-k2
+
+# 安全：限制 agent 能访问的目录 / 阻断敏感文件
+security:
+  allowed_project_dirs: []  # 留空 = 不限制 (v0.1 未强制；v0.5 Agent 阶段生效)
+  block_sensitive_files:
+    - .env
+    - id_rsa
+    - id_ed25519
+    - .ssh
+    - config.json
+    - secrets.yaml
+
+# 上下文缓存策略：把稳定前缀放在最前，提升缓存命中
+cache:
+  enabled: true
+  strategy: stable-prefix   # stable-prefix | none
+
+# 执行器 (mbridge run / 后续 fix / loop)：在内置白名单之外追加项目专属命令。
+# 内置白名单包含 pytest / python / npm / pnpm / yarn / node / go / cargo / make
+# / ruff / mypy / black / tsc / jest / vitest 等；下面这段是「并集追加」，
+# 黑名单 (rm / shutdown / curl / ssh …) 不可被 config 关闭。
+executor:
+  allowed_commands: []      # 例: ["poetry", "uv", "hatch"]
+
+# ---------------------------------------------------------------------------
+# 参考：models.yaml 示例 (不属于 config.yaml，仅供查阅)
+# ---------------------------------------------------------------------------
+#
+# models:
+#   - name: deepseek-chat
+#     provider: deepseek
+#     type: openai-compatible
+#     base_url: https://api.deepseek.com
+#     api_key_env: DEEPSEEK_API_KEY
+#     api_key: ""
+#     model: deepseek-chat
+#     level: cheap
+#     capabilities:
+#       tools: true
+#       json: true
+#       vision: false
+#       reasoning: false
+#       reasoning_content_back: false
+#       cache: true
+#       local: false
+#     extra:
+#       temperature: 0.3
+#       max_tokens: 4096
+#
+#   - name: qwen-coder
+#     provider: qwen
+#     type: openai-compatible
+#     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+#     api_key_env: DASHSCOPE_API_KEY
+#     api_key: ""
+#     model: qwen3-coder-plus
+#     level: coder
+#     capabilities:
+#       tools: true
+#       json: true
+#       vision: false
+#       reasoning: true
+#       reasoning_content_back: false
+#       cache: true
+#       local: false
+#     extra:
+#       temperature: 0.2
+#       max_tokens: 8192
+#       # Qwen / 百炼 thinking 控制 (后续 adapter 会更智能地处理)
+#       extra_body:
+#         enable_thinking: false
+#
+#   - name: kimi-k2
+#     provider: kimi
+#     type: openai-compatible
+#     base_url: https://api.moonshot.cn/v1
+#     api_key_env: MOONSHOT_API_KEY
+#     api_key: ""
+#     model: kimi-k2
+#     level: expert
+#     capabilities:
+#       tools: true
+#       json: true
+#       vision: false
+#       reasoning: true
+#       reasoning_content_back: true
+#       cache: true
+#       local: false
+#
+#   - name: mimo-v2
+#     provider: mimo
+#     type: openai-compatible
+#     base_url: https://api.platform.xiaomimimo.com/v1
+#     api_key_env: MIMO_API_KEY
+#     api_key: ""
+#     model: mimo-v2
+#     level: agent
+#     capabilities:
+#       tools: true
+#       json: true
+#       vision: false
+#       reasoning: true
+#       reasoning_content_back: true   # MiMo: tool_calls 必须回传 reasoning_content
+#       cache: false
+#       local: false
+#
+#   - name: local-qwen
+#     provider: ollama
+#     type: openai-compatible
+#     base_url: http://127.0.0.1:11434/v1
+#     api_key: EMPTY
+#     model: qwen2.5-coder:7b
+#     level: tiny
+#     capabilities:
+#       tools: false
+#       json: true
+#       vision: false
+#       reasoning: false
+#       reasoning_content_back: false
+#       cache: false
+#       local: true

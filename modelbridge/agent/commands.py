@@ -1,0 +1,479 @@
+"""Slash-command dispatcher for the agent REPL.
+
+User input that starts with ``/`` is intercepted before being sent to the
+model. The dispatcher returns a :class:`CommandResult` telling the loop
+how to react (continue / clear / exit).
+
+Adding a new command:
+  1. Add a handler function in :data:`_COMMANDS` keyed by ``name``.
+  2. (Optional) Add aliases.
+  3. The handler receives the parsed args and the :class:`SlashContext`,
+     returns a :class:`CommandResult`.
+
+All output goes through the supplied Rich :class:`Console` so it lands
+inside the sticky-footer scroll region naturally.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Callable
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+from ..context.windows import (
+    context_window_for,
+    estimate_reasoning_tokens,
+    estimate_session_tokens,
+)
+from ..models import ModelEntry
+from .context import AgentContext
+from .session import Session
+from .tools import ToolRegistry
+
+
+# ---------------------------------------------------------------------------
+# Public dataclasses
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CommandResult:
+    """How the REPL should react after a slash command runs.
+
+    A handled command short-circuits the agent turn (we don't send to the
+    model). ``exit_repl=True`` leaves the REPL, ``clear_history=True``
+    drops history but keeps the system prompt.
+
+    If ``handled=False``, the loop should forward the raw text to the
+    model (we treat unrecognised slash commands as user text — but in
+    practice the dispatcher always sets ``handled=True`` for ``/`` input
+    and shows the help menu on unknown).
+    """
+
+    handled: bool = True
+    exit_repl: bool = False
+    clear_history: bool = False
+
+
+@dataclass
+class SlashContext:
+    """Bundle of references handlers may read or mutate."""
+
+    console: Console
+    session: Session
+    agent_ctx: AgentContext
+    registry: ToolRegistry
+    model_name: str
+    entry: ModelEntry | None
+    thinking_state: dict[str, Any]  # mutable; read by the loop before each turn
+    project_path: Any = None  # Path | None — the REPL's --cwd / --project setting
+
+
+# ---------------------------------------------------------------------------
+# Dispatcher
+# ---------------------------------------------------------------------------
+
+def is_slash(text: str) -> bool:
+    return text.startswith("/")
+
+
+def handle_slash(text: str, sctx: SlashContext) -> CommandResult:
+    """Parse and run a slash command. Always returns ``handled=True``."""
+    body = text.strip()
+    if body in ("", "/"):
+        _help(sctx, args=[])
+        return CommandResult()
+
+    # strip the leading slash, split off the rest into args
+    parts = body[1:].split()
+    if not parts:
+        _help(sctx, args=[])
+        return CommandResult()
+    name = parts[0].lower()
+    args = parts[1:]
+
+    handler = _COMMANDS.get(name)
+    if handler is None:
+        sctx.console.print(f"[red]未知命令: /{name}[/red]")
+        _help(sctx, args=[])
+        return CommandResult()
+
+    return handler(sctx, args=args)
+
+
+# ---------------------------------------------------------------------------
+# Handlers
+# ---------------------------------------------------------------------------
+
+CommandFn = Callable[[SlashContext, list[str]], CommandResult]
+
+
+def _help(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+    table = Table(title="Slash 命令", show_header=True, show_lines=False)
+    table.add_column("命令", style="bold cyan", no_wrap=True)
+    table.add_column("说明", overflow="fold")
+    for cmd, desc in _HELP_ROWS:
+        table.add_row(cmd, desc)
+    sctx.console.print(table)
+    return CommandResult()
+
+
+def _exit(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+    sctx.console.print("[dim]bye[/dim]")
+    return CommandResult(exit_repl=True)
+
+
+def _clear(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+    sctx.console.print("[dim]history cleared (system prompt kept)[/dim]")
+    return CommandResult(clear_history=True)
+
+
+def _context(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+    msgs = sctx.session.messages
+    n_sys = sum(1 for m in msgs if m.role == "system")
+    n_user = sum(1 for m in msgs if m.role == "user")
+    n_asst = sum(1 for m in msgs if m.role == "assistant")
+    n_tool = sum(1 for m in msgs if m.role == "tool")
+
+    table = Table(title="会话历史", show_header=False, show_lines=False)
+    table.add_column(style="dim")
+    table.add_column()
+    table.add_row("消息总数", f"{len(msgs)}")
+    table.add_row("system", str(n_sys))
+    table.add_row("user", str(n_user))
+    table.add_row("assistant", str(n_asst))
+    table.add_row("tool", str(n_tool))
+    sctx.console.print(table)
+
+    # show the last few non-system messages as a quick preview
+    preview = [m for m in msgs if m.role != "system"][-6:]
+    if preview:
+        ptable = Table(title="最近 6 条 (不含 system)", show_lines=False)
+        ptable.add_column("role", style="dim", no_wrap=True)
+        ptable.add_column("preview", overflow="fold")
+        for m in preview:
+            txt = (m.content or "").replace("\n", " ").strip()
+            if not txt and m.tool_calls:
+                txt = f"<tool_calls × {len(m.tool_calls)}>"
+            if not txt:
+                txt = "<empty>"
+            if len(txt) > 80:
+                txt = txt[:80] + "…"
+            ptable.add_row(m.role, txt)
+        sctx.console.print(ptable)
+    return CommandResult()
+
+
+def _tokens(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+    if sctx.entry is None:
+        sctx.console.print("[red]model entry 缺失，无法计算 token[/red]")
+        return CommandResult()
+    used = estimate_session_tokens(sctx.session.messages)
+    window = context_window_for(sctx.entry)
+    reasoning = estimate_reasoning_tokens(sctx.session.messages)
+    free = max(0, window - used)
+    pct = (used / window * 100) if window else 0.0
+    body = (
+        f"[dim]model[/dim]              {sctx.model_name}\n"
+        f"[dim]model id[/dim]           {sctx.entry.model}\n"
+        f"[dim]context_window[/dim]     {window:,}\n"
+        f"[dim]used (estimate)[/dim]    {used:,}  ({pct:.2f}%)\n"
+        f"[dim]free[/dim]               {free:,}\n"
+        f"[dim]reasoning_content[/dim]  ~{reasoning:,} t  (已保留)\n"
+        f"\n"
+        f"[dim](token 估算：CJK ≈ 1 token/字符, ASCII ≈ 1 token / 4 字符)[/dim]"
+    )
+    sctx.console.print(Panel(body, title="token 使用情况", border_style="cyan"))
+    return CommandResult()
+
+
+def _think(sctx: SlashContext, *, args: list[str]) -> CommandResult:
+    """``/think on|off [budget]`` toggle the next request's thinking mode."""
+    if not args:
+        cur = sctx.thinking_state.get("enabled")
+        budget = sctx.thinking_state.get("budget")
+        sctx.console.print(
+            f"thinking mode: [bold]{cur}[/bold]"
+            + (f"  · budget={budget}" if budget else "")
+            + "\n[dim]用法: /think on [budget]   /think off[/dim]"
+        )
+        return CommandResult()
+
+    flag = args[0].lower()
+    if flag in ("on", "true", "1", "yes", "y"):
+        sctx.thinking_state["enabled"] = True
+        if len(args) >= 2:
+            try:
+                sctx.thinking_state["budget"] = int(args[1])
+            except ValueError:
+                sctx.console.print(f"[yellow]忽略非法 budget: {args[1]!r}[/yellow]")
+        msg = "thinking mode: [green]ON[/green]"
+        if "budget" in sctx.thinking_state:
+            msg += f"  · budget={sctx.thinking_state['budget']}"
+        sctx.console.print(msg)
+        if sctx.entry and not sctx.entry.capabilities.reasoning:
+            sctx.console.print(
+                "[yellow]提示: 当前模型 capabilities.reasoning=false；"
+                "thinking 字段仍会发送，但 provider 可能忽略或返回 400。[/yellow]"
+            )
+    elif flag in ("off", "false", "0", "no", "n"):
+        sctx.thinking_state["enabled"] = False
+        sctx.thinking_state.pop("budget", None)
+        sctx.console.print("thinking mode: [red]OFF[/red]")
+    else:
+        sctx.console.print(
+            f"[red]/think 参数无效: {flag!r}[/red]  用法: /think on [budget] | off"
+        )
+    return CommandResult()
+
+
+def _save(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+    path = sctx.session.save(label=f"manual_{sctx.model_name}")
+    if path is None:
+        sctx.console.print("[red]保存失败 (logs/sessions 目录不可写?)[/red]")
+    else:
+        sctx.console.print(f"[green]saved →[/green] {path}")
+    return CommandResult()
+
+
+def _policy(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+    p = sctx.agent_ctx.policy
+    rows: list[tuple[str, str]] = []
+    rows.append(("cwd", str(sctx.agent_ctx.cwd)))
+    rows.append(("allow_bash", str(sctx.agent_ctx.allow_bash)))
+    rows.append(("allowed_dirs", ", ".join(str(d) for d in p.allowed_dirs) or "<empty>"))
+    rows.append(("blocked_patterns", ", ".join(p.blocked_patterns) or "<empty>"))
+    table = Table(title="路径策略", show_header=False, show_lines=False)
+    table.add_column(style="dim")
+    table.add_column(overflow="fold")
+    for k, v in rows:
+        table.add_row(k, v)
+    sctx.console.print(table)
+    return CommandResult()
+
+
+def _tools(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+    reg = sctx.registry
+    table = Table(title=f"可用工具 ({len(reg.names())})", show_lines=False)
+    table.add_column("name", style="bold cyan", no_wrap=True)
+    table.add_column("description", overflow="fold")
+    for name in reg.names():
+        t = reg.get(name)
+        desc = (t.description or "").splitlines()[0] if t else ""
+        table.add_row(name, desc)
+    sctx.console.print(table)
+    if "run_bash" not in reg.names():
+        sctx.console.print(
+            "[dim]run_bash 未启用 — 启动时加 --allow-bash 才会出现。[/dim]"
+        )
+    return CommandResult()
+
+
+# ---------------------------------------------------------------------------
+# Phase-4 handlers: /init /rules /prompt
+# ---------------------------------------------------------------------------
+
+def _resolve_project_path(sctx: SlashContext):
+    """Project path for /init and /rules: explicit override > REPL cwd."""
+    from pathlib import Path
+    if sctx.project_path is not None:
+        return Path(sctx.project_path)
+    # Fall back to the agent's cwd (which is the user's --cwd at REPL start).
+    return Path(sctx.agent_ctx.cwd)
+
+
+def _rules(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+    """``/rules`` — show every rule file ModelBridge is loading right now."""
+    from ..prompt import discover_rule_files
+
+    project_path = _resolve_project_path(sctx)
+    files = discover_rule_files(project_path)
+
+    if not files:
+        sctx.console.print(
+            "[yellow]当前未加载任何规则文件。[/yellow]\n"
+            "可以在项目根目录放 [bold]AGENT.md[/bold] / [bold]CLAUDE.md[/bold] / "
+            "[bold].cursorrules[/bold]，或编辑 [bold]~/.modelbridge/rules.md[/bold]。\n"
+            "输入 [bold]/init[/bold] 让 AI 帮你生成 AGENT.md。"
+        )
+        return CommandResult()
+
+    from rich.table import Table
+    table = Table(title=f"规则文件 ({len(files)})", show_lines=False)
+    table.add_column("scope", style="dim")
+    table.add_column("label", style="bold cyan")
+    table.add_column("size")
+    table.add_column("path", overflow="fold")
+    for f in files:
+        table.add_row(f.scope, f.label, f"{f.size} B", str(f.path))
+    sctx.console.print(table)
+    sctx.console.print(
+        "[dim]优先级 (顶部覆盖底部): project root > project/.modelbridge > user global[/dim]"
+    )
+    return CommandResult()
+
+
+def _prompt(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+    """``/prompt`` — show the PromptBuilder section summary + prefix hash."""
+    from ..prompt import PromptBuilder
+    from ..project import scan_project
+
+    project_path = _resolve_project_path(sctx)
+    builder = PromptBuilder().with_project(project_path).with_history(sctx.session.messages)
+    # Light project summary so the user can see what would be sent.
+    try:
+        summary = scan_project(project_path)
+        builder = builder.with_project_summary(summary.to_markdown())
+    except Exception:  # noqa: BLE001 — scan should never crash UX
+        pass
+    builder = builder.with_user_request("<NEXT_USER_REQUEST>")
+    result = builder.build()
+
+    from rich.panel import Panel
+    from rich.table import Table
+
+    sctx.console.print(Panel.fit(
+        f"prefix_hash       = [bold]{result.prompt_prefix_hash}[/bold]\n"
+        f"rules_hash        = {result.rules_hash}\n"
+        f"summary_hash      = {result.project_summary_hash}\n"
+        f"total_chars       = {result.total_chars}\n"
+        f"truncated         = {result.truncated}\n"
+        f"messages          = {len(result.messages)} (next user request will be appended)",
+        title="prompt assembly · 当前会话",
+        border_style="cyan",
+    ))
+    table = Table(title="sections (固定顺序)", show_lines=False)
+    table.add_column("#", style="dim", no_wrap=True)
+    table.add_column("section", style="bold")
+    table.add_column("chars")
+    table.add_column("sources", overflow="fold")
+    table.add_column("preview", overflow="fold")
+    for i, (name, chars, head) in enumerate(result.section_summary(), start=1):
+        srcs = ", ".join(result.sources.get(name, [])) or "[dim]·[/dim]"
+        preview = head if len(head) <= 80 else head[:80] + "…"
+        table.add_row(str(i), name, str(chars), srcs, preview)
+    sctx.console.print(table)
+    if result.warnings:
+        sctx.console.print("[yellow]warnings:[/yellow]")
+        for w in result.warnings:
+            sctx.console.print(f"  · {w}")
+    return CommandResult()
+
+
+def _init(sctx: SlashContext, *, args: list[str]) -> CommandResult:
+    """``/init`` — scan current project and generate AGENT.md via the model."""
+    from rich.panel import Panel
+    from rich.prompt import Confirm
+
+    from ..project import generate_agent_md, write_agent_md
+    from ..client import ChatError
+    from ..providers import ProviderError
+
+    # Parse optional flags: --force / -f, --yes / -y
+    force = any(a in {"--force", "-f"} for a in args)
+    yes = any(a in {"--yes", "-y"} for a in args)
+
+    project_path = _resolve_project_path(sctx).resolve()
+    if not project_path.is_dir():
+        sctx.console.print(f"[red]当前项目目录不存在或不是目录: {project_path}[/red]")
+        return CommandResult()
+
+    target = project_path / "AGENT.md"
+    if target.exists() and not force:
+        sctx.console.print(
+            f"[yellow]{target} 已存在。[/yellow]  "
+            "想覆盖请用 [bold]/init --force[/bold] (会先给预览，可取消)。"
+        )
+        return CommandResult()
+
+    sctx.console.print(f"[dim]扫描 {project_path} …[/dim]")
+    try:
+        result = generate_agent_md(project_path, model_name=sctx.model_name)
+    except ChatError as e:
+        sctx.console.print(f"[red]{e}[/red]")
+        return CommandResult()
+    except ProviderError as e:
+        sctx.console.print(f"[red]✗ {e.message}[/red]")
+        if e.hint:
+            sctx.console.print(f"[yellow]hint:[/yellow] {e.hint}")
+        return CommandResult()
+
+    preview = result.agent_md
+    if len(preview) > 1500:
+        preview = preview[:1500] + "\n[... 预览截断；完整内容稍后写入文件 ...]"
+    sctx.console.print(Panel(
+        preview,
+        title=f"AGENT.md preview ({result.model_used} · {result.elapsed_ms}ms)",
+        border_style="cyan",
+    ))
+
+    if not yes:
+        if not Confirm.ask(f"写入 {target}?", default=True):
+            sctx.console.print("[yellow]已取消，AGENT.md 未写入。[/yellow]")
+            return CommandResult()
+
+    wrote = write_agent_md(result, force=force)
+    if wrote:
+        verb = "覆盖" if result.overwrote else "创建"
+        sctx.console.print(
+            f"[green]✓[/green] 已{verb} {target} ({len(result.agent_md)} 字符)\n"
+            f"[dim]下一轮 chat 起 AGENT.md 将被自动加载到 prompt。输入 /rules 查看。[/dim]"
+        )
+    else:
+        sctx.console.print(f"[yellow]未写入：{target} 已存在且未传 --force。[/yellow]")
+    return CommandResult()
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+_COMMANDS: dict[str, CommandFn] = {
+    "help": _help,
+    "?":    _help,
+    "h":    _help,
+    "exit": _exit,
+    "quit": _exit,
+    "q":    _exit,
+    "clear": _clear,
+    "cls":   _clear,
+    "context": _context,
+    "ctx":     _context,
+    "tokens":  _tokens,
+    "token":   _tokens,
+    "t":       _tokens,
+    "think":   _think,
+    "save":    _save,
+    "policy":  _policy,
+    "tools":   _tools,
+    # Phase-4 ↓
+    "init":    _init,
+    "rules":   _rules,
+    "prompt":  _prompt,
+}
+
+_HELP_ROWS: list[tuple[str, str]] = [
+    ("/help, /?",          "显示此菜单"),
+    ("/context, /ctx",     "显示会话历史摘要 + 最近 6 条预览"),
+    ("/tokens, /t",        "显示当前 token 使用 / 上下文窗口剩余"),
+    ("/think on [N]",      "开启 thinking 模式 (N 为可选 thinking_budget)"),
+    ("/think off",         "关闭 thinking 模式"),
+    ("/init [--force]",    "为当前项目生成 AGENT.md (调用模型；--force 覆盖已有)"),
+    ("/rules",             "显示当前已加载的规则文件 (AGENT.md / CLAUDE.md / ...)"),
+    ("/prompt",            "显示 PromptBuilder 组装结果与 prefix_hash"),
+    ("/save",              "立即把会话写到 ~/.modelbridge/sessions/"),
+    ("/policy",            "显示路径策略 (allowed_dirs / blocked / cwd / allow_bash)"),
+    ("/tools",             "显示当前可用工具列表"),
+    ("/clear, /cls",       "清空对话历史 (system prompt 保留)"),
+    ("/exit, /quit, /q",   "退出 REPL"),
+]
+
+
+__all__ = [
+    "CommandResult",
+    "SlashContext",
+    "is_slash",
+    "handle_slash",
+]

@@ -1,0 +1,52 @@
+# Pricing overrides for ModelBridge.
+#
+# Copy this file to ~/.modelbridge/pricing.yaml and edit as needed.
+#
+# Keys are PROVIDER-SIDE model ids (the `model:` field in models.yaml,
+# e.g. `deepseek-chat`), not the display name. Anything you put here
+# overrides the built-in price table in modelbridge/cost/estimator.py
+# but still loses to a `extra.pricing` block on a specific model in
+# models.yaml.
+#
+# Fields:
+#   input_per_1m            - input token price per 1,000,000 tokens
+#   output_per_1m           - output token price per 1,000,000 tokens
+#   currency                - "CNY" or "USD"; mixed currencies are NOT
+#                             auto-converted, so pick one and stick to it
+#                             across your budget.
+#   cache_hit_input_per_1m  - optional; reduced rate for cached prefix
+#                             tokens. Used by `mbridge cost estimate`
+#                             to estimate cache savings.
+#
+# Numbers below are illustrative — always verify against the provider's
+# pricing page.
+
+pricing:
+  deepseek-chat:
+    input_per_1m: 0.27
+    output_per_1m: 1.10
+    currency: USD
+    cache_hit_input_per_1m: 0.027
+
+  deepseek-reasoner:
+    input_per_1m: 0.55
+    output_per_1m: 2.19
+    currency: USD
+
+  qwen3-coder-plus:
+    input_per_1m: 4.0
+    output_per_1m: 16.0
+    currency: CNY
+    cache_hit_input_per_1m: 0.8
+
+  kimi-k2:
+    input_per_1m: 4.0
+    output_per_1m: 16.0
+    currency: CNY
+
+  # Local models are free — no need to list them here unless you want
+  # to attach a non-zero compute estimate.
+  # local-qwen:
+  #   input_per_1m: 0
+  #   output_per_1m: 0
+  #   currency: USD

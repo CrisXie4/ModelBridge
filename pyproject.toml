@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modelbridge"
+version = "1.0.0"
+description = "ModelBridge: a China-first AI Coding Agent compatibility gateway / Agent Proxy / CLI."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "ModelBridge Contributors" }]
+keywords = [
+    "llm",
+    "ai-agent",
+    "coding-agent",
+    "openai-compatible",
+    "deepseek",
+    "qwen",
+    "kimi",
+    "mimo",
+    "glm",
+    "minimax",
+    "ollama",
+    "vllm",
+    "lmstudio",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development",
+]
+
+dependencies = [
+    "typer>=0.12.0",
+    "pydantic>=2.6.0",
+    "httpx>=0.27.0",
+    "PyYAML>=6.0",
+    "rich>=13.7.0",
+    "keyring>=24.0",       # OS credential vault for api_key (preferred)
+    "cryptography>=42.0",  # Fernet fallback when no keyring backend
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4.0",
+    "mypy>=1.8",
+]
+
+[project.scripts]
+mbridge = "modelbridge.cli:app"
+modelbridge = "modelbridge.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/CrisXie4/ModelBridge"
+Issues = "https://github.com/CrisXie4/ModelBridge/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["modelbridge*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint.per-file-ignores]
+# Re-export hubs deliberately import names they don't reference locally.
+"__init__.py" = ["F401"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_return_any = false
+# Existing code isn't fully typed yet; keep mypy informative, not blocking.
+# CI runs this job with continue-on-error until the codebase is annotated.
+check_untyped_defs = false

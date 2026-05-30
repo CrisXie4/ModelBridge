@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Build artefacts
+build/
+dist/
+*.spec.bak
+
+# PyInstaller / Inno Setup output
+packaging/Output/
+
+# Local app/config + per-project caches (machine-local, may hold api keys)
+.modelbridge/
+packaging/.modelbridge/
+.cnagent/
+
+# Internal planning docs (not source)
+*.docx
+*.xlsx
+
+# IDEs
+.idea/
+.vscode/
+.DS_Store
+
+# Test coverage / tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.coverage.*
