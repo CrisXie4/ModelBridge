@@ -1,0 +1,88 @@
+name: 🐞 反馈问题 / Bug 报告
+description: 使用 ModelBridge 时遇到错误、异常或行为不符合预期，请用此模板。
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈问题！请尽量填写以下信息，越详细越有助于快速定位。
+        提交前请先搜索 [已有 issue](../issues?q=is%3Aissue)，避免重复。
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 清晰简洁地说明遇到的问题是什么。
+      placeholder: 例如：执行 `mbridge route test` 时报错退出。
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 让我们能一步步重现这个问题。
+      placeholder: |
+        1. 运行 `mbridge ...`
+        2. 输入 ...
+        3. 看到错误 ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+      description: 你预期应该发生什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 报错日志 / 截图
+      description: 粘贴相关的报错输出、堆栈或截图（会自动渲染为代码块，无需加反引号）。
+      render: shell
+    validations:
+      required: false
+
+  - type: dropdown
+    id: model
+    attributes:
+      label: 涉及的模型 / Provider
+      description: 问题与哪个模型或 Provider 相关？（可选）
+      multiple: true
+      options:
+        - DeepSeek
+        - Qwen
+        - Kimi
+        - MiMo
+        - GLM
+        - MiniMax
+        - Ollama
+        - vLLM
+        - LM Studio
+        - 与模型无关 / 不确定
+    validations:
+      required: false
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 运行环境
+      description: 操作系统、Python 版本、ModelBridge 版本等。
+      placeholder: |
+        - 操作系统: macOS 14 / Windows 11 / Ubuntu 22.04
+        - Python: 3.11
+        - ModelBridge: 运行 `mbridge --version` 获取
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+      description: 其他有助于定位问题的上下文（可选）。
+    validations:
+      required: false

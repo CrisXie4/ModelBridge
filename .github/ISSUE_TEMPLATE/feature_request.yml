@@ -1,0 +1,60 @@
+name: 💡 提交建议 / 功能请求
+description: 对 ModelBridge 有新功能、改进点或使用体验上的建议，请用此模板。
+title: "[建议] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你的建议！好的想法能让 ModelBridge 变得更好。
+        提交前请先搜索 [已有 issue](../issues?q=is%3Aissue)，避免重复。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 想解决的问题 / 动机
+      description: 这个建议是为了解决什么痛点或满足什么需求？
+      placeholder: 例如：目前切换模型需要每次输入完整名称，希望能有别名。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+      description: 你希望 ModelBridge 怎么做？尽量具体描述。
+      placeholder: 例如：支持在配置里为模型设置 alias，`mbridge -m ds` 即可调用。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: 建议类别
+      description: 这个建议大致属于哪一类？
+      options:
+        - 新功能
+        - 现有功能改进
+        - 命令行 / 交互体验
+        - 新增模型 / Provider 支持
+        - 路由 / 成本 / 预算
+        - 文档
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 替代方案
+      description: 你是否考虑过其他做法？为什么当前方案更好？（可选）
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+      description: 相关参考、示例、截图等（可选）。
+    validations:
+      required: false
