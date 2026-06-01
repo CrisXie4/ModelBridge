@@ -204,11 +204,12 @@ class PromptBuilder:
                 text = self.system_prompt_override
                 sources["core_system"].append("<caller override>")
             else:
-                text = load_system_prompt()
-                if text is None:
+                loaded = load_system_prompt()
+                if loaded is None:
                     text = DEFAULT_SYSTEM_MD
                     sources["core_system"].append("<built-in default>")
                 else:
+                    text = loaded
                     sources["core_system"].append("~/.modelbridge/system.md")
             sections["core_system"] = text.strip() + "\n"
 

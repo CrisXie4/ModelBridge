@@ -35,10 +35,8 @@ jobs:
       - run: ruff check .
 
   typecheck:
-    # Informational until the codebase is annotated; see [tool.mypy] in
-    # pyproject.toml. Flip to blocking once the noise is addressed.
+    # Hard gate: the codebase is mypy-clean (see [tool.mypy] in pyproject.toml).
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

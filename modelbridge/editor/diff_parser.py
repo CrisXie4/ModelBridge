@@ -240,6 +240,7 @@ class _LineIter:
         if not self.has_more():
             raise DiffParseError(f"提前结束，预期 {prefix!r}")
         ln, n = self.peek()
+        assert ln is not None  # has_more() guarantees a line
         if not ln.startswith(prefix):
             raise DiffParseError(f"预期 {prefix!r}，实际是 {ln!r}", line_no=n)
         return self.advance()
@@ -270,6 +271,7 @@ def _parse_one_file(it: _LineIter) -> FileDiff:
     if not it.has_more():
         raise DiffParseError("`--- ` 之后没有 `+++ ` 行", line_no=n1)
     plus_line, n2 = it.peek()
+    assert plus_line is not None  # has_more() checked above
     if not plus_line.startswith("+++ "):
         raise DiffParseError(
             f"`--- ` 后必须紧跟 `+++ `，实际是 {plus_line!r}", line_no=n2,
@@ -282,6 +284,7 @@ def _parse_one_file(it: _LineIter) -> FileDiff:
     # Hunks
     while it.has_more():
         ln, n = it.peek()
+        assert ln is not None  # has_more() guarantees a line
         if ln.startswith("--- "):
             # Next file starts; stop parsing this one.
             break
@@ -324,6 +327,7 @@ def _parse_one_hunk(it: _LineIter) -> Hunk:
     seen_new = 0
     while it.has_more():
         ln, ln_no = it.peek()
+        assert ln is not None  # has_more() guarantees a line
         if ln.startswith("@@") or ln.startswith("--- "):
             break
         it.advance()

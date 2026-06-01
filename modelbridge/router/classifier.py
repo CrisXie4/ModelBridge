@@ -199,6 +199,7 @@ def classify_task(
         chosen = ("chat", "simple", ModelLevel.CHEAP, "low")
         reasons.append("无显著关键词 → 默认 chat / cheap")
 
+    assert chosen is not None
     task_type, complexity, level, risk = chosen
 
     # ---- structural signals: code fence / file paths bump the level ------

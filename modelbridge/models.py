@@ -71,7 +71,9 @@ class Capabilities(BaseModel):
     """
 
     tools: bool = False
-    json: bool = False
+    # ``json`` intentionally shadows the deprecated pydantic ``BaseModel.json()``
+    # method — it's a capability flag exposed in configs as ``capabilities.json``.
+    json: bool = False  # type: ignore[assignment]
     vision: bool = False
     reasoning: bool = False
     reasoning_content_back: bool = False

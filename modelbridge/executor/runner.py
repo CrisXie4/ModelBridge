@@ -83,7 +83,7 @@ def run_command(
         text=True,
     )
     if _IS_WINDOWS:
-        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]  # Windows-only
     else:
         popen_kwargs["start_new_session"] = True
 

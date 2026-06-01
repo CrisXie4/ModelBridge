@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 使用提问 / 讨论
+    url: https://github.com/crisxie4/modelbridge/discussions
+    about: 不确定是 Bug 还是想先讨论想法？欢迎到 Discussions 交流。
