@@ -34,7 +34,7 @@ ENC_MARKER = "enc:"
 
 def is_protected(stored: str | None) -> bool:
     """True if ``stored`` is a keyring reference or Fernet ciphertext."""
-    return bool(stored) and stored.startswith((KEYRING_MARKER, ENC_MARKER))
+    return stored is not None and stored.startswith((KEYRING_MARKER, ENC_MARKER))
 
 
 # ---------------------------------------------------------------------------

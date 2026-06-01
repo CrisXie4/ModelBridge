@@ -193,10 +193,10 @@ def extract_cache_tokens(usage: dict[str, Any] | None) -> tuple[int, int]:
             prompt_total = int(usage.get("prompt_tokens") or 0)
             return cached, max(0, prompt_total - cached)
 
-    cached = usage.get("cached_tokens")
-    if isinstance(cached, int) and cached > 0:
+    cached_val = usage.get("cached_tokens")
+    if isinstance(cached_val, int) and cached_val > 0:
         prompt_total = int(usage.get("prompt_tokens") or 0)
-        return cached, max(0, prompt_total - cached)
+        return cached_val, max(0, prompt_total - cached_val)
 
     return 0, 0
 

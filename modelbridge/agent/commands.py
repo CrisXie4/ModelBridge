@@ -17,7 +17,7 @@ inside the sticky-footer scroll region naturally.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Protocol
 
 from rich.console import Console
 from rich.panel import Panel
@@ -107,7 +107,8 @@ def handle_slash(text: str, sctx: SlashContext) -> CommandResult:
 # Handlers
 # ---------------------------------------------------------------------------
 
-CommandFn = Callable[[SlashContext, list[str]], CommandResult]
+class CommandFn(Protocol):
+    def __call__(self, sctx: SlashContext, *, args: list[str]) -> CommandResult: ...
 
 
 def _help(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001

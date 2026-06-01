@@ -118,7 +118,9 @@ class RouteResult:
     @property
     def level(self) -> ModelLevel:
         # The level after mode shift — the one we tried to look up.
-        return self.fallback.chain[0][0] if self.fallback.chain else self.profile.recommended_level
+        if self.fallback.chain and self.fallback.chain[0][0] is not None:
+            return self.fallback.chain[0][0]
+        return self.profile.recommended_level
 
     @property
     def chosen_model(self) -> str | None:

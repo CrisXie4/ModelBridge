@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich.panel import Panel
@@ -395,7 +395,7 @@ def _run_repl(
 
     initial = prompt_builder.build()
     if initial.messages and initial.messages[0].role == "system":
-        session.add_system(initial.messages[0].content)
+        session.add_system(initial.messages[0].content or sys_prompt_text)
     else:
         session.add_system(sys_prompt_text)
 
@@ -467,7 +467,7 @@ def _run_repl(
             return ""
 
     # State carried across callbacks within a single REPL turn.
-    turn_state = {
+    turn_state: dict[str, Any] = {
         "stream": None,           # AssistantStream | None
         "saw_reasoning": False,
         "iterations": 0,
@@ -1147,6 +1147,8 @@ def _chat_with_routing(
                     f"[yellow]fallback 终止: {esc.step.note}[/yellow]"
                 )
                 raise typer.Exit(code=2) from e
+            # esc.escalated is True here → chosen_model / chosen_level are set.
+            assert esc.chosen_model is not None and esc.chosen_level is not None
             console.print(
                 f"[yellow]{cur_model} 调用失败 ({e})；已自动升级到 "
                 f"[bold]{esc.chosen_model}[/bold] (level={esc.chosen_level.value}). 重试中…[/yellow]"
@@ -1170,6 +1172,8 @@ def _chat_with_routing(
                     f"[yellow]fallback 终止: {esc.step.note}[/yellow]"
                 )
                 raise typer.Exit(code=3) from e
+            # esc.escalated is True here → chosen_model / chosen_level are set.
+            assert esc.chosen_model is not None and esc.chosen_level is not None
             console.print(
                 f"[yellow]{cur_model} 调用失败 ({e.message})；已自动升级到 "
                 f"[bold]{esc.chosen_model}[/bold] (level={esc.chosen_level.value}). 重试中…[/yellow]"

@@ -51,6 +51,7 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.4.0",
     "mypy>=1.8",
+    "types-PyYAML>=6.0",
 ]
 
 [project.scripts]

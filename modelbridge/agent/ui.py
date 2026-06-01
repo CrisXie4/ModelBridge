@@ -468,7 +468,7 @@ class StickyFooter:
         buf = StringIO()
         tmp = Console(
             file=buf,
-            color_system=self.console.color_system or "truecolor",
+            color_system=self.console.color_system or "truecolor",  # type: ignore[arg-type]
             width=max(20, self._width),
             force_terminal=True,
             soft_wrap=False,

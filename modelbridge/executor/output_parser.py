@@ -136,8 +136,8 @@ def parse_output(result: CommandResult) -> list[ParsedError]:
     node_matches = list(_NODE_ERR.finditer(text))
     at_matches = list(_NODE_AT.finditer(text))
     for m in node_matches:
-        file: str | None = None
-        line: int | None = None
+        file = None
+        line = None
         # First "at" line after this error block.
         for a in at_matches:
             if a.start() > m.end():
