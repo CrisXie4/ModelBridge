@@ -36,8 +36,15 @@ mbridge cache stats / reset / clean
 mbridge profile add / list / use / show / remove
 mbridge config show / upgrade
 
-mbridge version
+mbridge version [--check]          显示版本号 (--check 顺便检查更新)
+mbridge --version / -V             同上 (任意位置可用)
+mbridge update [--yes]             检查并下载新版本，下载后给出安装指引
 ```
+
+> **版本与自动更新**：REPL 启动时会显示当前版本，并在每天检查一次 GitHub
+> Release。发现新版本时会提示 `🔔 发现新版本 vX.Y.Z`，此时直接输入 **同意**
+> （或 `/update`）即可自动下载对应平台的安装包并打开所在目录，按提示完成安装。
+> 检查结果缓存在 `~/.modelbridge/update_check.json`，离线 / 失败时静默跳过，不影响使用。
 
 ## 安装
 

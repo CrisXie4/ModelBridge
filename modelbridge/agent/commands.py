@@ -428,6 +428,41 @@ def _init(sctx: SlashContext, *, args: list[str]) -> CommandResult:
 
 
 # ---------------------------------------------------------------------------
+# /version /update
+# ---------------------------------------------------------------------------
+
+def _version(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+    import platform
+
+    from .. import __version__, updater
+
+    sctx.console.print(f"ModelBridge (mbridge) v{__version__}")
+    sctx.console.print(
+        f"[dim]{platform.system()} {platform.machine()} · "
+        f"Python {platform.python_version()} · "
+        f"{'binary' if updater.install_mode() == 'frozen' else 'source'}[/dim]"
+    )
+    sctx.console.print("[dim]运行 /update 检查并下载新版本。[/dim]")
+    return CommandResult()
+
+
+def _update(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+    from .. import __version__, updater
+    from ..cli import _run_update_flow
+
+    sctx.console.print("正在检查更新…")
+    rel = updater.check_for_update(force=True)
+    if rel is None:
+        sctx.console.print("[green]已是最新版本。[/green]")
+        return CommandResult()
+    sctx.console.print(
+        f"[yellow]发现新版本 [bold]v{rel.version}[/bold]（当前 v{__version__}）。[/yellow]"
+    )
+    _run_update_flow(rel)
+    return CommandResult()
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -453,6 +488,10 @@ _COMMANDS: dict[str, CommandFn] = {
     "init":    _init,
     "rules":   _rules,
     "prompt":  _prompt,
+    "version": _version,
+    "ver":     _version,
+    "update":  _update,
+    "upgrade": _update,
 }
 
 _HELP_ROWS: list[tuple[str, str]] = [
@@ -467,6 +506,8 @@ _HELP_ROWS: list[tuple[str, str]] = [
     ("/save",              "立即把会话写到 ~/.modelbridge/sessions/"),
     ("/policy",            "显示路径策略 (allowed_dirs / blocked / cwd / allow_bash)"),
     ("/tools",             "显示当前可用工具列表"),
+    ("/version, /ver",     "显示版本号与运行环境"),
+    ("/update, /upgrade",  "检查并下载新版本"),
     ("/clear, /cls",       "清空对话历史 (system prompt 保留)"),
     ("/exit, /quit, /q",   "退出 REPL"),
 ]

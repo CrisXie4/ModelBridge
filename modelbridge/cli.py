@@ -21,7 +21,8 @@ Subcommands:
 * ``mbridge cache stats|reset|clean``   — prefix-cache statistics
 * ``mbridge profile add|list|use|show|remove`` — named bundles of default_model + routing.levels
 * ``mbridge config show|upgrade``       — view / re-emit ~/.modelbridge/config.yaml
-* ``mbridge version``                   — print version
+* ``mbridge version [--check]``         — print version (optionally check for updates)
+* ``mbridge update``                    — check for and download a newer release
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
-from . import __version__
+from . import __version__, updater
 from .cache import (
     extract_cache_tokens,
     load_cache_stats,
@@ -249,9 +250,19 @@ app.add_typer(patch_app, name="patch")
 # ---------------------------------------------------------------------------
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        console.print(f"ModelBridge (mbridge) v{__version__}")
+        raise typer.Exit()
+
+
 @app.callback()
 def _root(
     ctx: typer.Context,
+    version: bool = typer.Option(
+        False, "--version", "-V", callback=_version_callback, is_eager=True,
+        help="显示版本号并退出。",
+    ),
     model: Optional[str] = typer.Option(
         None, "--model", "-m", help="模型名 (默认 config.yaml 中的 default_model)。",
     ),
@@ -429,7 +440,7 @@ def _run_repl(
     cache_line = f"summary   : {repl_summary_reason or '(none)'}"
     console.print(
         Panel.fit(
-            f"[bold]ModelBridge agent REPL[/bold]\n"
+            f"[bold]ModelBridge agent REPL[/bold]  [dim]v{__version__}[/dim]\n"
             f"model     : {model_name}\n"
             f"cwd       : {cwd_resolved}\n"
             f"tools     : {', '.join(registry.names())}\n"
@@ -443,6 +454,24 @@ def _run_repl(
             border_style="cyan",
         )
     )
+
+    # 4b. Update check (cached, non-blocking, best-effort). If a newer
+    # version exists we show a one-line notice; the user can type 同意
+    # at the prompt (or run /update) to download it.
+    update_state: dict[str, Any] = {"release": None}
+    try:
+        rel = updater.check_for_update()
+    except Exception:  # noqa: BLE001 — never let an update check block the REPL
+        rel = None
+    if rel is not None:
+        update_state["release"] = rel
+        console.print(
+            f"[yellow]🔔 发现新版本 [bold]v{rel.version}[/bold]"
+            f"（当前 v{__version__}）。输入 [bold]同意[/bold] 下载更新，"
+            f"或用 [bold]/update[/bold]。[/yellow]"
+        )
+
+    _AGREE_WORDS = {"同意", "更新", "升级", "update", "upgrade", "yes", "y"}
 
     def read_input() -> str:
         # Defensive cursor reset before the prompt.
@@ -462,9 +491,18 @@ def _run_repl(
         except Exception:  # noqa: BLE001 — never let UI hygiene crash input
             pass
         try:
-            return console.input("[bold green]you ❯[/bold green] ")
+            text = console.input("[bold green]you ❯[/bold green] ")
         except UnicodeDecodeError:
             return ""
+        # If an update is pending, a bare 同意 / yes triggers the download
+        # instead of being sent to the model. Any other input clears the
+        # pending state so the prompt doesn't keep hijacking 同意 forever.
+        if update_state["release"] is not None and text.strip().lower() in _AGREE_WORDS:
+            rel = update_state["release"]
+            update_state["release"] = None
+            _run_update_flow(rel)
+            return ""  # re-prompt
+        return text
 
     # State carried across callbacks within a single REPL turn.
     turn_state: dict[str, Any] = {
@@ -707,9 +745,93 @@ def _default_system_prompt(*, allow_bash: bool) -> str:
 # ---------------------------------------------------------------------------
 
 @app.command("version")
-def cmd_version() -> None:
-    """Print version."""
+def cmd_version(
+    check: bool = typer.Option(
+        False, "--check", "-c", help="顺便检查 GitHub 上是否有新版本。",
+    ),
+) -> None:
+    """显示版本号 (加 --check 检查更新)。"""
+    import platform as _platform
+
     console.print(f"ModelBridge (mbridge) v{__version__}")
+    console.print(
+        f"[dim]{_platform.system()} {_platform.machine()} · "
+        f"Python {_platform.python_version()} · "
+        f"{'binary' if updater.install_mode() == 'frozen' else 'source'}[/dim]"
+    )
+    if check:
+        rel = updater.check_for_update(force=True)
+        if rel is None:
+            console.print("[green]已是最新版本。[/green]")
+        else:
+            console.print(
+                f"[yellow]发现新版本 [bold]v{rel.version}[/bold]。"
+                f"运行 `mbridge update` 下载更新。[/yellow]"
+            )
+
+
+@app.command("update")
+def cmd_update(
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="跳过确认，直接下载。",
+    ),
+) -> None:
+    """检查并下载新版本 (下载后给出安装指引)。"""
+    console.print("正在检查更新…")
+    rel = updater.check_for_update(force=True)
+    if rel is None:
+        console.print("[green]已是最新版本。[/green]")
+        return
+    console.print(
+        f"[yellow]发现新版本 [bold]v{rel.version}[/bold]（当前 v{__version__}）。[/yellow]"
+    )
+    if not yes:
+        if not Confirm.ask("现在下载更新?", default=True):
+            console.print(f"[dim]已跳过。手动下载：{rel.html_url}[/dim]")
+            return
+    _run_update_flow(rel)
+
+
+def _run_update_flow(rel: "updater.ReleaseInfo") -> None:
+    """Download the platform asset for ``rel`` and print install guidance.
+
+    Shared by ``mbridge update``, the REPL ``同意`` shortcut and ``/update``.
+    We download only — the user runs the installer / extracts the tarball,
+    following the printed steps. Any failure falls back to the release page.
+    """
+    # Source / pip installs can't consume the binary assets — point at pip.
+    if updater.install_mode() == "source":
+        console.print(updater.source_upgrade_hint(rel.tag))
+        console.print(f"[dim]或在此查看 Release：{rel.html_url}[/dim]")
+        return
+
+    asset = updater.pick_asset(rel)
+    if asset is None:
+        console.print(
+            "[yellow]没有找到适配当前平台的安装包。[/yellow]\n"
+            f"请到 Release 页面手动下载：{rel.html_url}"
+        )
+        return
+
+    console.print(f"正在下载 [bold]{asset.name}[/bold] …")
+    try:
+        with console.status("下载中…", spinner="dots"):
+            path = updater.download_asset(asset)
+    except Exception as e:  # noqa: BLE001 — fall back to the release page
+        console.print(
+            f"[red]下载失败：{e}[/red]\n请手动下载：{rel.html_url}"
+        )
+        return
+
+    console.print(f"[green]✓ 已下载到：[bold]{path}[/bold][/green]")
+    console.print(
+        Panel.fit(
+            updater.install_instructions(path),
+            title=f"安装 v{rel.version}",
+            border_style="green",
+        )
+    )
+    updater.reveal_in_file_manager(path)
 
 
 @app.command("init")
