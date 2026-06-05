@@ -727,6 +727,8 @@ vendor Pods          .idea .vscode .ssh
 | `/init [--force]` | 调用模型为当前项目生成 AGENT.md，写前给预览 |
 | `/rules` | 列出当前生效的规则文件 (scope / size / path) |
 | `/prompt` | 显示 PromptBuilder 组装结果 (sections + prefix_hash) |
+| `/debug on\|off` | 开启 / 关闭调试日志 (`~/.modelbridge/logs/mbridge.log`) |
+| `/version`、`/update` | 显示版本号 / 检查并下载新版本 |
 | `/help`、`/think`、`/tokens`、`/save`、`/policy`、`/tools` | 见 v0.3 |
 
 `/init` 不会被当成普通 prompt 发给模型——它走专门的 `generate_agent_md → write_agent_md` 流程。

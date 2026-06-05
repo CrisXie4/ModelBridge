@@ -127,6 +127,43 @@ def get_logger() -> logging.Logger:
 
 
 # ---------------------------------------------------------------------------
+# Runtime debug toggle (/debug on|off)
+# ---------------------------------------------------------------------------
+
+_debug_enabled = False
+
+
+def is_debug() -> bool:
+    """True if verbose debug logging is currently enabled."""
+    return _debug_enabled
+
+
+def set_debug(enabled: bool) -> Path | None:
+    """Toggle file logging at runtime (wired to the ``/debug`` command).
+
+    ``enabled=True``  → ensure the rotating file logger is configured and
+    emit ``DEBUG``-level records to ``~/.modelbridge/logs/mbridge.log``.
+    ``enabled=False`` → silence the logger so it stops writing any records.
+
+    Returns the log file path when enabling, else ``None``.
+    """
+    global _debug_enabled
+    logger = get_logger()
+    if enabled:
+        logger.disabled = False
+        logger.setLevel(logging.DEBUG)
+        _debug_enabled = True
+        logger.debug("debug logging enabled")
+        return get_logs_dir() / "mbridge.log"
+    # Record the transition before muting, then mute.
+    logger.info("debug logging disabled")
+    logger.setLevel(logging.INFO)
+    logger.disabled = True
+    _debug_enabled = False
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Time
 # ---------------------------------------------------------------------------
 
