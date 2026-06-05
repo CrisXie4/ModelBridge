@@ -142,7 +142,34 @@ def run_global_doctor() -> list[CheckResult]:
             )
         )
 
+    results.append(_check_mcp_config())
+
     return results
+
+
+def _check_mcp_config() -> CheckResult:
+    """Static check of the ``mcp:`` config block — does not connect to servers.
+
+    Connecting is what ``mbridge mcp list`` is for; the doctor only validates
+    that the config parses and reports how many servers are enabled.
+    """
+    try:
+        from .mcp import load_mcp_settings
+
+        settings = load_mcp_settings()
+    except Exception as e:  # noqa: BLE001 — surface config errors, don't crash doctor
+        return CheckResult(
+            "mcp config", False, str(e),
+            hint="检查 config.yaml 的 mcp 块；运行 `mbridge mcp list` 看详细连接状态。",
+        )
+    if not settings.servers:
+        return CheckResult("mcp config", True, "未配置 MCP server（可选）")
+    n_enabled = len(settings.enabled_servers())
+    return CheckResult(
+        "mcp config", True,
+        f"{len(settings.servers)} 个 server（{n_enabled} 启用）· enabled={settings.enabled}",
+        hint=None if settings.enabled else "mcp.enabled=false；REPL 不会接入这些 server。",
+    )
 
 
 def next_steps_for_global(results: list[CheckResult]) -> list[str]:

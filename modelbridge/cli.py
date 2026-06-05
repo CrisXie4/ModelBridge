@@ -244,6 +244,11 @@ patch_app = typer.Typer(
 )
 app.add_typer(patch_app, name="patch")
 
+# MCP client subcommands live in their own module to avoid an import cycle.
+from .mcp.cli import mcp_app  # noqa: E402
+
+app.add_typer(mcp_app, name="mcp")
+
 
 # ---------------------------------------------------------------------------
 # Root: `mbridge` with no subcommand → interactive agent REPL
@@ -376,6 +381,27 @@ def _run_repl(
         policy=policy, cwd=cwd_resolved, approve=approval, allow_bash=allow_bash,
     )
     registry = build_default_registry(include_bash=allow_bash)
+
+    # 2b. MCP — connect configured servers and fold their tools into the same
+    # registry. Failure to connect a server is isolated and never blocks the
+    # REPL; the manager is torn down in the `finally` below.
+    mcp_manager = None
+    try:
+        from .mcp import MCPManager, is_enabled, register_mcp_tools
+
+        if is_enabled():
+            mcp_manager = MCPManager.from_config(verbose=False)
+            mcp_manager.connect_all()
+            n = register_mcp_tools(registry, mcp_manager)
+            failed = mcp_manager.connect_errors
+            if n:
+                console.print(f"[dim]MCP: 接入 {n} 个工具"
+                              f"{f'，{len(failed)} 个 server 连接失败' if failed else ''}[/dim]")
+            for sid, err in failed.items():
+                err_console.print(f"[yellow]MCP server {sid} 连接失败: {err.message}[/yellow]")
+    except Exception as e:  # noqa: BLE001 — MCP must never block the REPL
+        err_console.print(f"[yellow]MCP 初始化跳过: {e}[/yellow]")
+        mcp_manager = None
 
     # 3. Session + system prompt
     #
@@ -664,6 +690,8 @@ def _run_repl(
             max_iters_per_turn=max_iters,
         )
     finally:
+        if mcp_manager is not None:
+            mcp_manager.shutdown()
         if save_session and len(session.messages) > 1:
             path = session.save(label=f"repl_{model_name}")
             if path is not None:
