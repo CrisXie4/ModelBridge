@@ -463,6 +463,36 @@ def _update(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: A
 
 
 # ---------------------------------------------------------------------------
+# /debug
+# ---------------------------------------------------------------------------
+
+def _debug(sctx: SlashContext, *, args: list[str]) -> CommandResult:
+    """``/debug on|off`` toggle verbose file logging at runtime."""
+    from ..utils import is_debug, set_debug
+
+    if not args:
+        state = "on" if is_debug() else "off"
+        sctx.console.print(
+            f"debug 日志: [bold]{state}[/bold]\n"
+            "[dim]用法: /debug on  开启日志  ·  /debug off  关闭日志[/dim]"
+        )
+        return CommandResult()
+
+    arg = args[0].lower()
+    if arg in ("on", "true", "1", "enable", "开"):
+        path = set_debug(True)
+        sctx.console.print(f"[green]✓ debug 日志已开启[/green] → [dim]{path}[/dim]")
+    elif arg in ("off", "false", "0", "disable", "关"):
+        set_debug(False)
+        sctx.console.print("[yellow]debug 日志已关闭。[/yellow]")
+    else:
+        sctx.console.print(
+            f"[red]未知参数: {arg}[/red]\n[dim]用法: /debug on | /debug off[/dim]"
+        )
+    return CommandResult()
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -492,6 +522,8 @@ _COMMANDS: dict[str, CommandFn] = {
     "ver":     _version,
     "update":  _update,
     "upgrade": _update,
+    "debug":   _debug,
+    "dbg":     _debug,
 }
 
 _HELP_ROWS: list[tuple[str, str]] = [
@@ -508,6 +540,7 @@ _HELP_ROWS: list[tuple[str, str]] = [
     ("/tools",             "显示当前可用工具列表"),
     ("/version, /ver",     "显示版本号与运行环境"),
     ("/update, /upgrade",  "检查并下载新版本"),
+    ("/debug on|off",      "开启 / 关闭调试日志 (~/.modelbridge/logs/mbridge.log)"),
     ("/clear, /cls",       "清空对话历史 (system prompt 保留)"),
     ("/exit, /quit, /q",   "退出 REPL"),
 ]
