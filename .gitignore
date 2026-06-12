@@ -1,0 +1,3 @@
+# Extension signing key & packed artifacts never enter git
+*.pem
+*.crx

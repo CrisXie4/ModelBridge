@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "ModelBridge 侧边栏",
+  "version": "1.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqY8Xdj4yChDY1ghBPZDV4IvKYerpvJYbK9uZBdlaCw3Q+bqnNLE/SH+dtM3WeawqlS3dIjTbQP7N/VNRUS1MYIyjwplzjMU1ZTVgOXq4e08W0XgfJ8vwgi9UH+BKXdX97jZikc3WWD3968HLnc7lXzMJAy24pp6tfwxqa6famC3Q5Vtzk73IPUOohpcxFnktgZdW2hNevFFtfQ3fQ0RbF+z7l6IIhPUrGl6+u/LDJFzo4otN+0JzAjgUBZKHq+ldoZerogiv4WvoDNm1lS0y9Uf7yd8Jku4RU85NkE0pGvXIMXjPQD8ABlK3H+QrKl+B+mbcN/2S3hyZrj9lDYYl8QIDAQAB",
+  "description": "用聊天窗口驱动国产模型读写当前网页 (Native Messaging + LocalBridge)。",
+  "minimum_chrome_version": "114",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "sidePanel",
+    "nativeMessaging",
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "打开 ModelBridge 侧边栏",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  }
+}
