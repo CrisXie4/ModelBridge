@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "modelbridge"
-version = "1.0.3"
+version = "1.1.0"
 description = "ModelBridge: a China-first AI Coding Agent compatibility gateway / Agent Proxy / CLI."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -57,6 +57,7 @@ dev = [
 [project.scripts]
 mbridge = "modelbridge.cli:app"
 modelbridge = "modelbridge.cli:app"
+mbridge-bridge = "modelbridge.bridge.host:main"
 
 [project.urls]
 Homepage = "https://github.com/CrisXie4/ModelBridge"

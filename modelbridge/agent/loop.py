@@ -121,12 +121,28 @@ def run_agent_turn(
                 stopped_reason="stop",
             )
 
-        for call in calls:
-            result = registry.dispatch(call, ctx)
-            session.add_tool_result(tool_call_id=call.id, content=result.content)
-            executed.append(call)
-            if on_tool_call is not None:
-                on_tool_call(call, result.content)
+        # If the user interrupts (Ctrl-C) while a tool is executing, the
+        # assistant message with tool_calls is already in the session — every
+        # provider requires a tool message per tool_call_id on the next request
+        # (DeepSeek 400s otherwise). Backfill synthetic results for whatever
+        # didn't finish before re-raising, so the history stays legal.
+        answered: set[str] = set()
+        try:
+            for call in calls:
+                result = registry.dispatch(call, ctx)
+                session.add_tool_result(tool_call_id=call.id, content=result.content)
+                answered.add(call.id)
+                executed.append(call)
+                if on_tool_call is not None:
+                    on_tool_call(call, result.content)
+        except KeyboardInterrupt:
+            for call in calls:
+                if call.id not in answered:
+                    session.add_tool_result(
+                        tool_call_id=call.id,
+                        content="[用户中断了本轮，此工具调用未执行]",
+                    )
+            raise
         # loop continues — model may want to call more tools or finalize
 
     return AgentResult(
@@ -251,22 +267,32 @@ def run_interactive(
             on_user_echo(text)
         session.add_user(text)
 
-        result = run_agent_turn(
-            session=session,
-            ctx=ctx,
-            registry=registry,
-            model_name=model_name,
-            timeout=timeout,
-            max_iters=max_iters_per_turn,
-            stream=stream,
-            thinking=state.get("enabled"),
-            thinking_budget=state.get("budget"),
-            on_assistant_start=on_assistant_start,
-            on_content_delta=on_content_delta,
-            on_reasoning_delta=on_reasoning_delta,
-            on_assistant=on_assistant,
-            on_tool_call=on_tool_call,
-        )
+        try:
+            result = run_agent_turn(
+                session=session,
+                ctx=ctx,
+                registry=registry,
+                model_name=model_name,
+                timeout=timeout,
+                max_iters=max_iters_per_turn,
+                stream=stream,
+                thinking=state.get("enabled"),
+                thinking_budget=state.get("budget"),
+                on_assistant_start=on_assistant_start,
+                on_content_delta=on_content_delta,
+                on_reasoning_delta=on_reasoning_delta,
+                on_assistant=on_assistant,
+                on_tool_call=on_tool_call,
+            )
+        except KeyboardInterrupt:
+            # Ctrl-C during a turn (e.g. a tool waiting on a slow page load)
+            # aborts just this turn and returns to the prompt — the REPL stays
+            # alive. The model may see a partial turn; the next input continues.
+            if on_system is not None:
+                on_system("[已中断本轮 — 回到输入。如需让 AI 继续，再说一句即可]")
+            if on_turn_done is not None:
+                on_turn_done()
+            continue
 
         if result.stopped_reason == "provider_error" and result.error is not None:
             if on_provider_error is not None:

@@ -98,6 +98,16 @@ def render_tool_bubble(
 # Streaming assistant output
 # ---------------------------------------------------------------------------
 
+def _tail_lines(text: str, n: int) -> str:
+    """Last ``n`` source lines of ``text``, with a leading ellipsis when trimmed."""
+    if not text:
+        return text
+    lines = text.splitlines()
+    if len(lines) <= n:
+        return text
+    return "…\n" + "\n".join(lines[-n:])
+
+
 class AssistantStream:
     """Stream the assistant turn into a cyan-bordered Panel.
 
@@ -122,22 +132,27 @@ class AssistantStream:
     * v2: raw ``console.file.write`` — robust but lost both the panel
       border *and* Markdown rendering, which the user wanted back.
 
-    This v3 keeps Live for the in-place streaming effect but pins it to
-    the visible viewport:
+    * v3: ``vertical_overflow="crop"`` + ``transient=True`` — better, but
+      crop fills the FULL screen height with zero margin. Ambiguous-width
+      chars (¥ … ：) render 2 cells wide on Windows Terminal while Rich
+      measures 1, so a full-height frame still wraps past the screen and
+      the stacked-header bug came back on CJK-heavy answers.
 
-    1. ``vertical_overflow="crop"`` so the rendered output **never**
-       exceeds the screen height. ``cursor up N`` can always reach the
-       top of the live region because the region is, by construction,
-       on-screen.
-    2. ``transient=True`` so when the stream ends, Live clears its
-       region cleanly — no half-drawn panel left behind.
-    3. On ``__exit__`` we call ``console.print(self._render())`` ONCE
-       to deposit the **full** panel (including everything that was
-       cropped during streaming) into scrollback. Live-time view is a
+    This v4 keeps Live but renders a **tail view** while streaming:
+
+    1. ``_render(final=False)`` trims the body to the last N source lines
+       (terminal height minus a generous margin). The live region is
+       always well under the screen height, so wide-char wrap mis-measure
+       is absorbed by the margin and ``cursor up N`` stays reachable.
+    2. ``transient=True`` so when the stream ends, Live clears its small
+       region cleanly. No full-frame redraw right before exit — clearing
+       the tallest frame is exactly when miscounted rows leave remnants.
+    3. On ``__exit__`` we ``console.print(self._render(final=True))`` ONCE
+       to deposit the **full** panel into scrollback. Live-time view is a
        progress monitor; the post-exit print is the canonical record.
 
-    During the stream you may only see the *tail* of a very long answer.
-    That's the trade-off for the panel + Markdown look. The full content
+    During the stream you only see the *tail* of a long answer (thinking
+    collapses to its last lines once the answer starts). The full content
     is always present in the final post-exit panel.
 
     ``show_reasoning_inline`` (default ``True``) toggles whether the
@@ -183,11 +198,13 @@ class AssistantStream:
     def __exit__(self, exc_type, exc, tb) -> None:
         if not self._opened:
             return
-        # Close Live → clears its (cropped) region. The cursor is restored
-        # to the line where Live opened, so the next print lands there.
+        # Close Live → clears its region. NOTE: no update() before exit — the
+        # final frame is the tallest one, and redrawing it right before the
+        # transient clear maximizes the damage if the clear miscounts rows
+        # (ambiguous-width CJK chars render wider than Rich measures on
+        # Windows Terminal, so tall frames are exactly the risky ones).
         if self._live is not None:
             try:
-                self._live.update(self._render(), refresh=True)
                 self._live.__exit__(exc_type, exc, tb)
             except Exception:  # noqa: BLE001
                 pass
@@ -247,29 +264,55 @@ class AssistantStream:
     # ------------------------------------------------------------------
 
     def _render(self, *, final: bool = False):
-        """Build the Panel renderable. ``final=True`` is used for the
-        post-exit ``console.print`` (no truncation considerations differ
-        between live and final — they share one renderer)."""
+        """Build the Panel renderable.
+
+        ``final=False`` (streaming) renders a **tail view**: the body is
+        trimmed to the last N source lines so the live region stays well under
+        the terminal height. This is the v4 fix for stacked panel headers —
+        ambiguous-width chars (¥ … ：) render wider on Windows Terminal than
+        Rich measures, so a full-height ``crop`` frame can still wrap past the
+        screen and break Live's cursor-up redraw. A tail view leaves enough
+        margin to absorb the mis-measure. ``final=True`` renders everything
+        (the canonical post-exit panel in scrollback).
+        """
+        live_view = not final
+        reasoning_text = self.reasoning
+        content_text = self.content
+
+        if live_view:
+            # Budget in source lines, with generous margin below the screen
+            # height to absorb wide-char wrapping Rich can't see.
+            try:
+                screen_h = self.console.size.height
+            except Exception:  # noqa: BLE001
+                screen_h = 24
+            budget = max(6, screen_h - 8)
+            if content_text:
+                # Once the answer starts, collapse thinking to its last lines.
+                reasoning_text = _tail_lines(reasoning_text, 3)
+                content_text = _tail_lines(content_text, max(4, budget - 5))
+            else:
+                reasoning_text = _tail_lines(reasoning_text, budget)
+
         items: list = []
 
         # --- Thinking block (dim italic) ---------------------------------
-        if self.show_reasoning_inline and self._reasoning_parts:
+        if self.show_reasoning_inline and reasoning_text:
             items.append(Text("// thinking", style="bold dim"))
             # Plain dim italic Text — NOT Markdown. Thinking traces from
             # reasoning models often contain stray ``*`` / ``_`` that
             # would accidentally bold-toggle if parsed.
-            items.append(Text(self.reasoning, style="dim italic"))
-            if self._content_parts:
+            items.append(Text(reasoning_text, style="dim italic"))
+            if content_text:
                 items.append(Rule(style="dim"))
 
         # --- Content block (Markdown) ------------------------------------
-        c = self.content
-        if c:
+        if content_text:
             try:
-                items.append(Markdown(c, code_theme="monokai"))
+                items.append(Markdown(content_text, code_theme="monokai"))
             except Exception:  # noqa: BLE001 — partial markdown edge cases
-                items.append(Text(c))
-        elif not self._reasoning_parts:
+                items.append(Text(content_text))
+        elif not reasoning_text:
             items.append(Text("…", style="dim"))
 
         body = Group(*items) if len(items) > 1 else (items[0] if items else Text(""))

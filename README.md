@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon.png" alt="ModelBridge" width="128" />
+</p>
+
 # ModelBridge
 
 > **国产模型优先的 AI Coding Agent + 兼容 CLI。**
@@ -554,6 +558,7 @@ apply_diff (context-anchored)
 | v0.6 | ✅ | **当前** — diff 驱动编辑：`mbridge edit` / `patch preview` / `apply` / `rollback`，自动备份 |
 | v0.7 | — | 真正请求路由 + prefix-cache 接入 + 预算拦截 |
 | v0.8 | — | Web Server / Agent Proxy / MCP Client |
+| v1.1 | ✅ | **浏览器侧边栏 Agent**：Chrome/Edge MV3 插件 + Native Messaging 宿主 (LocalBridge)，聊天读写当前网页。CLI 保留为共享后端。见 [`extension/README.md`](extension/README.md) |
 
 ---
 

@@ -249,6 +249,11 @@ from .mcp.cli import mcp_app  # noqa: E402
 
 app.add_typer(mcp_app, name="mcp")
 
+# Browser side-panel Native Messaging host subcommands.
+from .bridge.cli import bridge_app  # noqa: E402
+
+app.add_typer(bridge_app, name="bridge")
+
 
 # ---------------------------------------------------------------------------
 # Root: `mbridge` with no subcommand → interactive agent REPL
@@ -381,6 +386,28 @@ def _run_repl(
         policy=policy, cwd=cwd_resolved, approve=approval, allow_bash=allow_bash,
     )
     registry = build_default_registry(include_bash=allow_bash)
+
+    # Browser tools are always available: the agent can read/operate the active
+    # web page by relaying to the side-panel extension via the LocalBridge host.
+    # When the linkage isn't ready (control off / panel closed) the tools simply
+    # return a friendly "not connected" error if the model tries to use them —
+    # nothing else is affected. Write tools confirm via the same terminal
+    # approval as file writes (ctx.confirm).
+    from .agent.tools.browser_tools import build_browser_registry
+    from .bridge.control import RemoteBrowserBridge
+
+    for tool in build_browser_registry(include_write=True).tools.values():
+        registry.register(tool)
+    browser_bridge = RemoteBrowserBridge()
+    agent_ctx.browser_bridge = browser_bridge
+    ok, reason = browser_bridge.available()
+    if ok:
+        console.print("[dim]网页控制: 已连接侧边栏 (read_page / click / fill / navigate…)[/dim]")
+    else:
+        console.print(
+            f"[dim]网页控制: 未连接 ({reason})。"
+            f"开启: `mbridge bridge control on` + 打开侧边栏。[/dim]"
+        )
 
     # 2b. MCP — connect configured servers and fold their tools into the same
     # registry. Failure to connect a server is isolated and never blocks the
@@ -596,7 +623,7 @@ def _run_repl(
             console,
             tool_name=call.name,
             args_preview=args_preview,
-            body=result_content,
+            body=_fold_tool_body(result_content),
         )
 
     def on_provider_error(err) -> None:
@@ -692,6 +719,8 @@ def _run_repl(
     finally:
         if mcp_manager is not None:
             mcp_manager.shutdown()
+        if browser_bridge is not None:
+            browser_bridge.close()
         if save_session and len(session.messages) > 1:
             path = session.save(label=f"repl_{model_name}")
             if path is not None:
@@ -737,6 +766,30 @@ def _short_repr(v) -> str:
     return s
 
 
+def _fold_tool_body(content: str, *, max_lines: int = 6, max_chars: int = 400) -> str:
+    """Fold a long tool result for terminal display.
+
+    The model still receives the full content (it lives in the session); this
+    only keeps the REPL readable when a tool like ``read_page`` returns a whole
+    page of text.
+    """
+    content = content or ""
+    lines = content.splitlines()
+    head_lines = lines[:max_lines]
+    head = "\n".join(head_lines)
+    truncated_chars = len(head) > max_chars
+    if truncated_chars:
+        head = head[:max_chars].rstrip() + "…"
+    hidden = len(lines) - len(head_lines)
+    if hidden > 0 or truncated_chars:
+        note_bits = []
+        if hidden > 0:
+            note_bits.append(f"折叠 {hidden} 行")
+        note_bits.append(f"共 {len(content)} 字符，模型已获取完整内容")
+        head += f"\n[{' · '.join(note_bits)}]"
+    return head
+
+
 def _default_system_prompt(*, allow_bash: bool) -> str:
     """Built-in system prompt used by the REPL when no override is supplied.
 
@@ -750,6 +803,15 @@ def _default_system_prompt(*, allow_bash: bool) -> str:
     bash_line = "" if not allow_bash else (
         "- run_bash(command): 在 cwd 中执行 shell 命令。默认 30 秒超时。\n"
     )
+    browser_block = (
+        "\n你还能操作用户当前浏览器标签页 (通过侧边栏插件):\n"
+        "- read_page(): 读当前网页标题/URL/正文 (总结、问答前先调用)。\n"
+        "- get_selection(): 读用户选中的文本。\n"
+        "- query_dom(selector) / extract(selector, attr): 用 CSS 选择器定位元素、取文本或属性。\n"
+        "- click(selector) / fill(selector, value) / navigate(url): 操作页面 (会请求用户确认)。\n"
+        "需要网页信息或要操作网页时主动调用这些工具，不要凭空猜测页面内容。\n"
+        "若工具返回「未启用 / 未连接」，告诉用户运行 `mbridge bridge control on` 并打开浏览器侧边栏。\n"
+    )
     return (
         "你是 ModelBridge 嵌入的编程助手 (类似 Claude Code)。"
         "你可以读、写、编辑项目文件，必要时也可以调用 shell。\n\n"
@@ -759,6 +821,7 @@ def _default_system_prompt(*, allow_bash: bool) -> str:
         "- write_file(path, content): 覆盖/创建文件 (每次会请求用户确认)。\n"
         "- str_replace(path, old_str, new_str): 精确替换 (要求 old_str 在文件中唯一出现)。\n"
         f"{bash_line}"
+        f"{browser_block}"
         "\n"
         "原则:\n"
         "1. 修改前先读取相关文件，确认上下文再动手；不要凭空写代码。\n"
