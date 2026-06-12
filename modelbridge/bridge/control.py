@@ -152,7 +152,9 @@ class ControlServer(threading.Thread):
             self._log.warning("bridge.control endpoint write failed: %s", e)
 
     def _handle(self, conn: socket.socket) -> None:
-        stream = conn.makefile("rwb")
+        # ``Any``: socket.makefile("rwb") is a BufferedRWPair, which typeshed
+        # doesn't consider a BinaryIO even though it duck-types one.
+        stream: Any = conn.makefile("rwb")
         write_lock = threading.Lock()
 
         def send(msg: dict[str, Any]) -> None:
@@ -277,7 +279,8 @@ class RemoteBrowserBridge:
         # the eventual result is lost. (None would also work since the host always
         # replies within its tool timeout, but a finite cap is safer.)
         conn.settimeout(_READ_TIMEOUT)
-        stream = conn.makefile("rwb")
+        # ``Any``: same BufferedRWPair-vs-BinaryIO typeshed mismatch as above.
+        stream: Any = conn.makefile("rwb")
         P.write_message(stream, {"type": P.T_AUTH, "token": cfg["token"]})
         ack = P.read_message(stream)
         if not ack or ack.get("type") == P.T_ERROR:
