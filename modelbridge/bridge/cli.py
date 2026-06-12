@@ -40,21 +40,16 @@ def cmd_install(
         None,
         "--extension-id",
         "-e",
-        help="扩展 ID (在 chrome://extensions 加载 unpacked 后复制)。省略则用上次保存的。",
+        help="扩展 ID。省略时用官方固定 ID (manifest key 锁定，所有安装一致)；"
+             "fork 改过 key 才需要传。",
     ),
     chrome_only: bool = typer.Option(False, "--chrome-only", help="只注册 Chrome (不含 Edge)。"),
 ) -> None:
     """注册 Native Messaging 宿主到 Chrome/Edge。"""
-    ext_id = extension_id or installer.load_saved_extension_id()
-    if not ext_id:
-        err_console.print(
-            "[red]需要扩展 ID。[/red]\n"
-            "先在 [bold]chrome://extensions[/bold] 打开开发者模式、"
-            "[bold]加载已解压的扩展程序[/bold] 选择 extension/ 目录，"
-            "复制生成的 ID，然后:\n\n"
-            "    mbridge bridge install --extension-id <粘贴ID>\n"
-        )
-        raise typer.Exit(code=2)
+    # Explicit flag wins; otherwise the official pinned ID. (The "saved id"
+    # file predates the manifest-key pin — old saves may hold a stale
+    # path-hash ID, so it is no longer consulted here, only shown in status.)
+    ext_id = extension_id or installer.DEFAULT_EXTENSION_ID
 
     browsers = ("chrome",) if chrome_only else installer.DEFAULT_BROWSERS
     try:

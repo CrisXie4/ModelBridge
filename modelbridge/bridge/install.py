@@ -49,6 +49,12 @@ _BROWSERS: dict[str, dict[str, str]] = {
 
 DEFAULT_BROWSERS = ("chrome", "edge")
 
+# The official extension's ID is pinned by the "key" field in its manifest
+# (extension branch / packed crx), so it is identical for every install on
+# every machine. `mbridge bridge install` defaults to it; forks that re-key
+# the extension pass --extension-id.
+DEFAULT_EXTENSION_ID = "pcnidhfpkombmcnpcojlpdokckenlkop"
+
 
 @dataclass
 class InstallResult:
