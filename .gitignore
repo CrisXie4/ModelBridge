@@ -1,6 +1,10 @@
 # Local AI tooling config
 .claude/
 
+# Extension signing key (NEVER commit) + packed artifacts
+*.pem
+*.crx
+
 # Python
 __pycache__/
 *.py[cod]
