@@ -119,6 +119,11 @@ def _write_manifest(extension_id: str, launcher: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 def _register_windows(browsers: tuple[str, ...], manifest: Path) -> list[str]:
+    # Platform guard doubles as mypy narrowing: on non-Windows checkers
+    # (ubuntu CI) everything below is unreachable, so the winreg attribute
+    # lookups aren't flagged (winreg only exists on Windows).
+    if sys.platform != "win32":  # pragma: no cover - callers already gate on win32
+        return [f"{b}: 仅支持 Windows" for b in browsers]
     import winreg
 
     out: list[str] = []
