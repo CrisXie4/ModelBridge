@@ -23,12 +23,13 @@ CallFn = Callable[[str, dict[str, Any] | None], Any]
 NotifyFn = Callable[[str, dict[str, Any] | None], None]
 
 
-def perform_handshake(*, server_id: str, call: CallFn, notify: NotifyFn) -> HandshakeResult:
+def perform_handshake(*, server_id: str, call: CallFn, notify: NotifyFn,
+                      sampling: bool = False) -> HandshakeResult:
     result = call(
         "initialize",
         {
             "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": client_capabilities(),
+            "capabilities": client_capabilities(sampling=sampling),
             "clientInfo": client_info(),
         },
     )

@@ -21,6 +21,10 @@ class ToolRegistry:
             raise ValueError("tool.name must be set")
         self.tools[tool.name] = tool
 
+    def unregister(self, name: str) -> Tool | None:
+        """Remove a tool by name (used by MCP hot refresh). None if absent."""
+        return self.tools.pop(name, None)
+
     def get(self, name: str) -> Tool | None:
         return self.tools.get(name)
 

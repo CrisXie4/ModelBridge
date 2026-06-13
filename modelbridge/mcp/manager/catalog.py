@@ -74,6 +74,20 @@ class Catalog:
             self.prompts.append(QualifiedPrompt(server_id=server_id, qualified_name=qn, prompt=p))
 
     # ------------------------------------------------------------------
+    def remove_server(self, server_id: str) -> None:
+        """Drop every capability that came from ``server_id`` (M5 hot refresh)."""
+        self.tools = [t for t in self.tools if t.server_id != server_id]
+        self.resources = [r for r in self.resources if r.server_id != server_id]
+        self.prompts = [p for p in self.prompts if p.server_id != server_id]
+        self._tool_index = {
+            k: v for k, v in self._tool_index.items() if v[0] != server_id
+        }
+        self._prompt_index = {
+            k: v for k, v in self._prompt_index.items() if v[0] != server_id
+        }
+        self._server_alias.pop(sanitize(server_id), None)
+
+    # ------------------------------------------------------------------
     def resolve_tool(self, qualified_name: str) -> tuple[str, str] | None:
         return self._tool_index.get(qualified_name)
 

@@ -50,6 +50,12 @@ def decode_message(line: str) -> IncomingMessage:
             hint="server 可能把日志写到了 stdout；MCP 要求 stdout 只发 JSON，日志走 stderr",
             raw=line[:500],
         ) from e
+    return classify_message(obj)
+
+
+def classify_message(obj: Any) -> IncomingMessage:
+    """Classify an already-parsed JSON-RPC object (used by the HTTP transport,
+    where the body arrives pre-decoded from JSON / SSE events)."""
     if not isinstance(obj, dict):
         raise MCPProtocolError(f"JSON-RPC 帧不是对象: {type(obj).__name__}", raw=obj)
 
@@ -84,4 +90,5 @@ __all__ = [
     "INTERNAL_ERROR",
     "encode_line",
     "decode_message",
+    "classify_message",
 ]

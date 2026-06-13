@@ -10,9 +10,12 @@ Public facade. Typical wiring from the CLI / agent REPL::
     ...
     manager.shutdown()
 
-See ``docs/mcp-architecture.md`` for the full design. This milestone covers
-M0–M3: stdio transport, handshake + discovery, tool calls, resources, and
-prompts, with multi-server governance and failure isolation.
+See ``docs/mcp-architecture.md`` for the full design. Implemented: M0–M7 —
+stdio + Streamable HTTP transports, handshake + discovery, tool calls,
+resources, prompts, multi-server governance and failure isolation, reconnect
+backoff + heartbeat + ``list_changed`` hot refresh, runtime server toggling
+with per-tool policy overrides, sampling callbacks, and a reverse MCP server
+(``mbridge mcp serve``).
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ from .errors import (
     MCPVersionMismatch,
 )
 from .manager import Catalog, MCPManager, ServerStatus
-from .registry import register_mcp_tools
+from .registry import register_mcp_tools, sync_mcp_tools
 from .session import MCPClientSession, SessionState
 
 
@@ -52,6 +55,7 @@ __all__ = [
     # facade
     "MCPManager",
     "register_mcp_tools",
+    "sync_mcp_tools",
     "is_enabled",
     # config
     "MCPServerConfig",

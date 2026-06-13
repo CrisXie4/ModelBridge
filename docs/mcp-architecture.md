@@ -1,7 +1,8 @@
 # Model Bridge · MCP 模块架构设计
 
-> 范围：纯架构设计，不含实现。ModelBridge 作为 **MCP Client（宿主）** 连接多个 MCP Server，
-> 把远端的 Tool / Resource / Prompt 统一接入现有 agent loop。
+> 状态：**M0–M7 已全部实现**（见 §6）。ModelBridge 作为 **MCP Client（宿主）** 连接多个
+> MCP Server，把远端的 Tool / Resource / Prompt 统一接入现有 agent loop；同时可通过
+> `mbridge mcp serve` 反向作为 **MCP Server** 暴露自身能力。
 >
 > 设计目标：MCP 工具能无缝挂进现有 `ToolRegistry`，agent loop 一行不用改。
 
@@ -61,7 +62,14 @@ modelbridge/
     │   ├── resource_provider.py # Resource 读取 → prompt builder 可消费的上下文
     │   └── prompt_adapter.py    # MCP Prompt → prompt/ 模块模板
     │
-    └── registry.py              # 把 catalog 注入 ToolRegistry 的胶水
+    ├── server/                  # M7：反向 MCP Server（stdio）
+    │   ├── __init__.py
+    │   ├── server.py            # 协议核心（handle_message 纯函数 + stdio loop）
+    │   ├── builtin.py           # chat / list_models / route 三个内置工具
+    │   └── __main__.py          # python -m modelbridge.mcp.server
+    │
+    ├── sampling.py              # M7：sampling/createMessage → 本地模型补全
+    └── registry.py              # 把 catalog 注入 ToolRegistry 的胶水 + 热同步
 ```
 
 **分层依赖（自底向上，单向）**：
@@ -304,21 +312,51 @@ MCPError(Exception)                      # 根，带 server_id + hint 字段
 
 ---
 
-## 6. 未来演进路线
+## 6. 演进路线（已全部落地）
 
-| 阶段 | 目标 | 关键交付 | 与现有模块的接触 |
-|---|---|---|---|
-| **M0 协议地基** | stdio transport + 握手 + `tools/list` | `protocol/`、`transport/stdio`、`session` | 无侵入，纯新增 |
-| **M1 Tool Call 打通** | `MCPToolAdapter` 注入 `ToolRegistry`，agent 能用 MCP 工具 | `adapters/tool_adapter`、`registry.py` | `ToolRegistry.register` |
-| **M2 多 Server + 治理** | `MCPManager`、命名空间、故障隔离、`/mcp` CLI 子命令 | `manager/`、`config.py`、`doctor` 体检集成 | `cli.py`、`doctor.py` |
-| **M3 Resource & Prompt** | resource 注入上下文、prompt 模板接入 | `resource_provider`、`prompt_adapter` | `prompt/`、`context/budget` |
-| **M4 HTTP transport** | Streamable HTTP/SSE，连远端 server | `transport/http` | 复用 factory |
-| **M5 健壮性** | 重连退避、心跳、能力变更通知（`list_changed`）热刷新 | `session/lifecycle` | — |
-| **M6 Agent 深度集成** | MCP 工具进入 router 的能力感知；多 server 工具按任务动态启停；权限分级 | catalog→router 信号 | `router/`、`agent/` |
-| **M7（远期）** | ModelBridge 反向作为 MCP **Server** 暴露自身能力；MCP sampling 回调让 server 借用 ModelBridge 的国产模型 | 新建 `mcp/server/` | `client.py`/`providers` |
+| 阶段 | 状态 | 目标 | 关键交付 | 与现有模块的接触 |
+|---|---|---|---|---|
+| **M0 协议地基** | ✅ | stdio transport + 握手 + `tools/list` | `protocol/`、`transport/stdio`、`session` | 无侵入，纯新增 |
+| **M1 Tool Call 打通** | ✅ | `MCPToolAdapter` 注入 `ToolRegistry`，agent 能用 MCP 工具 | `adapters/tool_adapter`、`registry.py` | `ToolRegistry.register` |
+| **M2 多 Server + 治理** | ✅ | `MCPManager`、命名空间、故障隔离、`mbridge mcp` CLI 子命令 | `manager/`、`config.py`、`doctor` 体检集成 | `cli.py`、`doctor.py` |
+| **M3 Resource & Prompt** | ✅ | resource 注入上下文、prompt 模板接入 | `resource_provider`、`prompt_adapter` | `prompt/`、`context/budget` |
+| **M4 HTTP transport** | ✅ | Streamable HTTP（POST + SSE、`Mcp-Session-Id`、GET 监听流） | `transport/http` | 复用 factory；`headers` 配置携带鉴权 |
+| **M5 健壮性** | ✅ | 重连退避（`ReconnectPolicy`）、`ping` 心跳、`list_changed` 热刷新 + ToolRegistry 自动同步 | `session/lifecycle`、`manager`、`registry.sync_mcp_tools` | `ToolRegistry.unregister` |
+| **M6 Agent 深度集成** | ✅ | REPL `/mcp` 控制台（list/tools/on/off/refresh/read/prompt）、`tool_overrides` 工具级权限、router `wants_mcp` 能力感知 | `agent/commands.py`、`config.py` | `router/`、`agent/` |
+| **M7 Server 模式** | ✅ | `mbridge mcp serve` 反向暴露 chat/list_models/route；sampling 回调让 server 借用国产模型（默认关闭，配置开启） | `mcp/server/`、`mcp/sampling.py` | `client.py`/`providers` |
 
-> 落地建议：按既有「小步收窄」习惯，先只交付 **M0+M1（stdio + tool call）** 形成最小可用闭环，
-> 再逐阶段推进；每阶段都保持 agent loop 零改动。
+### 6.1 配置参考（全量）
+
+```yaml
+mcp:
+  enabled: true
+  reconnect_attempts: 2      # 传输层断开后的重连次数（指数退避）
+  reconnect_backoff: 0.5     # 退避基数（秒）：0.5, 1, 2, … 封顶 8s
+  heartbeat_interval: 0      # >0 时后台 ping 保活并自动重连
+  sampling:                  # M7：允许 server 借用本地配置的模型
+    enabled: false           # 默认关闭（安全姿态）
+    model: null              # 缺省用 default_model
+    max_tokens: 2048         # 硬上限，server 要多少都不会超过
+  servers:
+    - id: filesystem         # stdio：本地子进程
+      transport: stdio
+      command: npx
+      args: ['-y', '@modelcontextprotocol/server-filesystem', '.']
+      tool_policy: approve   # auto | approve | deny
+      tool_overrides:        # M6：工具级覆盖，比 tool_policy 更细
+        delete_file: deny
+        read_file: auto
+    - id: remote             # http：Streamable HTTP 远端
+      transport: http
+      url: https://example.com/mcp
+      headers: {Authorization: 'Bearer ...'}   # 日志自动脱敏
+```
+
+### 6.2 反向 Server（M7）
+
+在 Claude Desktop / Cursor 等 MCP host 中配置 `command: mbridge, args: [mcp, serve]`，
+即可把 ModelBridge 的 `chat`（国产模型补全）、`list_models`、`route`（任务分级）
+作为 MCP 工具暴露出去——host 不接触任何 API key。
 
 ---
 
@@ -339,4 +377,4 @@ MCPError(Exception)                      # 根，带 server_id + hint 字段
 
 ---
 
-*本文件为纯架构设计文档，不含实现。*
+*本文件最初为纯架构设计；M0–M7 现已全部落地，§6 反映实现现状。*

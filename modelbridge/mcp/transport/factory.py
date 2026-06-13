@@ -11,6 +11,7 @@ from typing import Callable
 from ..config import MCPServerConfig, TransportKind
 from ..errors import MCPConfigError
 from .base import Transport
+from .http import HttpTransport
 from .stdio import StdioTransport
 
 
@@ -24,8 +25,19 @@ def _build_stdio(cfg: MCPServerConfig) -> Transport:
     )
 
 
+def _build_http(cfg: MCPServerConfig) -> Transport:
+    assert cfg.url is not None  # guaranteed by MCPServerConfig.validate
+    return HttpTransport(
+        server_id=cfg.server_id,
+        url=cfg.url,
+        headers=cfg.headers,
+        connect_timeout=cfg.connect_timeout,
+    )
+
+
 _BUILDERS: dict[TransportKind, Callable[[MCPServerConfig], Transport]] = {
     TransportKind.STDIO: _build_stdio,
+    TransportKind.HTTP: _build_http,
 }
 
 
@@ -35,7 +47,7 @@ def build_transport(cfg: MCPServerConfig) -> Transport:
         raise MCPConfigError(
             f"transport {cfg.transport.value!r} 尚未实现",
             server_id=cfg.server_id,
-            hint="目前仅支持 stdio；http 计划在 M4 落地",
+            hint="目前支持 stdio 与 http (Streamable HTTP)",
         )
     return builder(cfg)
 

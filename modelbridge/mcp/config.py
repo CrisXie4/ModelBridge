@@ -35,7 +35,7 @@ from .errors import MCPConfigError
 
 class TransportKind(str, Enum):
     STDIO = "stdio"
-    HTTP = "http"  # implemented in M4; declared here so config validates early
+    HTTP = "http"  # Streamable HTTP (POST + SSE)
 
 
 class ToolPolicyKind(str, Enum):
@@ -52,10 +52,17 @@ class MCPServerConfig:
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     url: str | None = None
+    headers: dict[str, str] = field(default_factory=dict)  # http only (e.g. Authorization)
     enabled: bool = True
     connect_timeout: float = 20.0
     request_timeout: float = 60.0
     tool_policy: ToolPolicyKind = ToolPolicyKind.APPROVE
+    # Per-tool policy overrides (raw tool name → policy), finer than tool_policy:
+    #   tool_overrides: {delete_file: deny, search: auto}
+    tool_overrides: dict[str, ToolPolicyKind] = field(default_factory=dict)
+
+    def policy_for_tool(self, raw_tool_name: str) -> ToolPolicyKind:
+        return self.tool_overrides.get(raw_tool_name, self.tool_policy)
 
     # ------------------------------------------------------------------
     def validate(self) -> None:
@@ -71,6 +78,7 @@ class MCPServerConfig:
             raise MCPConfigError(
                 f"http server '{self.server_id}' 缺少 url",
                 server_id=self.server_id,
+                hint="例如 url: https://example.com/mcp（可配 headers 携带鉴权）",
             )
 
     @classmethod
@@ -82,7 +90,7 @@ class MCPServerConfig:
         except ValueError:
             raise MCPConfigError(
                 f"未知 transport: {raw.get('transport')!r}",
-                hint="目前支持 stdio（http 在 M4）",
+                hint="可选值: stdio | http",
             ) from None
         try:
             policy = ToolPolicyKind(str(raw.get("tool_policy", "approve")).lower())
@@ -94,6 +102,22 @@ class MCPServerConfig:
         env = raw.get("env") or {}
         if not isinstance(env, dict):
             raise MCPConfigError("env 必须是映射", server_id=str(raw.get("id")))
+        headers = raw.get("headers") or {}
+        if not isinstance(headers, dict):
+            raise MCPConfigError("headers 必须是映射", server_id=str(raw.get("id")))
+        overrides_raw = raw.get("tool_overrides") or {}
+        if not isinstance(overrides_raw, dict):
+            raise MCPConfigError("tool_overrides 必须是映射", server_id=str(raw.get("id")))
+        overrides: dict[str, ToolPolicyKind] = {}
+        for tool_name, p in overrides_raw.items():
+            try:
+                overrides[str(tool_name)] = ToolPolicyKind(str(p).lower())
+            except ValueError:
+                raise MCPConfigError(
+                    f"tool_overrides.{tool_name} 的策略非法: {p!r}",
+                    server_id=str(raw.get("id")),
+                    hint="可选值: auto | approve | deny",
+                ) from None
         cfg = cls(
             server_id=str(raw.get("id") or raw.get("server_id") or ""),
             transport=transport,
@@ -101,10 +125,12 @@ class MCPServerConfig:
             args=[str(a) for a in args],
             env={str(k): str(v) for k, v in env.items()},
             url=raw.get("url"),
+            headers={str(k): str(v) for k, v in headers.items()},
             enabled=bool(raw.get("enabled", True)),
             connect_timeout=float(raw.get("connect_timeout", 20.0)),
             request_timeout=float(raw.get("request_timeout", 60.0)),
             tool_policy=policy,
+            tool_overrides=overrides,
         )
         cfg.validate()
         return cfg
@@ -114,6 +140,14 @@ class MCPServerConfig:
 class MCPSettings:
     enabled: bool = False
     servers: list[MCPServerConfig] = field(default_factory=list)
+    # M5 — robustness knobs.
+    reconnect_attempts: int = 2      # per failure; 0 disables auto-reconnect
+    reconnect_backoff: float = 0.5   # base delay, doubled per attempt
+    heartbeat_interval: float = 0.0  # seconds between pings; 0 disables
+    # M7 — let servers borrow our models via sampling/createMessage.
+    sampling_enabled: bool = False
+    sampling_model: str | None = None      # None → config default_model
+    sampling_max_tokens: int = 2048
 
     def enabled_servers(self) -> list[MCPServerConfig]:
         return [s for s in self.servers if s.enabled]
@@ -146,7 +180,20 @@ def load_mcp_settings() -> MCPSettings:
             )
         seen.add(cfg.server_id)
         servers.append(cfg)
-    return MCPSettings(enabled=enabled, servers=servers)
+
+    sampling_raw = block.get("sampling")
+    sampling = sampling_raw if isinstance(sampling_raw, dict) else {}
+
+    return MCPSettings(
+        enabled=enabled,
+        servers=servers,
+        reconnect_attempts=int(block.get("reconnect_attempts", 2)),
+        reconnect_backoff=float(block.get("reconnect_backoff", 0.5)),
+        heartbeat_interval=float(block.get("heartbeat_interval", 0.0)),
+        sampling_enabled=bool(sampling.get("enabled", False)),
+        sampling_model=sampling.get("model"),
+        sampling_max_tokens=int(sampling.get("max_tokens", 2048)),
+    )
 
 
 __all__ = [

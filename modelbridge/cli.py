@@ -420,10 +420,12 @@ def _run_repl(
             mcp_manager = MCPManager.from_config(verbose=False)
             mcp_manager.connect_all()
             n = register_mcp_tools(registry, mcp_manager)
+            mcp_manager.start_heartbeat()  # no-op unless mcp.heartbeat_interval > 0
             failed = mcp_manager.connect_errors
             if n:
                 console.print(f"[dim]MCP: 接入 {n} 个工具"
-                              f"{f'，{len(failed)} 个 server 连接失败' if failed else ''}[/dim]")
+                              f"{f'，{len(failed)} 个 server 连接失败' if failed else ''}"
+                              f" · /mcp 管理[/dim]")
             for sid, err in failed.items():
                 err_console.print(f"[yellow]MCP server {sid} 连接失败: {err.message}[/yellow]")
     except Exception as e:  # noqa: BLE001 — MCP must never block the REPL
@@ -690,6 +692,7 @@ def _run_repl(
             entry=entry,
             thinking_state=thinking_state,
             project_path=cwd_resolved,
+            mcp_manager=mcp_manager,
         )
         return handle_slash(text, sctx)
 
@@ -2074,8 +2077,17 @@ def cmd_route(
         _run_route_test(mode)
         return
 
+    # M6 — capability awareness: when MCP servers are configured & enabled,
+    # tell the classifier tools are in play (nudges agent-task levels up).
     try:
-        result: RouteResult = route_prompt(prompt, mode=mode, use_llm=True)
+        from .mcp import is_enabled as _mcp_enabled
+
+        wants_mcp = _mcp_enabled()
+    except Exception:  # noqa: BLE001 — routing must work without MCP config
+        wants_mcp = False
+
+    try:
+        result: RouteResult = route_prompt(prompt, mode=mode, use_llm=True, wants_mcp=wants_mcp)
     except LLMClassifyError as e:
         err_console.print(
             f"[red]LLM 路由分级失败：[/red]{e}\n"

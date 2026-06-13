@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from .client_session import MCPClientSession
-from .lifecycle import SessionState, can_transition
+from .client_session import MCPClientSession, SamplingHandler
+from .lifecycle import ReconnectPolicy, SessionState, can_transition
 
-__all__ = ["MCPClientSession", "SessionState", "can_transition"]
+__all__ = [
+    "MCPClientSession",
+    "SamplingHandler",
+    "SessionState",
+    "ReconnectPolicy",
+    "can_transition",
+]

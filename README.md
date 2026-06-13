@@ -559,6 +559,7 @@ apply_diff (context-anchored)
 | v0.7 | — | 真正请求路由 + prefix-cache 接入 + 预算拦截 |
 | v0.8 | — | Web Server / Agent Proxy / MCP Client |
 | v1.1 | ✅ | **浏览器侧边栏 Agent**：Chrome/Edge MV3 插件 + Native Messaging 宿主 (LocalBridge)，聊天读写当前网页。CLI 保留为共享后端。插件在独立的 [`extension` 分支](https://github.com/CrisXie4/ModelBridge/tree/extension) 维护（orphan 分支，只含扩展本身） |
+| v1.2 | ✅ | **MCP 完整接入** (M0–M7)：stdio + Streamable HTTP 双传输、多 server 治理与故障隔离、重连退避/心跳/`list_changed` 热刷新、REPL `/mcp` 运行时启停 + 工具级权限 (`tool_overrides`)、sampling 回调（server 借用国产模型）、`mbridge mcp serve` 反向把 ModelBridge 暴露为 MCP server。详见 [docs/mcp-architecture.md](docs/mcp-architecture.md) |
 
 ---
 
@@ -568,7 +569,6 @@ ModelBridge **不做**：
 
 - ❌ Web UI (Gradio / Streamlit / 前端)
 - ❌ Agent 之间并发调度 (留到 v0.6+)
-- ❌ MCP 完整协议 (v0.6)
 - ❌ 用户系统 / 多租户 / 数据库
 - ❌ 内置 sandbox / 容器 — 需要更强隔离请自己用 Docker 跑 mbridge
 

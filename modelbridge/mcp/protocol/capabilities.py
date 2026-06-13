@@ -32,13 +32,17 @@ def client_info() -> dict[str, Any]:
     return {"name": "modelbridge", "version": version}
 
 
-def client_capabilities() -> dict[str, Any]:
+def client_capabilities(*, sampling: bool = False) -> dict[str, Any]:
     """What *we* support as a client.
 
-    For M0–M3 we consume tools/resources/prompts but expose no client-side
-    features (no sampling, no roots). Those land in M7.
+    We consume tools/resources/prompts. With ``sampling=True`` (M7, gated by
+    ``mcp.sampling.enabled``) we also advertise ``sampling`` so servers may
+    borrow our configured models via ``sampling/createMessage``.
     """
-    return {}
+    caps: dict[str, Any] = {}
+    if sampling:
+        caps["sampling"] = {}
+    return caps
 
 
 @dataclass

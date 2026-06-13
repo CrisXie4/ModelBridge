@@ -11,6 +11,8 @@ Commands:
 * ``mbridge mcp prompts``   — all discovered prompts
 * ``mbridge mcp call``      — invoke one tool with JSON args (manual test)
 * ``mbridge mcp read``      — read a resource by uri
+* ``mbridge mcp ping``      — heartbeat every ready server (M5)
+* ``mbridge mcp serve``     — run ModelBridge itself as an MCP server (M7)
 """
 
 from __future__ import annotations
@@ -30,7 +32,10 @@ err_console = Console(stderr=True)
 
 mcp_app = typer.Typer(
     name="mcp",
-    help="MCP 客户端：连接并调用外部 MCP server (list / tools / resources / prompts / call / read)。",
+    help=(
+        "MCP 客户端 + 服务端：连接外部 MCP server (list / tools / resources / "
+        "prompts / call / read / ping)，或用 serve 把 ModelBridge 暴露为 MCP server。"
+    ),
     invoke_without_command=True,
 )
 
@@ -52,7 +57,7 @@ def _open_manager(*, verbose: bool = False) -> MCPManager:
             "      command: npx\n      args: ['-y', '@modelcontextprotocol/server-filesystem', '.']\n"
         )
         raise typer.Exit(code=2)
-    manager = MCPManager(settings=settings, verbose=verbose)
+    manager = MCPManager.from_settings(settings, verbose=verbose)
     manager.connect_all()
     return manager
 
@@ -167,6 +172,46 @@ def call_tool(
         raise typer.Exit(code=1) from e
     finally:
         manager.shutdown()
+
+
+@mcp_app.command("ping")
+def ping_servers(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
+    """对每个已连接的 server 发一次 ping，显示延迟。"""
+    import time
+
+    manager = _open_manager(verbose=verbose)
+    try:
+        table = Table(title="MCP ping")
+        table.add_column("id")
+        table.add_column("result")
+        table.add_column("latency", justify="right")
+        for s in manager.statuses():
+            if s.state != "ready":
+                table.add_row(s.server_id, f"[dim]{s.state}[/dim]", "-")
+                continue
+            session = manager.sessions[s.server_id]
+            t0 = time.monotonic()
+            try:
+                session.ping()
+                ms = int((time.monotonic() - t0) * 1000)
+                table.add_row(s.server_id, "[green]ok[/green]", f"{ms} ms")
+            except MCPError as e:
+                table.add_row(s.server_id, f"[red]{e.message}[/red]", "-")
+        console.print(table)
+    finally:
+        manager.shutdown()
+
+
+@mcp_app.command("serve")
+def serve() -> None:
+    """把 ModelBridge 作为 MCP server 跑在 stdio 上（chat / list_models / route）。
+
+    在 Claude Desktop / Cursor 等 MCP host 里配置:
+      command: mbridge   args: [mcp, serve]
+    """
+    from .server import build_modelbridge_server
+
+    raise typer.Exit(code=build_modelbridge_server().serve_stdio())
 
 
 @mcp_app.command("read")
