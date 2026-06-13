@@ -63,20 +63,28 @@ class AgentContext:
     # tool skip the prompt. Keyed by tool name.
     _auto_approved: set[str] = field(default_factory=set)
 
-    def confirm(self, *, tool: str, summary: str, detail: str = "", group: str | None = None) -> bool:
+    def confirm(self, *, tool: str, summary: str, detail: str = "", group: str | None = None,
+                allow_always: bool = True) -> bool:
         """Run the approval callback; return True if the action may proceed.
 
         ``group`` lets several related tools share one "always" decision: pass
         the same group (e.g. ``"browser_write"``) on ``click`` / ``fill`` /
         ``navigate`` so approving one with ALWAYS auto-approves them all this
         session. Defaults to the tool's own name (per-tool, the old behaviour).
+
+        ``allow_always=False`` is for high-risk tools (e.g. ``run_bash``): an
+        ALWAYS decision is honoured for *this* call only and never remembered,
+        so the user sees every shell command. ``--yes`` (auto-approve) still
+        applies — that's an explicit non-interactive opt-in — but the safety
+        net there is the command policy gate, not the prompt.
         """
         key = group or tool
         if key in self._auto_approved:
             return True
         decision = self.approve(tool=tool, summary=summary, detail=detail)
         if decision == ApprovalDecision.ALWAYS:
-            self._auto_approved.add(key)
+            if allow_always:
+                self._auto_approved.add(key)
             return True
         return decision == ApprovalDecision.YES
 

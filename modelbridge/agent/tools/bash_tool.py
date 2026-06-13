@@ -1,17 +1,21 @@
 """run_bash tool — gated behind ``ctx.allow_bash``.
 
 We pass the command verbatim to the platform shell (``cmd`` on Windows,
-``sh`` elsewhere). This is intentionally not "sandboxed" beyond:
+``sh`` elsewhere). Safety layers, in order:
 
 * ``ctx.allow_bash`` must be true (set via ``mbridge --allow-bash``).
-* Every invocation calls ``ctx.confirm`` so the user sees the full
-  command before it runs.
+* **Command policy gate** — the model-supplied command goes through the
+  same :class:`CommandPolicy` (allowlist / denylist / no metacharacters) as
+  the human-facing ``mbridge run``. This runs *before* the confirm prompt so
+  a dangerous command is rejected even under ``--yes``. Without it the AI
+  path would be strictly more dangerous than the human one.
+* Every invocation calls ``ctx.confirm`` (with ``allow_always=False`` so a
+  one-off "always" can't silently arm future shell execution).
 * Output is truncated to 8 KB combined stdout+stderr.
 * Working directory comes from ``ctx.cwd``.
 * ``timeout`` defaults to 30 s, capped at 120 s.
 
-If you need real isolation, run mbridge inside a container yourself —
-that's outside v0.3's scope.
+If you need real isolation, run mbridge inside a container yourself.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from __future__ import annotations
 import subprocess
 from typing import Any
 
+from ...executor.command_validator import CommandPolicy, CommandRejected
 from ..context import AgentContext
 from .base import Tool, ToolResult
 
@@ -65,10 +70,25 @@ class RunBashTool(Tool):
             timeout = _DEFAULT_TIMEOUT
         timeout = min(max(1.0, timeout), _MAX_TIMEOUT)
 
+        # Command policy gate — same allowlist/denylist as `mbridge run`. Runs
+        # before confirm so a banned command (rm -rf, curl|sh, ssh, shell
+        # metacharacters) is rejected even when the user passed --yes.
+        try:
+            CommandPolicy.from_config().validate(command)
+        except CommandRejected as e:
+            return self.err(
+                f"命令被安全策略拒绝: {e.reason}",
+                hint="run_bash 复用与 `mbridge run` 相同的白/黑名单；"
+                     "如确需该命令，把首个程序加到 config.yaml 的 executor.allowed_commands。",
+            )
+
+        # allow_always=False: a one-off "always" must not arm future shell
+        # execution — the user should see every command.
         if not ctx.confirm(
             tool=self.name,
             summary=f"run_bash (timeout={timeout:.0f}s, cwd={ctx.cwd})",
             detail=command,
+            allow_always=False,
         ):
             return self.err("用户拒绝执行命令。")
 

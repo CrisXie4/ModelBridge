@@ -367,6 +367,62 @@ def test_load_settings_rejects_bad_override(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Security — stdio child env must not leak host credentials
+# ---------------------------------------------------------------------------
+
+def test_build_child_env_strips_secrets(monkeypatch):
+    from modelbridge.mcp.transport.stdio import build_child_env
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-leak")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-leak2")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_leak")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "leak3")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy:8080")  # benign — must survive
+    monkeypatch.setenv("MB_SAFE_VAR", "ok")
+
+    env, dropped = build_child_env({})
+    # No credential-looking host var reaches the (untrusted) MCP subprocess.
+    assert "DEEPSEEK_API_KEY" not in env
+    assert "OPENAI_API_KEY" not in env
+    assert "GITHUB_TOKEN" not in env
+    assert "AWS_SECRET_ACCESS_KEY" not in env
+    assert set(dropped) >= {"DEEPSEEK_API_KEY", "OPENAI_API_KEY",
+                            "GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY"}
+    # Benign vars (proxy, PATH) still pass through so servers actually work.
+    assert env.get("HTTP_PROXY") == "http://proxy:8080"
+    assert env.get("MB_SAFE_VAR") == "ok"
+    assert "PATH" in env or "Path" in env
+
+
+def test_build_child_env_keeps_benign_config_vars(monkeypatch):
+    """Regression: scrubbing must not over-reach onto non-secret config vars —
+    the *_API_KEY is dropped, but the matching *_BASE_URL / session bus survive
+    (a self-hosted OpenAI-compatible gateway is a real China-first setup)."""
+    from modelbridge.mcp.transport.stdio import build_child_env
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://my-gateway/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/bus")
+    monkeypatch.setenv("AWS_REGION", "cn-north-1")
+
+    env, dropped = build_child_env({})
+    assert env.get("OPENAI_BASE_URL") == "http://my-gateway/v1"   # config, survives
+    assert "OPENAI_API_KEY" not in env                            # secret, dropped
+    assert env.get("DBUS_SESSION_BUS_ADDRESS") == "unix:path=/run/bus"
+    assert "OPENAI_BASE_URL" not in dropped
+
+
+def test_build_child_env_explicit_override_wins(monkeypatch):
+    """A server that genuinely needs a secret declares it in its `env:` block;
+    that explicit value is re-applied on top of the scrubbed base."""
+    from modelbridge.mcp.transport.stdio import build_child_env
+
+    monkeypatch.setenv("GITHUB_TOKEN", "host-value")
+    env, _ = build_child_env({"GITHUB_TOKEN": "explicit-declared"})
+    assert env["GITHUB_TOKEN"] == "explicit-declared"
+
+
+# ---------------------------------------------------------------------------
 # M7 — sampling callback (client side)
 # ---------------------------------------------------------------------------
 
@@ -404,19 +460,16 @@ def test_sampling_rejected_when_no_handler():
         session.close()
 
 
-def test_from_settings_wires_sampling_handler():
+def test_from_settings_wires_sampling_service():
     """Regression: every manager built from settings (CLI subcommands included)
-    must wire the sampling handler — not just MCPManager.from_config()."""
+    must wire the sampling service — not just MCPManager.from_config()."""
     on = MCPManager.from_settings(MCPSettings(sampling_enabled=True))
-    assert on.sampling_handler is not None
+    assert on.sampling_service is not None
     off = MCPManager.from_settings(MCPSettings(sampling_enabled=False))
-    assert off.sampling_handler is None
+    assert off.sampling_service is None
 
 
-def test_sampling_handler_builds_messages(monkeypatch):
-    """build_sampling_handler maps MCP params → ChatRequest correctly."""
-    from modelbridge.mcp.sampling import build_sampling_handler
-
+def _patch_fake_provider(monkeypatch, *, content="ok!"):
     sent: dict = {}
 
     class _FakeProvider:
@@ -424,7 +477,7 @@ def test_sampling_handler_builds_messages(monkeypatch):
             sent["request"] = request
             from modelbridge.schemas import ChatResponse
 
-            return ChatResponse(content="ok!", model=request.model)
+            return ChatResponse(content=content, model=request.model)
 
     import modelbridge.mcp.sampling as sampling_mod
 
@@ -432,18 +485,53 @@ def test_sampling_handler_builds_messages(monkeypatch):
     monkeypatch.setattr(sampling_mod, "get_model_entry", lambda n: type(
         "E", (), {"model": "stub-model"})())
     monkeypatch.setattr(sampling_mod, "get_provider", lambda e: _FakeProvider())
+    return sent
 
-    handler = build_sampling_handler(MCPSettings(sampling_max_tokens=100))
-    result = handler({
+
+def test_sampling_service_maps_messages_and_demotes_system_prompt(monkeypatch):
+    """The server's systemPrompt must NOT become a system message (no authority);
+    our own guard system prompt leads, then the demoted prompt + real messages."""
+    from modelbridge.mcp.sampling import SamplingService
+
+    sent = _patch_fake_provider(monkeypatch)
+    svc = SamplingService(MCPSettings(sampling_max_tokens=100))
+    result = svc.handle("srv", {
         "systemPrompt": "be brief",
         "messages": [{"role": "user", "content": {"type": "text", "text": "hi"}}],
         "maxTokens": 999,
     })
     req = sent["request"]
-    assert [m.role for m in req.messages] == ["system", "user"]
-    assert req.max_tokens == 100  # capped by settings
+    # guard(system) + demoted server systemPrompt(user) + real user message
+    assert [m.role for m in req.messages] == ["system", "user", "user"]
+    assert "不可信" in req.messages[0].content  # our guard, not the server's
+    assert "be brief" in req.messages[1].content and "不可信" in req.messages[1].content
+    assert req.messages[2].content == "hi"
+    assert req.max_tokens == 100  # capped by settings, not the asked 999
     assert result["content"]["text"] == "ok!"
     assert result["stopReason"] == "endTurn"
+
+
+def test_sampling_service_enforces_per_server_call_ceiling(monkeypatch):
+    from modelbridge.mcp.sampling import SamplingService
+
+    _patch_fake_provider(monkeypatch)
+    svc = SamplingService(MCPSettings(sampling_max_calls=2))
+    params = {"messages": [{"role": "user", "content": {"type": "text", "text": "x"}}]}
+    assert svc.handle("a", params)["stopReason"] == "endTurn"
+    assert svc.handle("a", params)["stopReason"] == "endTurn"
+    with pytest.raises(ValueError, match="上限"):
+        svc.handle("a", params)  # third call to server 'a' is denied
+    # A different server has its own independent budget.
+    assert svc.handle("b", params)["stopReason"] == "endTurn"
+
+
+def test_sampling_service_rejects_empty_messages(monkeypatch):
+    from modelbridge.mcp.sampling import SamplingService
+
+    _patch_fake_provider(monkeypatch)
+    svc = SamplingService(MCPSettings())
+    with pytest.raises(ValueError, match="缺少 messages"):
+        svc.handle("srv", {"systemPrompt": "only a system prompt, no messages"})
 
 
 # ---------------------------------------------------------------------------

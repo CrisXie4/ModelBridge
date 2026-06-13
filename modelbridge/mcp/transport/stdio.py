@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -30,6 +31,46 @@ from .base import Transport
 
 _IS_WINDOWS = sys.platform.startswith("win")
 _EOF = object()  # sentinel pushed onto the queue when stdout closes
+
+# Environment variable *names* that look credential-bearing. An MCP server is
+# third-party, possibly untrusted code (the README examples npx-fetch servers),
+# so it must not inherit the host's API keys / tokens just by being spawned.
+# A server that genuinely needs a secret declares it explicitly in its `env:`
+# config block, which is re-applied on top of the scrubbed base.
+#
+# The keyword set alone covers every provider key this project uses
+# (DEEPSEEK_API_KEY / DASHSCOPE_API_KEY / MOONSHOT_API_KEY / ZHIPU_API_KEY /
+# MINIMAX_API_KEY / OPENAI_API_KEY …) and the standard cloud creds
+# (AWS_SECRET_ACCESS_KEY, AZURE_CLIENT_SECRET, GOOGLE_APPLICATION_CREDENTIALS).
+# We deliberately do NOT match bare "SESSION" (would drop DBUS_SESSION_BUS_ADDRESS
+# and other benign desktop vars) nor an OPENAI_/GOOGLE_ prefix (would drop
+# OPENAI_BASE_URL — a real self-hosted-gateway config — while the *_API_KEY is
+# already caught by KEY).
+_SECRET_ENV_RE = re.compile(
+    r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTHORIZATION)",
+    re.IGNORECASE,
+)
+# Cloud-credential prefixes whose secrets are already keyword-caught; kept as a
+# belt-and-suspenders net for oddly-named creds under these namespaces.
+_SECRET_ENV_PREFIXES = ("AWS_", "AZURE_")
+
+
+def build_child_env(overrides: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    """Host env minus credential-looking vars, then the server's explicit env.
+
+    Returns ``(env, dropped_names)``. ``dropped_names`` is for diagnostics only
+    (never log the values). Explicit ``overrides`` always win — they let a
+    server opt back into a specific secret it legitimately needs.
+    """
+    dropped: list[str] = []
+    env: dict[str, str] = {}
+    for name, value in os.environ.items():
+        if _SECRET_ENV_RE.search(name) or name.upper().startswith(_SECRET_ENV_PREFIXES):
+            dropped.append(name)
+            continue
+        env[name] = value
+    env.update(overrides)  # explicit declarations re-add anything needed
+    return env, sorted(dropped)
 
 
 class StdioTransport(Transport):
@@ -54,8 +95,7 @@ class StdioTransport(Transport):
 
     # ------------------------------------------------------------------
     def start(self, *, timeout: float) -> None:
-        env = os.environ.copy()
-        env.update(self._env_overrides)
+        env, dropped = build_child_env(self._env_overrides)
         popen_kwargs: dict[str, Any] = dict(
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -84,7 +124,11 @@ class StdioTransport(Transport):
         self._reader.start()
         self._stderr_reader = threading.Thread(target=self._pump_stderr, daemon=True)
         self._stderr_reader.start()
-        log_lifecycle(self.server_id, "spawned", f"cmd={self._command} env={scrub_env(self._env_overrides)}")
+        log_lifecycle(
+            self.server_id, "spawned",
+            f"cmd={self._command} env={scrub_env(self._env_overrides)} "
+            f"dropped_secrets={len(dropped)}",
+        )
 
     # ------------------------------------------------------------------
     def _pump_stdout(self) -> None:

@@ -147,7 +147,8 @@ class MCPSettings:
     # M7 — let servers borrow our models via sampling/createMessage.
     sampling_enabled: bool = False
     sampling_model: str | None = None      # None → config default_model
-    sampling_max_tokens: int = 2048
+    sampling_max_tokens: int = 2048        # per-call output ceiling
+    sampling_max_calls: int = 32           # per-server, per-session call ceiling
 
     def enabled_servers(self) -> list[MCPServerConfig]:
         return [s for s in self.servers if s.enabled]
@@ -193,6 +194,7 @@ def load_mcp_settings() -> MCPSettings:
         sampling_enabled=bool(sampling.get("enabled", False)),
         sampling_model=sampling.get("model"),
         sampling_max_tokens=int(sampling.get("max_tokens", 2048)),
+        sampling_max_calls=int(sampling.get("max_calls", 32)),
     )
 
 

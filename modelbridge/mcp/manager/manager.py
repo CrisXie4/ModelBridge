@@ -18,7 +18,7 @@ from ..config import MCPServerConfig, MCPSettings, ToolPolicyKind, load_mcp_sett
 from ..errors import MCPError, MCPTransportError
 from ..logging import log_lifecycle
 from ..protocol.types import CallToolResult, GetPromptResult, ReadResourceResult
-from ..session.client_session import MCPClientSession, SamplingHandler
+from ..session.client_session import MCPClientSession
 from ..session.lifecycle import ReconnectPolicy, SessionState
 from .catalog import Catalog
 
@@ -45,7 +45,9 @@ class MCPManager:
     # server_id -> tool policy, for the adapter layer to consult.
     policies: dict[str, ToolPolicyKind] = field(default_factory=dict)
     # M7 — answers servers' sampling/createMessage; built lazily from settings.
-    sampling_handler: SamplingHandler | None = None
+    # A SamplingService (typed Any to avoid importing the heavy sampling module
+    # at class-definition time); enforces per-server call ceilings.
+    sampling_service: Any = None
     # M6 — servers whose tools are switched off for this run (`/mcp off <id>`).
     runtime_disabled: set[str] = field(default_factory=set)
     # Called after the catalog changes (reconnect / hot refresh) so the host
@@ -73,10 +75,10 @@ class MCPManager:
         return mgr
 
     def _init_sampling(self) -> None:
-        if self.settings.sampling_enabled and self.sampling_handler is None:
-            from ..sampling import build_sampling_handler
+        if self.settings.sampling_enabled and self.sampling_service is None:
+            from ..sampling import SamplingService
 
-            self.sampling_handler = build_sampling_handler(self.settings)
+            self.sampling_service = SamplingService(self.settings)
 
     @property
     def reconnect_policy(self) -> ReconnectPolicy:
@@ -95,9 +97,12 @@ class MCPManager:
 
     def _connect_one(self, cfg: MCPServerConfig) -> None:
         self.policies[cfg.server_id] = cfg.tool_policy
-        session = MCPClientSession(
-            cfg, verbose=self.verbose, sampling_handler=self.sampling_handler
+        # Per-server sampling handler so the call ceiling is enforced per server.
+        handler = (
+            self.sampling_service.handler_for(cfg.server_id)
+            if self.sampling_service is not None else None
         )
+        session = MCPClientSession(cfg, verbose=self.verbose, sampling_handler=handler)
         self.sessions[cfg.server_id] = session
         try:
             session.connect()

