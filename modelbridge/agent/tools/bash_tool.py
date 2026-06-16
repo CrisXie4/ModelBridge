@@ -99,6 +99,8 @@ class RunBashTool(Tool):
                 cwd=str(ctx.cwd),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
                 # On Windows, subprocess uses cmd.exe with shell=True; on POSIX /bin/sh.
                 check=False,
