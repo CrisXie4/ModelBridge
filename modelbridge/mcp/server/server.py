@@ -118,11 +118,7 @@ class MCPServer:
     def serve_stdio(self) -> int:
         # MCP frames are UTF-8; on Windows the default pipe encoding is GBK,
         # which mangles CJK payloads in both directions.
-        try:
-            sys.stdin.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
-            sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
-        except AttributeError:  # non-standard streams (tests, embedding)
-            pass
+        _reconfigure_stdio()
         _log(f"{self.name} v{self.version} serving MCP on stdio "
              f"({len(self.tools)} tools)")
         for line in sys.stdin:
@@ -156,6 +152,20 @@ def _result(msg_id: Any, result: dict[str, Any]) -> dict[str, Any]:
 
 def _error(msg_id: Any, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
+
+
+def _reconfigure_stdio() -> None:
+    """Switch stdin/stdout to UTF-8 (Windows pipes default to GBK).
+
+    Best-effort: swallows AttributeError (non-standard streams in tests /
+    embedding) and ValueError (e.g. 'I/O operation on closed file' when a
+    stream is redirected or already closed).
+    """
+    for _stream in (sys.stdin, sys.stdout):
+        try:
+            _stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+        except (AttributeError, ValueError):
+            pass
 
 
 def _log(msg: str) -> None:
