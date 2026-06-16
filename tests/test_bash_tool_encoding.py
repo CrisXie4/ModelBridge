@@ -46,3 +46,17 @@ def test_bash_tool_runs_subprocess_as_utf8(tmp_path, monkeypatch):
     assert not res.is_error
     assert captured.get("encoding") == "utf-8"
     assert captured.get("errors") == "replace"
+
+
+def test_bash_tool_truncation_message_uses_chars_not_bytes(tmp_path, monkeypatch):
+    long_stdout = "好" * 9000  # > _MAX_OUTPUT (8000) characters
+
+    def fake_run(command, **kwargs):
+        return _FakeCompleted(stdout=long_stdout)
+
+    _patch(monkeypatch, fake_run)
+    res = RunBashTool().execute({"command": "echo hi"}, _ctx(tmp_path))
+
+    assert res.structured["truncated"] is True
+    assert "字符" in res.content
+    assert "字节" not in res.content

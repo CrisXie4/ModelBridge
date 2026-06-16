@@ -121,7 +121,7 @@ class RunBashTool(Tool):
         header = f"[exit={proc.returncode}]"
         body = combined.rstrip()
         if truncated:
-            body += f"\n\n[... 输出超过 {_MAX_OUTPUT} 字节已截断 ...]"
+            body += f"\n\n[... 输出超过 {_MAX_OUTPUT} 字符已截断 ...]"
 
         result = f"{header}\n{body}" if body else header
         return self.ok(
