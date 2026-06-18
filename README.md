@@ -172,21 +172,24 @@ REPL 会话里：
 
 一个 Chrome/Edge 的 MV3 侧边栏插件 + 本机 Native Messaging 宿主（LocalBridge）：在侧边栏里聊天，AI 复用 CLI 的同一套引擎，通过宿主读写你**当前标签页**。
 
-> ⚠️ **目前没有上架应用商店、也没有打包好的 `.crx` 可一键下载** —— 需要以「加载已解压的扩展」方式从源码安装。插件源码在独立的 [`extension` 分支](https://github.com/CrisXie4/ModelBridge/tree/extension)（orphan 分支，只含扩展本身）。
+> ⚠️ **暂未上架 Chrome 应用商店**（也无法用裸 `.crx` 旁加载 —— 新版 Chrome 会拦截非商店的 crx）。直接用下面的 **ZIP 一键下载**、以「加载已解压的扩展」方式安装即可。源码在独立的 [`extension` 分支](https://github.com/CrisXie4/ModelBridge/tree/extension)（orphan 分支，只含扩展本身）。
 
 **安装步骤：**
 
-```bash
-# 1. 拿到扩展源码（任选其一）
-git clone -b extension --single-branch https://github.com/CrisXie4/ModelBridge.git mbridge-extension
-#   或在网页上打开 extension 分支 → Code → Download ZIP，解压
+**1. 下载扩展** —— 永久链接，始终对应 `extension` 分支最新版（解压后得到一个 `ModelBridge-extension/` 文件夹）：
 
-# 2. 注册 Native Messaging 宿主（让浏览器能拉起 LocalBridge）
+```
+https://github.com/CrisXie4/ModelBridge/archive/refs/heads/extension.zip
+```
+
+**2. 注册 Native Messaging 宿主**（让浏览器能拉起 LocalBridge）：
+
+```bash
 mbridge bridge install
 mbridge bridge status          # 查看注册位置 / 扩展 ID
 ```
 
-3. 打开 `chrome://extensions` → 右上角开启 **开发者模式** → **加载已解压的扩展程序** → 选第 1 步的扩展目录。
+3. 打开 `chrome://extensions` → 右上角开启 **开发者模式** → **加载已解压的扩展程序** → 选第 1 步解压出的 `ModelBridge-extension` 文件夹。
 4. 因为浏览器从 GUI 启动宿主、读不到 shell 的环境变量，**API key 必须放在 keyring / `config.yaml`** 里（不能只靠 `export`）。
 5. 回到 `chrome://extensions` **重新加载** 扩展，即可在侧边栏使用。
 
