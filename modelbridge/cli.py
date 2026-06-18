@@ -181,7 +181,7 @@ app = typer.Typer(
     help=(
         "ModelBridge — 国产模型优先的 AI Agent 兼容 CLI。\n\n"
         "直接运行 `mbridge` 进入持续会话 (AI 可读 / 写 / 编辑文件)。\n"
-        "管理类操作走子命令：init / model / doctor / route / cost / budget / cache / profile。\n\n"
+        "管理类操作走子命令；运行 `mbridge --help` 查看全部，`mbridge <命令> --help` 看子命令。\n\n"
         "起步：`mbridge init` → `mbridge model init` → `mbridge` (进入 REPL)。"
     ),
     invoke_without_command=True,
@@ -3075,7 +3075,7 @@ def _print_parsed_errors(errors: list[ParsedError], *, limit: int = 10) -> None:
         console.print(f"[dim]... 还有 {len(errors) - limit} 条未展示[/dim]")
 
 
-@patch_app.command("preview")
+@patch_app.command("preview", hidden=True)
 def cmd_patch_preview(
     patch_file: Path = typer.Argument(..., help="要预览的 .patch / .diff 文件。"),
     project: Path = typer.Option(
@@ -3119,7 +3119,7 @@ def cmd_patch_preview(
     _render_diff_panel(render_unified_diff(parsed), title=str(patch_file.name))
 
 
-@patch_app.command("apply")
+@patch_app.command("apply", hidden=True)
 def cmd_patch_apply(
     patch_file: Path = typer.Argument(..., help="要应用的 .patch / .diff 文件。"),
     project: Path = typer.Option(
@@ -3197,7 +3197,7 @@ def cmd_patch_apply(
     )
 
 
-@patch_app.command("rollback")
+@patch_app.command("rollback", hidden=True)
 def cmd_patch_rollback(
     project: Path = typer.Option(
         Path("."), "--project", "-p", help="项目目录 (默认当前目录)。",
@@ -3522,7 +3522,7 @@ def _build_for_hash(
     return builder.build(), summary, cache_reason
 
 
-@prompt_app.command("hash")
+@prompt_app.command("hash", hidden=True)
 def cmd_prompt_hash(
     project: Optional[Path] = typer.Option(
         Path("."), "--project", "-p", help="项目路径 (默认当前目录)。"
@@ -3584,7 +3584,7 @@ def cmd_prompt_hash(
     )
 
 
-@prompt_app.command("diff")
+@prompt_app.command("diff", hidden=True)
 def cmd_prompt_diff(
     project: Optional[Path] = typer.Option(
         Path("."), "--project", "-p", help="项目路径 (默认当前目录)。"

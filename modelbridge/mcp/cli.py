@@ -145,7 +145,7 @@ def list_prompts() -> None:
         manager.shutdown()
 
 
-@mcp_app.command("call")
+@mcp_app.command("call", hidden=True)
 def call_tool(
     name: str = typer.Argument(..., help="限定名 <server>__<tool>"),
     args_json: str = typer.Option("{}", "--args", "-a", help="JSON 形式的参数对象"),
@@ -174,7 +174,7 @@ def call_tool(
         manager.shutdown()
 
 
-@mcp_app.command("ping")
+@mcp_app.command("ping", hidden=True)
 def ping_servers(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
     """对每个已连接的 server 发一次 ping，显示延迟。"""
     import time
@@ -202,7 +202,7 @@ def ping_servers(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None
         manager.shutdown()
 
 
-@mcp_app.command("serve")
+@mcp_app.command("serve", hidden=True)
 def serve() -> None:
     """把 ModelBridge 作为 MCP server 跑在 stdio 上（chat / list_models / route）。
 
@@ -214,7 +214,7 @@ def serve() -> None:
     raise typer.Exit(code=build_modelbridge_server().serve_stdio())
 
 
-@mcp_app.command("read")
+@mcp_app.command("read", hidden=True)
 def read_resource(
     uri: str = typer.Argument(..., help="resource uri"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),

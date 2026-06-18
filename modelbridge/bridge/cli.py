@@ -145,7 +145,7 @@ def installer_control():
     return control
 
 
-@bridge_app.command("run")
+@bridge_app.command("run", hidden=True)
 def cmd_run() -> None:
     """在 stdio 上运行宿主 (浏览器会自动调用；手动用于冒烟测试)。"""
     # Import lazily so the heavy engine isn't loaded for install/status.
