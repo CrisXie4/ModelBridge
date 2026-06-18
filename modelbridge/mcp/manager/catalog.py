@@ -64,6 +64,9 @@ class Catalog:
             self._tool_index[qn] = (server_id, t.name)
             self.tools.append(QualifiedTool(server_id=server_id, qualified_name=qn, tool=t))
         for r in resources:
+            if any(existing.resource.uri == r.uri for existing in self.resources):
+                mcp_logger().warning("mcp.catalog resource uri collision: %s", r.uri)
+                continue
             self.resources.append(QualifiedResource(server_id=server_id, resource=r))
         for p in prompts:
             qn = qualify(server_id, p.name)
