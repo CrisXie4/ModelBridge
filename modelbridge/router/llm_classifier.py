@@ -21,7 +21,6 @@ Design contract (chosen deliberately, see project decision):
 from __future__ import annotations
 
 import json
-import re
 from typing import get_args
 
 from ..client import ChatError, chat_once
@@ -87,11 +86,13 @@ def _extract_json(text: str) -> dict:
     except json.JSONDecodeError:
         pass
 
-    # Fallback: grab the outermost { ... } span and try that.
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if match:
+    # Fallback: decode the first complete JSON object starting at the first
+    # '{'. raw_decode stops at the end of that object, so trailing prose or a
+    # second object is ignored, and nested objects are handled correctly.
+    start = raw.find("{")
+    if start != -1:
         try:
-            obj = json.loads(match.group(0))
+            obj, _ = json.JSONDecoder().raw_decode(raw[start:])
             if isinstance(obj, dict):
                 return obj
         except json.JSONDecodeError:
