@@ -99,7 +99,7 @@ class Host:
     def _start_control_server(self) -> None:
         """Bind the local control socket so the CLI can drive the browser.
 
-        Opt-in: only starts when the user has run ``mbridge bridge control on``.
+        Opt-in: only starts when the user has run ``mbridge bridge on``.
         Off by default — no port is opened and no endpoint is published.
         """
         try:
@@ -107,7 +107,7 @@ class Host:
 
             if not load_control_config().get("enabled"):
                 self._log.info(
-                    "bridge.control disabled (run `mbridge bridge control on` to enable)"
+                    "bridge.control disabled (run `mbridge bridge on` to enable)"
                 )
                 self._control = None
                 return

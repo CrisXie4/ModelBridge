@@ -9,7 +9,7 @@ Subcommands:
 * ``mbridge model list``                — rich table of registered models
 * ``mbridge model test NAME``           — connectivity test (+ --verbose)
 * ``mbridge model remove NAME``         — delete an entry
-* ``mbridge chat "..."``                — **test only** — one-shot probe
+* ``mbridge ask "..."``                 — one-shot probe / pipeline use
                                           (+ --route / --auto / --mode / --fallback)
 * ``mbridge doctor``                    — environment check
 * ``mbridge doctor model NAME``         — single-model probe (+ --tools, --verbose)
@@ -437,7 +437,7 @@ def _run_repl(
     else:
         console.print(
             f"[dim]网页控制: 未连接 ({reason})。"
-            f"开启: `mbridge bridge control on` + 打开侧边栏。[/dim]"
+            f"开启: `mbridge bridge on` + 打开侧边栏。[/dim]"
         )
 
     # 2b. MCP — connect configured servers and fold their tools into the same
@@ -466,7 +466,7 @@ def _run_repl(
     # 3. Session + system prompt
     #
     # We build the system message via PromptBuilder so the REPL's prefix
-    # matches what ``mbridge chat`` / ``mbridge prompt hash`` produce —
+    # matches what ``mbridge ask`` / ``mbridge prompt hash`` produce —
     # rules.md, AGENT.md, and the project summary all land in the same
     # stable 8-section order. ``cwd`` is intentionally NOT included in
     # the message (it varies across machines and would kill prefix-cache
@@ -844,7 +844,7 @@ def _default_system_prompt(*, allow_bash: bool) -> str:
         "- query_dom(selector) / extract(selector, attr): 用 CSS 选择器定位元素、取文本或属性。\n"
         "- click(selector) / fill(selector, value) / navigate(url): 操作页面 (会请求用户确认)。\n"
         "需要网页信息或要操作网页时主动调用这些工具，不要凭空猜测页面内容。\n"
-        "若工具返回「未启用 / 未连接」，告诉用户运行 `mbridge bridge control on` 并打开浏览器侧边栏。\n"
+        "若工具返回「未启用 / 未连接」，告诉用户运行 `mbridge bridge on` 并打开浏览器侧边栏。\n"
     )
     return (
         "你是 ModelBridge 嵌入的编程助手 (类似 Claude Code)。"
@@ -986,7 +986,7 @@ def cmd_init(
 
 
 # ---------------------------------------------------------------------------
-# chat
+# ask  (was: chat — R3a rename)
 # ---------------------------------------------------------------------------
 
 
@@ -1018,15 +1018,14 @@ def _print_chat_dry_run(result, model_opt: Optional[str]) -> None:
 
 
 @app.command(
-    "chat",
+    "ask",
     help=(
-        "[测试用] 对模型发起一次单轮请求 — 仅用于验证连通性与基础回复。\n"
-        "加 --route / --auto 让 ModelBridge 自动按 prompt 路由模型；\n"
-        "加 --fallback 调用失败时自动升级到更强的模型重试。"
+        "对模型发起一次单轮请求（非交互，可用于脚本 / 管道）。\n"
+        "加 --route / --auto 自动路由；--fallback 失败升级重试。"
     ),
 )
-def cmd_chat(
-    prompt: str = typer.Argument(..., help="要发送给模型的内容 (仅测试用)。"),
+def cmd_ask(
+    prompt: str = typer.Argument(..., help="要发送给模型的内容。"),
     model: Optional[str] = typer.Option(
         None, "--model", "-m", help="模型名 (默认使用 config.yaml 中的 default_model)。",
     ),
@@ -1096,7 +1095,7 @@ def cmd_chat(
         raise typer.Exit(code=2)
 
     # ----- default path: always build via PromptBuilder ------------------
-    # ``mbridge chat`` always assembles its prompt through the canonical
+    # ``mbridge ask`` always assembles its prompt through the canonical
     # PromptBuilder so the stable prefix order is the same here as in the
     # REPL and ``mbridge prompt hash``. Without --project we just skip
     # the project scan + file selection (no project_rules / summary /
@@ -1231,9 +1230,13 @@ def cmd_chat(
 
     # The two branches above both ``return``. The original ``chat_once``
     # fallback (which built minimal [system?, user] messages and bypassed
-    # the stable prefix) is gone — every ``mbridge chat`` invocation now
+    # the stable prefix) is gone — every ``mbridge ask`` invocation now
     # flows through PromptBuilder so DeepSeek/Qwen prefix caching has a
     # chance to fire.
+
+
+# R3a: `chat` → deprecated alias for `ask`
+deprecated_alias(app, "chat", "ask", cmd_ask)
 
 
 def _extract_io_tokens(entry: ModelEntry, resp, prompt: str) -> tuple[int, int]:
@@ -1336,7 +1339,7 @@ def _chat_with_routing(
     mode: Optional[str],
     fallback: bool,
 ) -> None:
-    """Implements `mbridge chat --route [--fallback]`."""
+    """Implements `mbridge ask --route [--fallback]`."""
     logger = get_logger()
     try:
         result = route_prompt(prompt, mode=mode, use_llm=True)

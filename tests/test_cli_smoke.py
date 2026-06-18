@@ -37,7 +37,7 @@ def test_root_help():
     assert "init" in r.output and "route" in r.output
 
 
-@pytest.mark.parametrize("sub", ["chat", "route", "model", "doctor", "config", "run"])
+@pytest.mark.parametrize("sub", ["ask", "chat", "route", "model", "doctor", "config", "run"])
 def test_subcommand_help(sub):
     r = runner.invoke(app, [sub, "--help"])
     assert r.exit_code == 0
@@ -74,7 +74,8 @@ def test_doctor_global_runs(home):
 
 def test_chat_dry_run_no_network(home):
     # --dry-run builds the prompt + prints estimates, never calls a provider.
-    r = runner.invoke(app, ["chat", "你好", "--dry-run"])
+    # Use the canonical `ask` command; `chat` is a deprecated alias.
+    r = runner.invoke(app, ["ask", "你好", "--dry-run"])
     assert r.exit_code == 0
     assert "dry-run" in r.output
 

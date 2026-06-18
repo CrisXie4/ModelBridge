@@ -185,7 +185,7 @@ def next_steps_for_global(results: list[CheckResult]) -> list[str]:
     if dm and not dm.ok:
         msgs.append("编辑 ~/.modelbridge/config.yaml 把 default_model 改成已存在的模型名。")
     if not msgs:
-        msgs.append("一切就绪。运行 `mbridge doctor all` 检查每个模型，或 `mbridge chat \"你好\"`。")
+        msgs.append("一切就绪。运行 `mbridge doctor all` 检查每个模型，或 `mbridge ask \"你好\"`。")
     return msgs
 
 

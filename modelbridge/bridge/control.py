@@ -254,7 +254,7 @@ class RemoteBrowserBridge:
         """Cheap precheck for a friendly startup message. (enabled, reason)."""
         cfg = load_control_config()
         if not cfg.get("enabled") or not cfg.get("token"):
-            return False, "命令行联动未启用 (mbridge bridge control on)"
+            return False, "命令行联动未启用 (mbridge bridge on)"
         if not endpoint_path().exists():
             return False, "宿主未运行 (请打开浏览器侧边栏)"
         return True, "已连接"
@@ -265,7 +265,7 @@ class RemoteBrowserBridge:
         cfg = load_control_config()
         if not cfg.get("enabled") or not cfg.get("token"):
             raise ControlConnectionError(
-                "命令行联动未启用。先运行 mbridge bridge control on 并打开侧边栏。"
+                "命令行联动未启用。先运行 mbridge bridge on 并打开侧边栏。"
             )
         ep = _read_endpoint()
         try:

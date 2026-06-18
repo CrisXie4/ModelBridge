@@ -6,6 +6,8 @@
 * ``mbridge bridge run`` — run the host on stdio (this is what the browser
   launches; exposed for manual smoke-testing via piped frames).
 * ``mbridge bridge status`` — show where things are installed.
+* ``mbridge bridge on`` — enable CLI control (was: bridge control on).
+* ``mbridge bridge off`` — disable CLI control (was: bridge control off).
 
 Kept in the bridge package (own ``Console``) so top-level ``cli.py`` only does
 ``add_typer``.
@@ -17,13 +19,14 @@ import typer
 from rich.console import Console
 
 from . import HOST_NAME, install as installer
+from modelbridge.cli_compat import deprecated_alias
 
 console = Console()
 err_console = Console(stderr=True)
 
 bridge_app = typer.Typer(
     name="bridge",
-    help="浏览器侧边栏的 Native Messaging 宿主 (install / uninstall / run / status)。",
+    help="浏览器侧边栏的 Native Messaging 宿主 (install / uninstall / run / on / off / status)。",
     invoke_without_command=True,
 )
 
@@ -81,21 +84,12 @@ def cmd_uninstall(
         console.print(f"  {line}")
 
 
-control_app = typer.Typer(
-    name="control",
-    help="命令行联动开关 (默认关闭)：开启后 `mbridge browser` 才能驱动浏览器。",
-    invoke_without_command=True,
-)
-bridge_app.add_typer(control_app, name="control")
+# ---------------------------------------------------------------------------
+# Control on / off / status — canonical commands directly on bridge_app (R3a)
+# ---------------------------------------------------------------------------
 
 
-@control_app.callback(invoke_without_command=True)
-def _control_default(ctx: typer.Context) -> None:
-    if ctx.invoked_subcommand is None:
-        _control_status_impl()
-
-
-@control_app.command("on")
+@bridge_app.command("on")
 def cmd_control_on(
     token: str = typer.Option(
         None, "--token", "-t", help="自定义 token；省略则自动生成一串随机值。"
@@ -108,21 +102,47 @@ def cmd_control_on(
     console.print(
         "\n[yellow]下一步[/yellow]：到 chrome://extensions [bold]重新打开/刷新[/bold] 侧边栏"
         "让宿主带着这个开关重启，然后即可：\n    mbridge browser \"在 GitHub 搜索 modelbridge\"\n"
-        "\n关闭：mbridge bridge control off"
+        "\n关闭：mbridge bridge off"
     )
 
 
-@control_app.command("off")
+@bridge_app.command("off")
 def cmd_control_off() -> None:
     """关闭命令行联动 (宿主下次启动不再监听本地端口)。"""
     installer_control().set_control(enabled=False)
     console.print("[green]✓ 命令行联动已关闭[/green] (重开侧边栏后宿主不再监听)。")
 
 
-@control_app.command("status")
-def cmd_control_status() -> None:
+# ---------------------------------------------------------------------------
+# control sub-app — HIDDEN, kept for backward compat (R3a)
+# All three subcommands are now deprecated aliases.
+# ---------------------------------------------------------------------------
+
+control_app = typer.Typer(
+    name="control",
+    help="命令行联动开关 (默认关闭)：开启后 `mbridge browser` 才能驱动浏览器。",
+    invoke_without_command=True,
+)
+bridge_app.add_typer(control_app, name="control", hidden=True)
+
+
+@control_app.callback(invoke_without_command=True)
+def _control_default(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        _control_status_impl()
+
+
+# R3a: register deprecated aliases on control_app for on/off/status
+deprecated_alias(control_app, "on", "bridge on", cmd_control_on)
+deprecated_alias(control_app, "off", "bridge off", cmd_control_off)
+
+
+def _cmd_control_status_canonical() -> None:
     """查看命令行联动开关状态。"""
     _control_status_impl()
+
+
+deprecated_alias(control_app, "status", "bridge status", _cmd_control_status_canonical)
 
 
 def _control_status_impl() -> None:
@@ -135,7 +155,7 @@ def _control_status_impl() -> None:
     running = ctrl.endpoint_path().exists()
     console.print(f"  宿主监听 : {'是' if running else '否'} ({ctrl.endpoint_path()})")
     if not cfg.get("enabled"):
-        console.print("  开启: [bold]mbridge bridge control on[/bold]，然后重开侧边栏。")
+        console.print("  开启: [bold]mbridge bridge on[/bold]，然后重开侧边栏。")
 
 
 def installer_control():
