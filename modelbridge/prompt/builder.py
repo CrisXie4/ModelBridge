@@ -315,7 +315,7 @@ class PromptBuilder:
         rules_blob = sections.get("global_rules", "") + sections.get("project_rules", "")
         summary_blob = sections.get("project_summary", "")
         prefix_blob = "\n\n".join(
-            sections.get(name, "") for name in PREFIX_SECTIONS
+            s for name in PREFIX_SECTIONS if (s := sections.get(name, ""))
         )
         # Dynamic tail — everything that's allowed to change per request.
         suffix_blob = (
