@@ -147,6 +147,18 @@ def _bump_complexity(c: Complexity, steps: int) -> Complexity:
     return order[idx]
 
 
+def _keyword_hit(word: str, text: str, lowered: str) -> bool:
+    """True if ``word`` occurs in the prompt.
+
+    ASCII keywords require word boundaries so 'class' doesn't fire inside
+    'classifier' or 'patch' inside 'dispatch'. CJK keywords have no usable
+    word boundary, so they keep plain substring matching.
+    """
+    if not word.isascii():
+        return word in text or word.lower() in lowered
+    return re.search(rf"\b{re.escape(word.lower())}\b", lowered) is not None
+
+
 # ---------------------------------------------------------------------------
 # Public: classify_task
 # ---------------------------------------------------------------------------
@@ -185,7 +197,7 @@ def classify_task(
     chosen: tuple[TaskType, Complexity, ModelLevel, RiskLevel] | None = None
     lowered = text.lower()
     for task_type, complexity, level, risk, words in _TASK_RULES:
-        hits = [w for w in words if w in text or w.lower() in lowered]
+        hits = [w for w in words if _keyword_hit(w, text, lowered)]
         if hits:
             matched.extend(hits[:3])
             reasons.append(
