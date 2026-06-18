@@ -34,6 +34,7 @@ wraps it and converts exceptions into a JSON-RPC error reply.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from ..client import get_model_entry, resolve_model_name
@@ -78,6 +79,7 @@ class SamplingService:
     def __init__(self, settings: MCPSettings) -> None:
         self.settings = settings
         self._counts: dict[str, int] = {}
+        self._lock = threading.Lock()
 
     def handler_for(self, server_id: str) -> SamplingHandler:
         def handler(params: dict[str, Any]) -> dict[str, Any]:
@@ -87,16 +89,17 @@ class SamplingService:
 
     # ------------------------------------------------------------------
     def handle(self, server_id: str, params: dict[str, Any]) -> dict[str, Any]:
-        used = self._counts.get(server_id, 0)
-        if used >= self.settings.sampling_max_calls:
-            # The ceiling is per manager session and intentionally survives
-            # reconnects — a server can't reset it by dropping the connection.
-            raise ValueError(
-                f"server '{server_id}' 的 sampling 调用已达本会话上限 "
-                f"{self.settings.sampling_max_calls}（调高 mcp.sampling.max_calls，"
-                f"或重启 mbridge 会话后重置）"
-            )
-        self._counts[server_id] = used + 1
+        with self._lock:
+            used = self._counts.get(server_id, 0)
+            if used >= self.settings.sampling_max_calls:
+                # The ceiling is per manager session and intentionally survives
+                # reconnects — a server can't reset it by dropping the connection.
+                raise ValueError(
+                    f"server '{server_id}' 的 sampling 调用已达本会话上限 "
+                    f"{self.settings.sampling_max_calls}（调高 mcp.sampling.max_calls，"
+                    f"或重启 mbridge 会话后重置）"
+                )
+            self._counts[server_id] = used + 1
 
         messages: list[ChatMessage] = [ChatMessage(role="system", content=_GUARD_SYSTEM)]
 
