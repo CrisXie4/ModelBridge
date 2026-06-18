@@ -209,13 +209,13 @@ def classify_task(
         if complexity == "simple":
             complexity = "medium"
 
-    file_hits = _FILE_GLOB.findall(text)
+    file_hits = {m.group(0) for m in _FILE_GLOB.finditer(text)}
     if len(file_hits) >= 2:
-        reasons.append(f"提到 ≥2 个源文件后缀 ({len(file_hits)})")
+        reasons.append(f"提到 ≥2 个源文件 ({len(file_hits)})")
         level = max(level, ModelLevel.AGENT, key=_LEVEL_ORDER.index)
         complexity = "hard"
     elif len(file_hits) == 1:
-        reasons.append("提到 1 个源文件后缀")
+        reasons.append("提到 1 个源文件")
         level = max(level, ModelLevel.CODER, key=_LEVEL_ORDER.index)
 
     # ---- length signal ---------------------------------------------------
