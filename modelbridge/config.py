@@ -332,6 +332,21 @@ def activate_profile(name: str) -> ProfileEntry:
     profile = cfg.profiles.get(name)
     if profile is None:
         raise ConfigError(f"profile '{name}' 不存在。可用：{', '.join(cfg.profiles) or '(无)'}")
+    # Validate that every model the profile references still exists — otherwise
+    # activating it points default_model / routing.levels at deleted models and
+    # routing later fails opaquely.
+    referenced = [profile.default_model] if profile.default_model else []
+    lv = profile.levels
+    referenced += [
+        getattr(lv, f) for f in ("tiny", "cheap", "coder", "agent", "expert")
+        if getattr(lv, f, None)
+    ]
+    missing = [m for m in referenced if find_model(m) is None]
+    if missing:
+        raise ConfigError(
+            f"profile '{name}' 引用了 models.yaml 中不存在的模型："
+            f"{', '.join(sorted(set(missing)))}。请先 `mbridge model add` 或编辑该 profile。"
+        )
     cfg.active_profile = name
     cfg.default_model = profile.default_model
     cfg.routing.levels = profile.levels.model_copy(deep=True)
