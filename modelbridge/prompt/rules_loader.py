@@ -198,7 +198,7 @@ def merge_rules(
     blocks: list[str] = []
     seen_files: list[RuleFile] = []
     warnings: list[str] = []
-    chars_used = 0
+    bytes_used = 0
 
     for f in files:
         try:
@@ -214,33 +214,35 @@ def merge_rules(
         block = f"{heading}\n\n{text}\n"
 
         # If adding this block overflows, take a slice that fits and stop.
-        remaining = max_chars - chars_used
+        remaining = max_chars - bytes_used
         if remaining <= 0:
             warnings.append(f"已达到 max_rules_chars={max_chars}，跳过 {f.label}")
             break
-        if len(block) > remaining:
+        block_bytes = len(block.encode("utf-8"))
+        if block_bytes > remaining:
             # Keep the header so provenance survives even when truncated.
-            slice_ = block[:remaining].rstrip()
+            # Byte-truncate then drop any partial trailing codepoint.
+            slice_ = block.encode("utf-8")[:remaining].decode("utf-8", errors="ignore").rstrip()
             slice_ += "\n\n[... truncated at max_rules_chars ...]\n"
             blocks.append(slice_)
-            chars_used += len(slice_)
+            bytes_used += len(slice_.encode("utf-8"))
             seen_files.append(f)
             return MergedRules(
                 text="\n".join(blocks).rstrip() + "\n",
                 files=seen_files,
-                total_chars=chars_used,
+                total_chars=bytes_used,
                 truncated=True,
                 warnings=warnings,
             )
 
         blocks.append(block)
-        chars_used += len(block)
+        bytes_used += block_bytes
         seen_files.append(f)
 
     return MergedRules(
         text="\n".join(blocks).rstrip() + ("\n" if blocks else ""),
         files=seen_files,
-        total_chars=chars_used,
+        total_chars=bytes_used,
         truncated=False,
         warnings=warnings,
     )
