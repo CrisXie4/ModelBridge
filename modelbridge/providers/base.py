@@ -464,13 +464,16 @@ class _StreamAccumulator:
             for tc in tcs:
                 if not isinstance(tc, dict):
                     continue
-                idx = int(tc.get("index", 0))
+                try:
+                    idx = int(tc.get("index", 0))
+                except (TypeError, ValueError):
+                    idx = 0
                 slot = self.tool_calls.setdefault(
                     idx,
                     {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
                 )
                 if tid := tc.get("id"):
-                    slot["id"] = tid
+                    slot["id"] = (slot["id"] or "") + tid
                 if ttype := tc.get("type"):
                     slot["type"] = ttype
                 fn = tc.get("function") or {}
@@ -504,7 +507,7 @@ class _StreamAccumulator:
             content=content,
             reasoning_content=reasoning,
             tool_calls=tool_calls,
-            raw={"chunks": len(self.raw_chunks)},
+            raw={"chunks": len(self.raw_chunks), "raw_chunks": self.raw_chunks},
             raw_message=raw_message,
             usage=self.usage,
             model=self.model_id or self.model_default,
