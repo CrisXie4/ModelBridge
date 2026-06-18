@@ -10,7 +10,6 @@ when N > 0 messages are filtered.
 Expected warning format: f"history 中过滤掉 {n} 条 system 消息"
 """
 
-import pytest
 
 from modelbridge.schemas import ChatMessage
 from modelbridge.prompt.builder import PromptBuilder

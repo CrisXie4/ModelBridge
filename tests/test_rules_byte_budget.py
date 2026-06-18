@@ -4,7 +4,6 @@ CJK characters are 3 bytes each in UTF-8.  Before the fix, the char-based
 truncation would allow ~3x the configured byte budget to pass through.
 """
 
-import pytest
 from pathlib import Path
 
 from modelbridge.prompt.rules_loader import RuleFile, merge_rules
