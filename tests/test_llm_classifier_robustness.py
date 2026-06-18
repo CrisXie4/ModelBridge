@@ -23,3 +23,28 @@ def test_extract_json_handles_nested_object():
 def test_extract_json_raises_on_garbage():
     with pytest.raises(LLMClassifyError):
         _extract_json("no json at all")
+
+
+def test_llm_classifier_honors_large_context_tokens(monkeypatch):
+    from types import SimpleNamespace
+
+    from modelbridge.models import ModelLevel
+    from modelbridge.router import llm_classifier as llm_mod
+    from modelbridge.router.llm_classifier import classify_task_llm
+
+    monkeypatch.setattr(
+        llm_mod, "resolve_with_fallback",
+        lambda level: SimpleNamespace(chosen_model="tiny-x"),
+    )
+
+    def fake_chat_once(prompt, **kwargs):
+        resp = SimpleNamespace(
+            content='{"task_type":"chat","complexity":"simple",'
+                    '"risk_level":"low","recommended_level":"cheap","reason":"t"}'
+        )
+        return (SimpleNamespace(), resp)
+
+    monkeypatch.setattr(llm_mod, "chat_once", fake_chat_once)
+
+    p = classify_task_llm("hi there", context_tokens=40000)
+    assert p.recommended_level == ModelLevel.AGENT

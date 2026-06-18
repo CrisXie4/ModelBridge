@@ -108,7 +108,7 @@ def classify_task_llm(
     wants_edit: bool = False,
     wants_tools: bool = False,
     wants_mcp: bool = False,
-    context_tokens: int = 0,  # noqa: ARG001 - accepted for signature parity
+    context_tokens: int = 0,
     previous_failures: int = 0,
     timeout: float = 30.0,
 ) -> TaskProfile:
@@ -187,6 +187,10 @@ def classify_task_llm(
         level = max(level, ModelLevel.AGENT, key=_LEVEL_ORDER.index)
         if task_type in ("chat", "explain"):
             task_type = "agent_task"
+    if context_tokens > 32000:
+        reasons.append(f"上下文 tokens 较大 ({context_tokens})")
+        level = max(level, ModelLevel.AGENT, key=_LEVEL_ORDER.index)
+        complexity = "hard"
     if previous_failures >= 2:
         reasons.append(f"previous_failures={previous_failures} → expert")
         level = ModelLevel.EXPERT
