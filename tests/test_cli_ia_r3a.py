@@ -13,11 +13,14 @@ CliRunner in this Typer version has NO ``mix_stderr`` kwarg — use CliRunner() 
 
 from __future__ import annotations
 
+import re
 import pytest
 from typer.testing import CliRunner
 
 from modelbridge.cli import app
 from modelbridge.bridge.cli import bridge_app
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 runner = CliRunner()
 
@@ -37,6 +40,7 @@ def home(tmp_path, monkeypatch):
 
 def _listed_commands(output: str) -> set[str]:
     """Extract command names that Typer lists in the Commands table."""
+    output = _ANSI_RE.sub("", output)
     commands: list[str] = []
     in_commands = False
     for line in output.splitlines():

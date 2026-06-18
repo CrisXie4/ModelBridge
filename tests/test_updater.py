@@ -20,6 +20,8 @@ runner = CliRunner()
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
@@ -196,7 +198,7 @@ def test_check_for_update_network_failure_is_silent(home, monkeypatch):
 def test_cli_version_flag():
     r = runner.invoke(app, ["--version"])
     assert r.exit_code == 0
-    assert __version__ in r.output
+    assert __version__ in _ANSI_RE.sub("", r.output)
 
 
 def test_cli_version_command():

@@ -11,8 +11,11 @@ CliRunner in this Typer version has NO ``mix_stderr`` kwarg — just use
 
 from __future__ import annotations
 
+import re
 import typer
 from typer.testing import CliRunner
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 runner = CliRunner()
 
@@ -81,6 +84,7 @@ def _listed_commands(output: str) -> set[str]:
     lowercase word (the command name) followed by spaces/description.
     This avoids false positives from the Typer app description text.
     """
+    output = _ANSI_RE.sub("", output)
     commands: set[str] = []
     in_commands = False
     for line in output.splitlines():
