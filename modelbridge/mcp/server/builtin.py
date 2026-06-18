@@ -53,7 +53,7 @@ def _tool_route(args: dict[str, Any]) -> str:
     prompt = str(args.get("prompt") or "").strip()
     if not prompt:
         raise ValueError("prompt 不能为空")
-    r = route(prompt)
+    r = route(prompt, use_llm=True)
     return json.dumps(
         {
             "task_type": r.profile.task_type,
