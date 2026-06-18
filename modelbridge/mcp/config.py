@@ -154,6 +154,24 @@ class MCPSettings:
         return [s for s in self.servers if s.enabled]
 
 
+def _coerce_number(raw: dict, key: str, default, cast, label: str | None = None):
+    """Cast a config value to int/float, raising MCPConfigError on bad type.
+
+    ``label`` overrides the field name used in the error message (useful for
+    nested keys like ``mcp.sampling.max_tokens``).
+    """
+    if key not in raw:
+        return default
+    try:
+        return cast(raw[key])
+    except (TypeError, ValueError):
+        field_name = label if label is not None else f"mcp.{key}"
+        raise MCPConfigError(
+            f"{field_name} 必须是数字，得到 {raw[key]!r}",
+            hint="检查 config.yaml 的 mcp 配置块",
+        ) from None
+
+
 def load_mcp_settings() -> MCPSettings:
     """Read the ``mcp:`` block from ``~/.modelbridge/config.yaml``.
 
@@ -188,13 +206,17 @@ def load_mcp_settings() -> MCPSettings:
     return MCPSettings(
         enabled=enabled,
         servers=servers,
-        reconnect_attempts=int(block.get("reconnect_attempts", 2)),
-        reconnect_backoff=float(block.get("reconnect_backoff", 0.5)),
-        heartbeat_interval=float(block.get("heartbeat_interval", 0.0)),
+        reconnect_attempts=_coerce_number(block, "reconnect_attempts", 2, int),
+        reconnect_backoff=_coerce_number(block, "reconnect_backoff", 0.5, float),
+        heartbeat_interval=_coerce_number(block, "heartbeat_interval", 0.0, float),
         sampling_enabled=bool(sampling.get("enabled", False)),
         sampling_model=sampling.get("model"),
-        sampling_max_tokens=int(sampling.get("max_tokens", 2048)),
-        sampling_max_calls=int(sampling.get("max_calls", 32)),
+        sampling_max_tokens=_coerce_number(
+            sampling, "max_tokens", 2048, int, label="mcp.sampling.max_tokens"
+        ),
+        sampling_max_calls=_coerce_number(
+            sampling, "max_calls", 32, int, label="mcp.sampling.max_calls"
+        ),
     )
 
 
