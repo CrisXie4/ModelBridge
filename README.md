@@ -40,6 +40,15 @@ mbridge cache stats / reset / clean
 mbridge profile add / list / use / show / remove
 mbridge config show / upgrade
 
+mbridge edit "..."                 让 AI 生成 unified diff 改项目代码 (review→apply→backup→rollback)
+mbridge run "pytest -x"            在项目内安全执行白名单 shell 命令 (禁 shell 元字符)
+mbridge patch preview / apply / rollback   预览 / 应用 / 回滚 diff
+mbridge prompt list / show / edit / set-system / reset   提示词与规则文件
+mbridge project scan / rules / init        项目扫描 / 规则文件 / 生成 AGENT.md
+mbridge mcp list / tools / call            MCP 客户端：列出 / 调用外部 server 的工具
+mbridge mcp serve                  把 ModelBridge 自己作为 MCP server 暴露 chat / route / list_models
+mbridge bridge install / status            浏览器侧边栏 Native Messaging 宿主 (装扩展用，见下方章节)
+
 mbridge version [--check]          显示版本号 (--check 顺便检查更新)
 mbridge --version / -V             同上 (任意位置可用)
 mbridge update [--yes]             检查并下载新版本，下载后给出安装指引
