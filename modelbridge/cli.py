@@ -212,6 +212,25 @@ cache_app = typer.Typer(
     help="缓存统计 (mbridge cache stats / reset)。",
     no_args_is_help=True,
 )
+
+# ---------------------------------------------------------------------------
+# usage group — absorbs cost / budget / cache (R2a)
+# ---------------------------------------------------------------------------
+usage_app = typer.Typer(
+    name="usage",
+    help="用量与成本查询：费用估算、预算管理、缓存统计。",
+    no_args_is_help=True,
+)
+_usage_budget_app = typer.Typer(
+    name="budget",
+    help="月度预算 (mbridge usage budget / usage budget set <amount>)。",
+    no_args_is_help=True,
+)
+_usage_cache_app = typer.Typer(
+    name="cache",
+    help="缓存统计 (mbridge usage cache / usage cache reset)。",
+    no_args_is_help=True,
+)
 profile_app = typer.Typer(
     name="profile",
     help="配置切换 (add / list / use / show / remove)。一个 profile = 一组 default_model + 各 level 的模型映射。",
@@ -219,10 +238,14 @@ profile_app = typer.Typer(
 )
 app.add_typer(model_app, name="model")
 app.add_typer(doctor_app, name="doctor")
-app.add_typer(cost_app, name="cost")
-app.add_typer(budget_app, name="budget")
-app.add_typer(cache_app, name="cache")
+# R2a: cost/budget/cache are now under `usage`; old top-level groups kept hidden for compat
+app.add_typer(cost_app, name="cost", hidden=True)
+app.add_typer(budget_app, name="budget", hidden=True)
+app.add_typer(cache_app, name="cache", hidden=True)
 app.add_typer(profile_app, name="profile")
+app.add_typer(usage_app, name="usage")
+usage_app.add_typer(_usage_budget_app, name="budget")
+usage_app.add_typer(_usage_cache_app, name="cache")
 
 prompt_app = typer.Typer(
     name="prompt",
@@ -2130,7 +2153,7 @@ def cmd_route(
 # cost / budget
 # ---------------------------------------------------------------------------
 
-@cost_app.command("estimate")
+@usage_app.command("cost")
 def cmd_cost_estimate(
     prompt: str = typer.Argument(..., help="要估算的 prompt。"),
     model: Optional[str] = typer.Option(
@@ -2197,7 +2220,7 @@ def cmd_cost_estimate(
         raise typer.Exit(code=1)
 
 
-@budget_app.command("show")
+@_usage_budget_app.command("show")
 def cmd_budget_show() -> None:
     """显示当月 / 当日预算与开销。"""
     b = load_budget()
@@ -2231,7 +2254,7 @@ def cmd_budget_show() -> None:
     console.print(Panel("\n".join(body_lines), title="budget", border_style="cyan"))
 
 
-@budget_app.command("set")
+@_usage_budget_app.command("set")
 def cmd_budget_set(
     amount: Optional[float] = typer.Argument(
         None,
@@ -2301,7 +2324,7 @@ def cmd_budget_set(
 # cache
 # ---------------------------------------------------------------------------
 
-@cache_app.command("stats")
+@_usage_cache_app.command("stats")
 def cmd_cache_stats(
     project: Optional[Path] = typer.Option(
         None, "--project", "-p",
@@ -2383,7 +2406,7 @@ def cmd_cache_stats(
     console.print(Panel("\n".join(lines), title="cache stats", border_style="cyan"))
 
 
-@cache_app.command("reset")
+@_usage_cache_app.command("reset", hidden=True)
 def cmd_cache_reset(
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认。"),
 ) -> None:
@@ -2394,12 +2417,34 @@ def cmd_cache_reset(
     console.print(f"[green]✓[/green] 缓存统计已重置 (strategy={s.strategy})。")
 
 
-@cache_app.command("clean")
+@_usage_cache_app.command("clean", hidden=True)
 def cmd_cache_clean(
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认。"),
 ) -> None:
     """`cache reset` 的别名 — 清零缓存统计。"""
     cmd_cache_reset(yes=yes)
+
+
+# ---------------------------------------------------------------------------
+# R2a: deprecated aliases (old paths → new canonical paths under `usage`)
+# ---------------------------------------------------------------------------
+# The impl functions are now canonically registered under usage_app /
+# _usage_budget_app / _usage_cache_app (decorators above). The old apps
+# (cost_app / budget_app / cache_app) only keep hidden deprecating aliases.
+
+from .cli_compat import deprecated_alias  # noqa: E402
+
+# cost estimate → usage cost
+deprecated_alias(cost_app, "estimate", "usage cost", cmd_cost_estimate)
+
+# budget show / set → usage budget show/set
+deprecated_alias(budget_app, "show", "usage budget show", cmd_budget_show)
+deprecated_alias(budget_app, "set", "usage budget set", cmd_budget_set)
+
+# cache stats / reset / clean → usage cache stats/reset/clean
+deprecated_alias(cache_app, "stats", "usage cache", cmd_cache_stats)
+deprecated_alias(cache_app, "reset", "usage cache reset", cmd_cache_reset)
+deprecated_alias(cache_app, "clean", "usage cache clean", cmd_cache_clean)
 
 
 # ---------------------------------------------------------------------------
