@@ -166,6 +166,36 @@ REPL 会话里：
 
 ---
 
+## 浏览器侧边栏 — 让 AI 读写当前网页 (可选)
+
+> 只有当你想让 AI **读取 / 操作浏览器里正在看的网页**（总结页面、按 CSS 选择器点按钮、填表单、跳转）时才需要它。纯命令行问答 / 改代码 **不需要**装扩展。
+
+一个 Chrome/Edge 的 MV3 侧边栏插件 + 本机 Native Messaging 宿主（LocalBridge）：在侧边栏里聊天，AI 复用 CLI 的同一套引擎，通过宿主读写你**当前标签页**。
+
+> ⚠️ **目前没有上架应用商店、也没有打包好的 `.crx` 可一键下载** —— 需要以「加载已解压的扩展」方式从源码安装。插件源码在独立的 [`extension` 分支](https://github.com/CrisXie4/ModelBridge/tree/extension)（orphan 分支，只含扩展本身）。
+
+**安装步骤：**
+
+```bash
+# 1. 拿到扩展源码（任选其一）
+git clone -b extension --single-branch https://github.com/CrisXie4/ModelBridge.git mbridge-extension
+#   或在网页上打开 extension 分支 → Code → Download ZIP，解压
+
+# 2. 注册 Native Messaging 宿主（让浏览器能拉起 LocalBridge）
+mbridge bridge install
+mbridge bridge status          # 查看注册位置 / 扩展 ID
+```
+
+3. 打开 `chrome://extensions` → 右上角开启 **开发者模式** → **加载已解压的扩展程序** → 选第 1 步的扩展目录。
+4. 因为浏览器从 GUI 启动宿主、读不到 shell 的环境变量，**API key 必须放在 keyring / `config.yaml`** 里（不能只靠 `export`）。
+5. 回到 `chrome://extensions` **重新加载** 扩展，即可在侧边栏使用。
+
+> 扩展 ID 已由 manifest key 固定（所有安装一致），`mbridge bridge install` 默认用官方固定 ID；只有你 fork 改了 key 才需要 `--extension-id`。
+
+侧边栏里 AI 可自动调用的网页工具（操作类会先请求确认）：`read_page` / `get_selection` / `query_dom` / `extract` / `click` / `fill` / `navigate`。
+
+---
+
 ## 项目结构
 
 ```
