@@ -22,14 +22,14 @@ def deprecated_alias(
     """Register ``old`` as a HIDDEN command that warns to stderr then runs ``impl``.
 
     ``old`` keeps working (same args as ``impl``) but prints a one-line
-    deprecation notice and is absent from ``--help``. Remove these in v2.0.
+    deprecation notice and is absent from ``--help``. Remove these in v1.2.
     """
 
     @app.command(old, hidden=True, **command_kwargs)
     @functools.wraps(impl)
     def _wrapper(*args, **kwargs):
         err_console.print(
-            f"[yellow]⚠ `mbridge {old}` 已移至 `mbridge {new}`，将在 v2.0 移除。[/yellow]"
+            f"[yellow]⚠ `mbridge {old}` 已移至 `mbridge {new}`，将在 v1.2 移除。[/yellow]"
         )
         return impl(*args, **kwargs)
 

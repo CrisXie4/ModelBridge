@@ -79,7 +79,7 @@ def test_project_init_deprecated_emits_warning(home):
     """project init ... must print a deprecation notice when used without --help."""
     # Use a non-existent path so we get exit code 2 quickly without model call
     r = runner.invoke(app, ["project", "init", "--path", "/nonexistent/path/xyz"])
-    assert "移至" in r.output or "v2.0" in r.output or "deprecated" in r.output.lower(), (
+    assert "移至" in r.output or "v1.2" in r.output or "deprecated" in r.output.lower(), (
         f"Expected deprecation notice in output, got:\n{r.output}"
     )
 
@@ -135,8 +135,8 @@ def test_route_test_emits_deprecation_hint(home, monkeypatch):
 
     r = runner.invoke(app, ["route", "test"])
     assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "doctor route" in r.output or "移至" in r.output or "v2.0" in r.output, (
-        f"Expected deprecation hint mentioning 'doctor route' or v2.0 in output:\n{r.output}"
+    assert "doctor route" in r.output or "移至" in r.output or "v1.2" in r.output, (
+        f"Expected deprecation hint mentioning 'doctor route' or v1.2 in output:\n{r.output}"
     )
 
 

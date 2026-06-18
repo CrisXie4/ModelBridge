@@ -2081,7 +2081,7 @@ def cmd_route(
     """对一段 prompt 输出推荐模型与原因 (分级会调用最低层 tiny 模型)。"""
     if prompt.strip().lower() == "test":
         err_console.print(
-            "[yellow]⚠ `mbridge route test` 已移至 `mbridge doctor route`，将在 v2.0 移除。[/yellow]"
+            "[yellow]⚠ `mbridge route test` 已移至 `mbridge doctor route`，将在 v1.2 移除。[/yellow]"
         )
         _run_route_test(mode)
         return

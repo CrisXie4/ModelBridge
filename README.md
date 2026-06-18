@@ -48,7 +48,7 @@ mbridge --version / -V             同上 (任意位置)
 mbridge update [--yes]             检查并下载新版本
 ```
 
-> 旧命令名（chat / cost estimate / budget / cache / profile / bridge control … ）仍可用但会提示已迁移，将在 v2.0 移除。
+> 旧命令名（chat / cost estimate / budget / cache / profile / bridge control … ）仍可用但会提示已迁移，将在 v1.2 移除。
 
 > **版本与自动更新**：REPL 启动时会显示当前版本，并在每天检查一次 GitHub
 > Release。发现新版本时会提示 `🔔 发现新版本 vX.Y.Z`，此时直接输入 **同意**

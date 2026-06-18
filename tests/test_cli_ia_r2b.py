@@ -86,10 +86,10 @@ def test_profile_list_old_path_still_works(home):
 
 
 def test_profile_list_old_path_emits_deprecation(home):
-    """mbridge profile list emits a deprecation notice (移至 or v2.0)."""
+    """mbridge profile list emits a deprecation notice (移至 or v1.2)."""
     r = runner.invoke(app, ["profile", "list"])
     assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v2.0" in r.output, (
+    assert "移至" in r.output or "v1.2" in r.output, (
         f"Expected deprecation notice in output, got:\n{r.output}"
     )
 
@@ -122,7 +122,7 @@ def test_model_test_emits_deprecation_notice(home):
     r = runner.invoke(app, ["model", "test", "__nonexistent_model__"])
     # exit_code 2 = model not found; that's from the doctor-model impl, which is fine
     assert r.exit_code in (0, 1, 2, 3), f"Unexpected exit_code {r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v2.0" in r.output, (
+    assert "移至" in r.output or "v1.2" in r.output, (
         f"Expected deprecation notice in output, got:\n{r.output}"
     )
     assert "doctor model" in r.output, (

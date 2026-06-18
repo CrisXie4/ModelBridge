@@ -95,7 +95,7 @@ def test_old_cost_estimate_deprecated(home):
     assert r.exit_code in (0, 1, 2), f"exit_code={r.exit_code}\n{r.output}"
     assert "no such command" not in r.output.lower(), r.output
     # Deprecation notice must appear (stderr merged into output by CliRunner)
-    assert "移至" in r.output or "v2.0" in r.output, (
+    assert "移至" in r.output or "v1.2" in r.output, (
         f"Expected deprecation notice in output, got:\n{r.output}"
     )
 
@@ -104,7 +104,7 @@ def test_old_budget_show_deprecated(home):
     """budget show still works and warns."""
     r = runner.invoke(app, ["budget", "show"])
     assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v2.0" in r.output, (
+    assert "移至" in r.output or "v1.2" in r.output, (
         f"Expected deprecation notice in output, got:\n{r.output}"
     )
 
@@ -113,7 +113,7 @@ def test_old_budget_set_deprecated(home):
     """budget set still works and warns."""
     r = runner.invoke(app, ["budget", "set", "--monthly", "30"])
     assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v2.0" in r.output, (
+    assert "移至" in r.output or "v1.2" in r.output, (
         f"Expected deprecation notice in output, got:\n{r.output}"
     )
 
@@ -122,7 +122,7 @@ def test_old_cache_stats_deprecated(home):
     """cache stats still works and warns."""
     r = runner.invoke(app, ["cache", "stats"])
     assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v2.0" in r.output, (
+    assert "移至" in r.output or "v1.2" in r.output, (
         f"Expected deprecation notice in output, got:\n{r.output}"
     )
 

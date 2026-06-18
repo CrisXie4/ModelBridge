@@ -110,7 +110,7 @@ def test_chat_alias_dry_run_emits_deprecation(home):
     """mbridge chat ... --dry-run must print a deprecation notice."""
     r = runner.invoke(app, ["chat", "hello", "--dry-run"])
     assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v2.0" in r.output, (
+    assert "移至" in r.output or "v1.2" in r.output, (
         f"Expected deprecation notice in output, got:\n{r.output}"
     )
     assert "ask" in r.output, (
@@ -183,7 +183,7 @@ def test_bridge_control_on_emits_deprecation(home):
     """mbridge bridge control on must print a deprecation notice."""
     r = runner.invoke(bridge_app, ["control", "on"], env={"MBRIDGE_HOME": str(home)})
     assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v2.0" in r.output, (
+    assert "移至" in r.output or "v1.2" in r.output, (
         f"Expected deprecation notice in output, got:\n{r.output}"
     )
     assert "bridge on" in r.output, (
@@ -195,6 +195,6 @@ def test_bridge_control_off_emits_deprecation(home):
     """mbridge bridge control off must print a deprecation notice."""
     r = runner.invoke(bridge_app, ["control", "off"], env={"MBRIDGE_HOME": str(home)})
     assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v2.0" in r.output, (
+    assert "移至" in r.output or "v1.2" in r.output, (
         f"Expected deprecation notice in output, got:\n{r.output}"
     )

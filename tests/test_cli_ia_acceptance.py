@@ -143,7 +143,7 @@ def test_chat_alias_warns(home):
     # combined with a dummy prompt.  If the alias fires, the warning appears.
     r = runner.invoke(app, ["chat", "hi", "--show-prompt"], env={"MBRIDGE_HOME": str(home)})
     # exit code may be non-zero if no model is registered; what matters is the warning text.
-    assert "移至" in r.output or "v2.0" in r.output, (
+    assert "移至" in r.output or "v1.2" in r.output, (
         f"Expected deprecation notice in `mbridge chat` output:\n{r.output}"
     )
 
@@ -151,7 +151,7 @@ def test_chat_alias_warns(home):
 def test_cost_estimate_alias_warns(home):
     """mbridge cost estimate ... must emit a deprecation warning."""
     r = runner.invoke(app, ["cost", "estimate", "test prompt"], env={"MBRIDGE_HOME": str(home)})
-    assert "移至" in r.output or "v2.0" in r.output, (
+    assert "移至" in r.output or "v1.2" in r.output, (
         f"Expected deprecation notice in `mbridge cost estimate` output:\n{r.output}"
     )
 
@@ -159,7 +159,7 @@ def test_cost_estimate_alias_warns(home):
 def test_profile_list_alias_warns(home):
     """mbridge profile list must emit a deprecation warning."""
     r = runner.invoke(app, ["profile", "list"], env={"MBRIDGE_HOME": str(home)})
-    assert "移至" in r.output or "v2.0" in r.output, (
+    assert "移至" in r.output or "v1.2" in r.output, (
         f"Expected deprecation notice in `mbridge profile list` output:\n{r.output}"
     )
 
