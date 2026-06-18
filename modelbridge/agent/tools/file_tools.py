@@ -107,7 +107,10 @@ class ListDirTool(Tool):
     def execute(self, args: dict[str, Any], ctx: AgentContext) -> ToolResult:
         path_arg = args.get("path") or "."
         include_hidden = bool(args.get("include_hidden", False))
-        max_entries = min(int(args.get("max_entries", 200) or 200), _MAX_LIST_ENTRIES)
+        try:
+            max_entries = min(int(args.get("max_entries", 200) or 200), _MAX_LIST_ENTRIES)
+        except (TypeError, ValueError):
+            max_entries = min(200, _MAX_LIST_ENTRIES)
         try:
             resolved = ctx.resolve(path_arg)
         except PathDenied as e:

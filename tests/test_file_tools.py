@@ -133,3 +133,10 @@ def test_str_replace_ambiguous_match_errors(tmp_path):
     assert "2 次" in res.content
     # File must be left untouched on an ambiguous match.
     assert (tmp_path / "f.py").read_text(encoding="utf-8") == "x\nx\n"
+
+
+def test_list_dir_non_numeric_max_entries_falls_back(tmp_path):
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
+    res = ListDirTool().execute({"path": ".", "max_entries": "abc"}, _ctx(tmp_path))
+    assert not res.is_error
+    assert "a.txt" in res.content
