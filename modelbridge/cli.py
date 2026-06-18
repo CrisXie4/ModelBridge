@@ -262,9 +262,15 @@ prompt_app = typer.Typer(
 )
 project_app = typer.Typer(
     name="project",
-    help="项目扫描与 AGENT.md 生成 (scan / rules / init)。",
+    help="项目扫描与 AGENT.md 生成 (scan / rules / rules init)。",
     no_args_is_help=True,
 )
+project_rules_app = typer.Typer(
+    name="rules",
+    help="规则文件查看与生成 (rules / rules init)。",
+    invoke_without_command=True,
+)
+project_app.add_typer(project_rules_app, name="rules")
 app.add_typer(prompt_app, name="prompt")
 app.add_typer(project_app, name="project")
 
@@ -1929,6 +1935,17 @@ def cmd_doctor_all(
 # route
 # ---------------------------------------------------------------------------
 
+# NOTE: _run_route_test is defined below (forward ref resolved at call time).
+@doctor_app.command("route")
+def cmd_doctor_route(
+    mode: Optional[str] = typer.Option(
+        None, "--mode",
+        help="路由模式：economy / balanced / powerful (默认读 config.yaml routing.mode)。",
+    ),
+) -> None:
+    """跑内置 8 题路由验证集，确认路由配置正确。"""
+    _run_route_test(mode)
+
 
 def _print_route_result(result: RouteResult) -> None:
     """Render a RouteResult into the standard route panel + tables."""
@@ -2063,6 +2080,9 @@ def cmd_route(
 ) -> None:
     """对一段 prompt 输出推荐模型与原因 (分级会调用最低层 tiny 模型)。"""
     if prompt.strip().lower() == "test":
+        err_console.print(
+            "[yellow]⚠ `mbridge route test` 已移至 `mbridge doctor route`，将在 v2.0 移除。[/yellow]"
+        )
         _run_route_test(mode)
         return
 
@@ -2832,11 +2852,12 @@ def _gather_originals(
 @app.command(
     "edit",
     help=(
-        "让模型生成 unified diff 修改项目代码 (不直接改文件，按 diff 走 review→apply→backup→rollback 链路)。"
+        "让模型生成 unified diff 修改项目代码 (不直接改文件，按 diff 走 review→apply→backup→rollback 链路)。\n"
+        "加 --undo 可回滚上一次应用，无需 request 参数。"
     ),
 )
 def cmd_edit(
-    request: str = typer.Argument(..., help="自然语言描述你想做的修改。"),
+    request: Optional[str] = typer.Argument(None, help="自然语言描述你想做的修改（--undo 时可省略）。"),
     project: Path = typer.Option(
         Path("."), "--project", "-p", help="项目目录 (默认当前目录)。",
     ),
@@ -2861,12 +2882,23 @@ def cmd_edit(
         help="额外展示选中文件列表。",
     ),
     save_raw: bool = typer.Option(False, "--save-raw", help="保存模型原始响应。"),
+    undo: bool = typer.Option(False, "--undo", help="回滚上一次 edit/patch 应用（不生成新 diff）。"),
 ) -> None:
-    """生成 → 校验 → 展示 → 确认 → 备份 → 应用。"""
-    logger = get_logger()
+    """生成 → 校验 → 展示 → 确认 → 备份 → 应用。加 --undo 回滚上一次应用。"""
     project_root = project.expanduser().resolve()
+
+    # --undo: skip diff generation and run rollback
+    if undo:
+        _do_rollback(project_root, yes=yes)
+        return
+
+    logger = get_logger()
     if not project_root.is_dir():
         err_console.print(f"[red]project 路径不是目录: {project_root}[/red]")
+        raise typer.Exit(code=2)
+
+    if not request:
+        err_console.print("[red]请提供修改请求，或使用 --undo 回滚上一次应用。[/red]")
         raise typer.Exit(code=2)
 
     root_verdict = guard_project_root(project_root)
@@ -3222,16 +3254,8 @@ def cmd_patch_apply(
     )
 
 
-@patch_app.command("rollback", hidden=True)
-def cmd_patch_rollback(
-    project: Path = typer.Option(
-        Path("."), "--project", "-p", help="项目目录 (默认当前目录)。",
-    ),
-    yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认。"),
-) -> None:
-    """回滚最近一次 patch 应用。"""
-    project_root = project.expanduser().resolve()
-
+def _do_rollback(project_root: Path, yes: bool = False) -> None:
+    """Shared rollback logic used by ``patch rollback`` and ``edit --undo``."""
     root_verdict = guard_project_root(project_root)
     if not root_verdict.ok:
         err_console.print(f"[red]{root_verdict.reason}[/red]")
@@ -3276,6 +3300,17 @@ def cmd_patch_rollback(
     if rb.failures:
         raise typer.Exit(code=6)
     console.print(f"[green]✓[/green] 已回滚 backup {rb.backup.dir.name}")
+
+
+@patch_app.command("rollback", hidden=True)
+def cmd_patch_rollback(
+    project: Path = typer.Option(
+        Path("."), "--project", "-p", help="项目目录 (默认当前目录)。",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认。"),
+) -> None:
+    """回滚最近一次 patch 应用。"""
+    _do_rollback(project.expanduser().resolve(), yes=yes)
 
 
 # ---------------------------------------------------------------------------
@@ -3807,11 +3842,17 @@ def cmd_project_scan(
             console.print(f"  · {n}")
 
 
-@project_app.command("rules")
+@project_rules_app.callback(invoke_without_command=True)
 def cmd_project_rules(
+    ctx: typer.Context,
     path: Path = typer.Option(Path("."), "--path", "-p", help="项目路径。"),
 ) -> None:
-    """列出当前项目找到的规则文件 (AGENT.md / CLAUDE.md / ...)。"""
+    """列出当前项目找到的规则文件 (AGENT.md / CLAUDE.md / ...)。
+
+    不带子命令时列出规则文件；``rules init`` 生成 AGENT.md。
+    """
+    if ctx.invoked_subcommand is not None:
+        return
     files = discover_rule_files(path)
     if not files:
         console.print(
@@ -3831,17 +3872,14 @@ def cmd_project_rules(
     console.print(table)
 
 
-@project_app.command("init")
-def cmd_project_init(
-    path: Path = typer.Option(Path("."), "--path", "-p", help="项目路径。"),
-    model: Optional[str] = typer.Option(
-        None, "--model", "-m", help="生成 AGENT.md 用的模型名 (默认 config.default_model)。",
-    ),
-    force: bool = typer.Option(False, "--force", help="如果 AGENT.md 已存在则覆盖。"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="跳过预览确认。"),
-    timeout: float = typer.Option(120.0, "--timeout", help="模型调用超时秒数。"),
+def _do_project_init(
+    path: Path,
+    model: Optional[str],
+    force: bool,
+    yes: bool,
+    timeout: float,
 ) -> None:
-    """为项目生成 ``AGENT.md`` (会调用模型)。"""
+    """Shared impl for ``project rules init`` and the deprecated ``project init``."""
     root = Path(path).expanduser().resolve()
     if not root.is_dir():
         err_console.print(f"[red]项目路径不是目录: {root}[/red]")
@@ -3883,6 +3921,37 @@ def cmd_project_init(
     else:
         err_console.print(f"[yellow]{target} 已存在且未传 --force，跳过写入。[/yellow]")
         raise typer.Exit(code=2)
+
+
+@project_rules_app.command("init")
+def cmd_project_rules_init(
+    path: Path = typer.Option(Path("."), "--path", "-p", help="项目路径。"),
+    model: Optional[str] = typer.Option(
+        None, "--model", "-m", help="生成 AGENT.md 用的模型名 (默认 config.default_model)。",
+    ),
+    force: bool = typer.Option(False, "--force", help="如果 AGENT.md 已存在则覆盖。"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="跳过预览确认。"),
+    timeout: float = typer.Option(120.0, "--timeout", help="模型调用超时秒数。"),
+) -> None:
+    """为项目生成 ``AGENT.md`` (会调用模型)。"""
+    _do_project_init(path, model, force, yes, timeout)
+
+
+# R3b: `project init` is a deprecated alias for `project rules init`
+def cmd_project_init(
+    path: Path = typer.Option(Path("."), "--path", "-p", help="项目路径。"),
+    model: Optional[str] = typer.Option(
+        None, "--model", "-m", help="生成 AGENT.md 用的模型名 (默认 config.default_model)。",
+    ),
+    force: bool = typer.Option(False, "--force", help="如果 AGENT.md 已存在则覆盖。"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="跳过预览确认。"),
+    timeout: float = typer.Option(120.0, "--timeout", help="模型调用超时秒数。"),
+) -> None:
+    """为项目生成 ``AGENT.md`` (会调用模型)。"""
+    _do_project_init(path, model, force, yes, timeout)
+
+
+deprecated_alias(project_app, "init", "project rules init", cmd_project_init)
 
 
 if __name__ == "__main__":  # pragma: no cover
