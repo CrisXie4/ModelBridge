@@ -279,7 +279,7 @@ patch_app = typer.Typer(
     help="Patch 预览 / 应用 / 回滚 (preview / apply / rollback)。",
     no_args_is_help=True,
 )
-app.add_typer(patch_app, name="patch")
+app.add_typer(patch_app, name="patch", hidden=True)
 
 # MCP client subcommands live in their own module to avoid an import cycle.
 from .mcp.cli import mcp_app  # noqa: E402

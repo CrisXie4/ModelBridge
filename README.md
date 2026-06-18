@@ -21,38 +21,34 @@ mbridge --allow-bash               额外开启 run_bash 工具 (每条命令仍
 mbridge --yes                      跳过所有 write/edit/bash 确认弹窗
 
 mbridge init                       初始化 ~/.modelbridge/
-mbridge model init                 交互式添加模型
-mbridge model list / test / remove
-mbridge chat "..." -m NAME         [测试用] 单次请求
+mbridge model init / add / list / remove   模型管理 (init 推荐入口)
+mbridge config show / upgrade              查看 / 升级 config.yaml
+mbridge config profile add/list/use/show/remove   命名配置切换
+
+mbridge ask "..."                  单轮请求 (非交互；--route/--auto 自动路由；--fallback 失败升级)
+mbridge edit "..."                 让 AI 生成 diff 改代码 (review→apply→backup→rollback；--undo 回滚上次)
+mbridge run "pytest -x"            在项目内安全执行白名单 shell 命令
+mbridge route "..."                路由分析 (输出等级与模型，不实调；加 --mode)
 
 mbridge doctor                     全局自检
-mbridge doctor model NAME [--tools --verbose]
-mbridge doctor all
+mbridge doctor model NAME / doctor all / doctor route   模型 / 全部 / 路由自检
 
-mbridge route "..."                路由分析 (输出等级与模型，不实调；加 --mode)
-mbridge route test                 跑内置 8 题验证路由配置
-mbridge chat "..." --route         按 prompt 自动选模型并实际调用 (--auto 同义)
-mbridge chat "..." --route --fallback   失败时按链自动升级重试
-mbridge cost estimate "..."        成本估算 (token 估计 + pricing.yaml + 内置)
-mbridge budget show
-mbridge budget set --monthly 30 --daily 2 --warn-at 80 [--hard-stop]
-mbridge cache stats / reset / clean
-mbridge profile add / list / use / show / remove
-mbridge config show / upgrade
+mbridge usage cost "..."           成本估算
+mbridge usage budget [set ...]     月度预算 查看 / 设置
+mbridge usage cache                缓存命中统计
 
-mbridge edit "..."                 让 AI 生成 unified diff 改项目代码 (review→apply→backup→rollback)
-mbridge run "pytest -x"            在项目内安全执行白名单 shell 命令 (禁 shell 元字符)
-mbridge patch preview / apply / rollback   预览 / 应用 / 回滚 diff
 mbridge prompt list / show / edit / set-system / reset   提示词与规则文件
-mbridge project scan / rules / init        项目扫描 / 规则文件 / 生成 AGENT.md
-mbridge mcp list / tools / call            MCP 客户端：列出 / 调用外部 server 的工具
-mbridge mcp serve                  把 ModelBridge 自己作为 MCP server 暴露 chat / route / list_models
-mbridge bridge install / status            浏览器侧边栏 Native Messaging 宿主 (装扩展用，见下方章节)
+mbridge project scan / rules / rules init                项目扫描 / 规则 / 生成 AGENT.md
+mbridge mcp list / tools / resources / prompts           MCP 客户端
+mbridge mcp serve                  把 ModelBridge 自己作为 MCP server
+mbridge bridge install / status / on / off               浏览器侧边栏宿主 (装扩展见下方章节)
 
-mbridge version [--check]          显示版本号 (--check 顺便检查更新)
-mbridge --version / -V             同上 (任意位置可用)
-mbridge update [--yes]             检查并下载新版本，下载后给出安装指引
+mbridge version [--check]          显示版本号
+mbridge --version / -V             同上 (任意位置)
+mbridge update [--yes]             检查并下载新版本
 ```
+
+> 旧命令名（chat / cost estimate / budget / cache / profile / bridge control … ）仍可用但会提示已迁移，将在 v2.0 移除。
 
 > **版本与自动更新**：REPL 启动时会显示当前版本，并在每天检查一次 GitHub
 > Release。发现新版本时会提示 `🔔 发现新版本 vX.Y.Z`，此时直接输入 **同意**
@@ -74,7 +70,7 @@ mbridge --install-completion        # 为当前 shell (bash/zsh/fish/powershell)
 mbridge --show-completion           # 只打印补全脚本，自行决定如何接入
 ```
 
-安装后重开终端即可对子命令 (`model` / `doctor` / `route` / `profile` …) 和选项做 Tab 补全。
+安装后重开终端即可对子命令 (`model` / `doctor` / `route` / `usage` / `config` …) 和选项做 Tab 补全。
 
 ## 起步
 
@@ -213,7 +209,7 @@ modelbridge/
 ├── config.py             # ~/.modelbridge/{config,models}.yaml
 ├── models.py             # ModelEntry / Capabilities / ProviderType / ModelLevel
 ├── schemas.py            # ChatMessage / ChatRequest / ChatResponse / ProviderError
-├── client.py             # chat_once (mbridge chat 用)
+├── client.py             # chat_once (mbridge ask 用)
 ├── doctor.py             # 自检
 ├── error_hints.py        # 中文错误诊断
 ├── raw_logger.py         # --verbose 时 raw 响应落盘
@@ -283,14 +279,14 @@ mbridge route "帮我修复这个项目里的登录 bug" --mode powerful  # → 
 mbridge route test                                            # 8 题套件
 ```
 
-### 3. 自动调用：`chat --route` / `chat --auto`
+### 3. 自动调用：`ask --route` / `ask --auto`
 
-`mbridge chat "..." --route` 先路由再调用；`--fallback` 让调用失败时按 `tiny→cheap→coder→agent→expert` 向上重试，受 `routing.fallback.max_upgrade_steps` 限制（默认 2）。
+`mbridge ask "..." --route` 先路由再调用；`--fallback` 让调用失败时按 `tiny→cheap→coder→agent→expert` 向上重试，受 `routing.fallback.max_upgrade_steps` 限制（默认 2）。
 
 ```bash
-mbridge chat "解释这个报错" --route                # 自动 cheap
-mbridge chat "写一个 FastAPI hello" --route --fallback
-mbridge chat "..." --route --mode powerful --fallback
+mbridge ask "解释这个报错" --route                # 自动 cheap
+mbridge ask "写一个 FastAPI hello" --route --fallback
+mbridge ask "..." --route --mode powerful --fallback
 ```
 
 升级触发条件：超时、429、provider 400、空内容、模型明确说做不了。
@@ -322,8 +318,8 @@ pricing:
 `budget.json` 同时跟踪**月度**与**每日**开销，每次 `chat` 调用后自动累加：
 
 ```bash
-mbridge budget set --monthly 30 --daily 2 --warn-at 80 --hard-stop
-mbridge budget show
+mbridge usage budget set --monthly 30 --daily 2 --warn-at 80 --hard-stop
+mbridge usage budget
 ```
 
 - `--warn-at N`：到达 N% 时打 warning。
@@ -353,7 +349,7 @@ mbridge budget show
 
 ### 8. 命名配置切换 (profile)
 
-`mbridge profile add daily` 交互式记下一组 `default_model + routing.levels`，`mbridge profile use doubao` 一键换整组模型。不动 router / REPL 代码，只是写回顶层字段。
+`mbridge config profile add daily` 交互式记下一组 `default_model + routing.levels`，`mbridge config profile use doubao` 一键换整组模型。不动 router / REPL 代码，只是写回顶层字段。
 
 ---
 
@@ -361,7 +357,7 @@ mbridge budget show
 
 ## 第五阶段：项目文件读取
 
-`mbridge chat "..." --project .` 在 prompt 里只塞**最相关的 5–10 个文件**，不灌整库。流水线是：
+`mbridge ask "..." --project .` 在 prompt 里只塞**最相关的 5–10 个文件**，不灌整库。流水线是：
 
 ```
 scan_project  →  select_files  →  read_files  →  context.budget.plan  →  PromptBuilder
@@ -422,19 +418,19 @@ files_room = max_chars - overhead
 
 ```bash
 # 用项目规则 + 项目摘要 + 自动选 5-10 个文件来回答
-mbridge chat "这个项目是做什么的？" --project .
+mbridge ask "这个项目是做什么的？" --project .
 
 # 不调模型，只看选了哪些文件
-mbridge chat "登录功能在哪个文件？" --project . --show-files --show-prompt
+mbridge ask "登录功能在哪个文件？" --project . --show-files --show-prompt
 
 # 路由 + 项目都开
-mbridge chat "分析这个项目结构" --project . --route
+mbridge ask "分析这个项目结构" --project . --route
 
 # 自己设上下文上限（小模型用）
-mbridge chat "..." --project . --max-context 8000
+mbridge ask "..." --project . --max-context 8000
 
 # verbose: 文件 / 行数 / 截断 / 总 context 全列出来
-mbridge chat "..." --project . -v
+mbridge ask "..." --project . -v
 ```
 
 ### 6. 不读什么
@@ -713,16 +709,16 @@ rules_hash        = 64e90903       ← 仅规则部分
 project_summary_hash = 2ee6e678    ← 仅 scanner 输出
 ```
 
-**同一项目里第二次问问题，应该看到相同的 `prefix_hash`** — 如果不同就说明规则或扫描结果变了，缓存不会命中。`mbridge chat --verbose` 和 REPL 里的 `/prompt` 都会输出这三个 hash。
+**同一项目里第二次问问题，应该看到相同的 `prefix_hash`** — 如果不同就说明规则或扫描结果变了，缓存不会命中。`mbridge ask --verbose` 和 REPL 里的 `/prompt` 都会输出这三个 hash。
 
 ---
 
-## chat 集成项目规则
+## ask 集成项目规则
 
 ```bash
-mbridge chat "这个项目应该怎么启动？" --project .
-mbridge chat "..." --project . --show-prompt    # 不调用模型，只看组装结果
-mbridge chat "..." --project . --verbose        # 显示 prefix_hash + raw 落盘
+mbridge ask "这个项目应该怎么启动？" --project .
+mbridge ask "..." --project . --show-prompt    # 不调用模型，只看组装结果
+mbridge ask "..." --project . --verbose        # 显示 prefix_hash + raw 落盘
 ```
 
 启用 `--project` 时 chat 会：
