@@ -581,34 +581,6 @@ apply_diff (context-anchored)
 
 
 
-## 路线图
-
-| 版本 | 状态 | 内容 |
-|---|---|---|
-| v0.1 | ✅ | CLI 骨架、模型配置、OpenAI-compatible 通用调用 |
-| v0.2 | ✅ | Provider Adapter、统一 schema、doctor、错误诊断 |
-| v0.3 | ✅ | 路由 (TaskProfile + mode) / 成本 (`pricing.yaml`) / 预算 (daily + hard_stop) / 缓存 PromptBuilder / profile / config show/upgrade |
-| v0.4 | ✅ | 持续会话 REPL + 文件 / shell 工具 (Claude Code 风格) + AGENT.md / `/init` |
-| v0.5 | ✅ | `chat --project`：scan → select → read → budget → PromptBuilder，敏感文件硬黑名单 |
-| v0.6 | ✅ | **当前** — diff 驱动编辑：`mbridge edit` / `patch preview` / `apply` / `rollback`，自动备份 |
-| v0.7 | — | 真正请求路由 + prefix-cache 接入 + 预算拦截 |
-| v0.8 | — | Web Server / Agent Proxy / MCP Client |
-| v1.1 | ✅ | **浏览器侧边栏 Agent**：Chrome/Edge MV3 插件 + Native Messaging 宿主 (LocalBridge)，聊天读写当前网页。CLI 保留为共享后端。插件在独立的 [`extension` 分支](https://github.com/CrisXie4/ModelBridge/tree/extension) 维护（orphan 分支，只含扩展本身） |
-| v1.2 | ✅ | **MCP 完整接入** (M0–M7)：stdio + Streamable HTTP 双传输、多 server 治理与故障隔离、重连退避/心跳/`list_changed` 热刷新、REPL `/mcp` 运行时启停 + 工具级权限 (`tool_overrides`)、sampling 回调（server 借用国产模型）、`mbridge mcp serve` 反向把 ModelBridge 暴露为 MCP server。详见 [docs/mcp-architecture.md](docs/mcp-architecture.md) |
-
----
-
-## 不做的事
-
-ModelBridge **不做**：
-
-- ❌ Web UI (Gradio / Streamlit / 前端)
-- ❌ Agent 之间并发调度 (留到 v0.6+)
-- ❌ 用户系统 / 多租户 / 数据库
-- ❌ 内置 sandbox / 容器 — 需要更强隔离请自己用 Docker 跑 mbridge
-
----
-
 ## 项目规则文件 (v0.4)
 
 ModelBridge **优先遵守项目规则文件**。项目规则文件越清楚，AI 后续改代码越稳定。
@@ -787,6 +759,12 @@ mypy modelbridge/              # 类型检查 (CI 里非阻塞，存量噪声待
 CI 见 `.github/workflows/ci.yml`：`test` 是硬门禁 (3.10/3.11/3.12)，`lint` 已收紧为硬门禁，`typecheck` 暂为非阻塞。
 
 > **Windows 注意**：`mbridge` 安装为 console script (`mbridge.exe`)。重新 `pip install -e .` 前先关掉所有正在运行的 `mbridge`，否则可能因 `mbridge.exe` 被占用报 `WinError 32`；若装到一半失败导致 `No module named 'modelbridge'`，重跑一次 `pip install -e . --no-deps` 即可修复。
+
+## 友链
+
+- [LinuxDO](https://linux.do) — 国内开发者社区，欢迎交流
+
+---
 
 ## License
 
