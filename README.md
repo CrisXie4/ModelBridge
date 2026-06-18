@@ -172,14 +172,14 @@ REPL 会话里：
 
 一个 Chrome/Edge 的 MV3 侧边栏插件 + 本机 Native Messaging 宿主（LocalBridge）：在侧边栏里聊天，AI 复用 CLI 的同一套引擎，通过宿主读写你**当前标签页**。
 
-> ⚠️ **暂未上架 Chrome 应用商店。** 下方提供两种下载：打包好的 **`.crx`** 和**源码 `.zip`**。注意 Chrome 默认**拦截非商店来源的 `.crx` 旁加载** —— 多数普通用户实际得走源码 zip（load-unpacked）；`.crx` 主要用于企业策略强制安装，或开发者模式拖入（新版 Chrome 常被拦）。源码在独立的 [`extension` 分支](https://github.com/CrisXie4/ModelBridge/tree/extension)（orphan 分支，只含扩展本身）。
+> ⚠️ **请用「源码版 zip → 加载已解压」安装。** 直接拖装 `.crx` 会被 Chrome 拒绝并报 `CRX_REQUIRED_PROOF_MISSING` —— 新版 Chrome 只接受**带应用商店验证证明**的 crx，自签名 crx 一律拦截（连开发者模式拖入也拦）。`.crx` 仅适用于**企业策略强制安装**（`ExtensionInstallForcelist`）。本扩展暂未上架应用商店。源码在独立的 [`extension` 分支](https://github.com/CrisXie4/ModelBridge/tree/extension)（orphan 分支，只含扩展本身）。
 
 **安装步骤：**
 
-**1. 下载扩展**（二选一，都是永久链接）：
+**1. 下载扩展：**
 
-- 📦 **打包版 `.crx`**：<https://github.com/CrisXie4/ModelBridge/releases/latest/download/modelbridge-extension.crx>
-- 📂 **源码版 `.zip`**（解压得到 `ModelBridge-extension/` 文件夹，最稳妥）：<https://github.com/CrisXie4/ModelBridge/archive/refs/heads/extension.zip>
+- 📂 **源码版 `.zip`（推荐，普通用户用这个）**：<https://github.com/CrisXie4/ModelBridge/releases/latest/download/modelbridge-extension.zip> —— 解压得到 `modelbridge-extension/` 文件夹。
+- 📦 **打包版 `.crx`（仅企业策略；普通拖装会报 `CRX_REQUIRED_PROOF_MISSING`）**：<https://github.com/CrisXie4/ModelBridge/releases/latest/download/modelbridge-extension.crx>
 
 **2. 注册 Native Messaging 宿主**（让浏览器能拉起 LocalBridge）：
 
@@ -188,9 +188,7 @@ mbridge bridge install
 mbridge bridge status          # 查看注册位置 / 扩展 ID
 ```
 
-3. 打开 `chrome://extensions` → 右上角开启 **开发者模式**，然后按你下载的版本：
-   - **`.crx`**：把下载的 crx 文件**拖进**该页面（若提示「非商店来源」被拦，改用源码版，或走企业策略强制安装）；
-   - **源码版**：点 **加载已解压的扩展程序** → 选解压出的 `ModelBridge-extension` 文件夹（**最稳妥，推荐**）。
+3. 打开 `chrome://extensions` → 右上角开启 **开发者模式** → 点 **加载已解压的扩展程序** → 选解压出的 `modelbridge-extension` 文件夹。
 4. 因为浏览器从 GUI 启动宿主、读不到 shell 的环境变量，**API key 必须放在 keyring / `config.yaml`** 里（不能只靠 `export`）。
 5. 回到 `chrome://extensions` **重新加载** 扩展，即可在侧边栏使用。
 
