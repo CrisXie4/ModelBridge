@@ -134,6 +134,9 @@ class PromptBuilder:
     history: list[ChatMessage] = field(default_factory=list)
     user_request: str | None = None
     tools_schema_text: str = ""  # reserved for v0.5+ — placeholder for now
+    # Internal counter: how many role=="system" messages were dropped from
+    # the last with_history() call. Surfaced as a warning in build().
+    _history_system_dropped: int = field(default=0, repr=False)
 
     # ------------------------------------------------------------------
     # Fluent builders (each returns self so you can chain).
@@ -168,7 +171,9 @@ class PromptBuilder:
     def with_history(self, history: list[ChatMessage]) -> "PromptBuilder":
         # Strip out any messages that are already system/tool we wouldn't
         # want twice — but keep user / assistant / tool turns intact.
-        self.history = [m for m in history if m.role != "system"]
+        filtered = [m for m in history if m.role != "system"]
+        self._history_system_dropped = len(history) - len(filtered)
+        self.history = filtered
         return self
 
     def with_user_request(self, text: str | None) -> "PromptBuilder":
@@ -197,6 +202,11 @@ class PromptBuilder:
         sources: dict[str, list[str]] = {name: [] for name in SECTION_ORDER}
         warnings: list[str] = []
         truncated = False
+
+        # Warn about history system messages that were silently dropped
+        if self._history_system_dropped > 0:
+            n = self._history_system_dropped
+            warnings.append(f"history 中过滤掉 {n} 条 system 消息")
 
         # 1) core_system
         if self.use_system_prompt:
