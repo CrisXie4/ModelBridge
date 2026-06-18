@@ -172,12 +172,12 @@ REPL 会话里：
 
 一个 Chrome/Edge 的 MV3 侧边栏插件 + 本机 Native Messaging 宿主（LocalBridge）：在侧边栏里聊天，AI 复用 CLI 的同一套引擎，通过宿主读写你**当前标签页**。
 
-> ⚠️ 直接拖装 `.crx` 会被新版 Chrome 拒绝并报 `CRX_REQUIRED_PROOF_MISSING`（Chrome 只接受**带应用商店验证证明**的 crx，自签名 crx 一律拦截）。**装不上时请改用「源码 → 加载已解压」**（见第 3 步备选），或走企业策略 `ExtensionInstallForcelist`。本扩展暂未上架应用商店。
+> ⚠️ 本扩展**未上架 Chrome 应用商店**，自托管只能用「加载已解压」（load-unpacked）。**不提供 `.crx`** —— Chrome 会拦截并停用自签名 crx（报 `CRX_REQUIRED_PROOF_MISSING` 或「此扩展不是来自任何已知来源」）。如需批量部署可走企业策略 `ExtensionInstallForcelist`。
 
 **安装步骤：**
 
 **1. 下载并解压**：<https://github.com/CrisXie4/ModelBridge/releases/latest/download/modelbridge-extension.zip>
-解压后得到 `modelbridge-extension.crx`（扩展包）+ `INSTALL.txt`（安装说明）。
+解压后得到 `modelbridge-extension/` 文件夹（扩展本体）+ `INSTALL.txt`。
 
 **2. 注册 Native Messaging 宿主**（让浏览器能拉起 LocalBridge）：
 
@@ -186,8 +186,7 @@ mbridge bridge install
 mbridge bridge status          # 查看注册位置 / 扩展 ID
 ```
 
-**3. 在浏览器里安装**：打开 `chrome://extensions` → 右上角开启 **开发者模式** → 把 `modelbridge-extension.crx` **拖进**该页面。
-   - 若报 `CRX_REQUIRED_PROOF_MISSING`（Chrome 拦自签名 crx）：到 [`extension` 分支](https://github.com/CrisXie4/ModelBridge/tree/extension) 下载源码（Code → Download ZIP，解压）→ 点 **加载已解压的扩展程序** → 选源码文件夹（这条**一定能装**）。
+**3. 在浏览器里加载**：打开 `chrome://extensions` → 右上角开启 **开发者模式** → 点 **加载已解压的扩展程序** → 选解压出的 `modelbridge-extension` 文件夹。
 4. 因为浏览器从 GUI 启动宿主、读不到 shell 的环境变量，**API key 必须放在 keyring / `config.yaml`** 里（不能只靠 `export`）。
 5. 回到 `chrome://extensions` **重新加载** 扩展，即可在侧边栏使用。
 
