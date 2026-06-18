@@ -45,6 +45,7 @@ from .cache import (
     record_prefix_observation,
     reset_cache_stats,
 )
+from .cli_compat import deprecated_alias
 from .cli_console import console, err_console
 from .client import ChatError, chat_once
 from .config import (
@@ -98,7 +99,7 @@ from .router import (
     escalate_after_failure,
     route as route_prompt,
 )
-from .schemas import ChatMessage, ChatRequest
+from .schemas import ChatRequest
 from .agent import (
     AgentContext,
     ApprovalDecision,
@@ -242,7 +243,14 @@ app.add_typer(doctor_app, name="doctor")
 app.add_typer(cost_app, name="cost", hidden=True)
 app.add_typer(budget_app, name="budget", hidden=True)
 app.add_typer(cache_app, name="cache", hidden=True)
-app.add_typer(profile_app, name="profile")
+# R2b: profile is now under `config`; _deprecated_profile_app keeps old `mbridge profile *` working
+_deprecated_profile_app = typer.Typer(
+    name="profile",
+    help="[已移至 config profile] 配置切换。",
+    hidden=True,
+    no_args_is_help=True,
+)
+app.add_typer(_deprecated_profile_app, name="profile", hidden=True)
 app.add_typer(usage_app, name="usage")
 usage_app.add_typer(_usage_budget_app, name="budget")
 usage_app.add_typer(_usage_cache_app, name="cache")
@@ -1770,57 +1778,8 @@ def cmd_model_list() -> None:
     console.print(table)
 
 
-@model_app.command("test")
-def cmd_model_test(
-    name: str = typer.Argument(..., help="模型名称 (见 `mbridge model list`)。"),
-    timeout: float = typer.Option(30.0, "--timeout", help="超时秒数。"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="输出诊断细节并保存 raw 响应。"),
-) -> None:
-    """对模型发起一次连通性测试。"""
-    entry = find_model(name)
-    if entry is None:
-        err_console.print(f"[red]找不到模型 '{name}'，请用 `mbridge model list` 查看。[/red]")
-        raise typer.Exit(code=2)
-
-    provider = get_provider(entry)
-    console.print(
-        Panel.fit(
-            f"name      : [bold]{entry.name}[/bold]\n"
-            f"provider  : {entry.provider.value}\n"
-            f"base_url  : {entry.base_url}\n"
-            f"endpoint  : {provider.chat_endpoint()}\n"
-            f"model     : {entry.model}\n"
-            f"api_key   : {mask_secret(provider.api_key)}",
-            title="testing…",
-            border_style="cyan",
-        )
-    )
-
-    req = ChatRequest(
-        model=entry.model,
-        messages=[ChatMessage(role="user", content="你好，请只回复 OK")],
-        max_tokens=32,
-    )
-    try:
-        resp = provider.chat(req, timeout=timeout, save_raw=verbose, verbose_label="model_test")
-    except ProviderError as e:
-        _print_provider_error(e)
-        raise typer.Exit(code=3) from e
-
-    console.print(
-        Panel.fit(
-            f"[green]模型连接成功[/green]\n"
-            f"provider  : {entry.provider.value}\n"
-            f"base_url  : {entry.base_url}\n"
-            f"model     : {resp.model}\n"
-            f"elapsed   : {resp.elapsed_ms} ms\n"
-            f"content   : {resp.content!r}",
-            title="✓ ok",
-            border_style="green",
-        )
-    )
-    if verbose:
-        _print_verbose(entry, resp)
+# R2b: `model test` is a deprecated alias for `doctor model` — see deprecated_alias call
+# after cmd_doctor_model is defined (below in the doctor section).
 
 
 @model_app.command("remove")
@@ -1910,6 +1869,10 @@ def cmd_doctor_model(
         console.print(f"[dim]raw 已保存到 {get_logs_dir()}[/dim]")
     if report.status != "OK":
         raise typer.Exit(code=1)
+
+
+# R2b: `model test` → deprecated alias for `doctor model`
+deprecated_alias(model_app, "test", "doctor model", cmd_doctor_model)
 
 
 @doctor_app.command("all")
@@ -2432,8 +2395,6 @@ def cmd_cache_clean(
 # _usage_budget_app / _usage_cache_app (decorators above). The old apps
 # (cost_app / budget_app / cache_app) only keep hidden deprecating aliases.
 
-from .cli_compat import deprecated_alias  # noqa: E402
-
 # cost estimate → usage cost
 deprecated_alias(cost_app, "estimate", "usage cost", cmd_cost_estimate)
 
@@ -2680,6 +2641,20 @@ def cmd_profile_remove(
 
 
 # ---------------------------------------------------------------------------
+# R2b: deprecated aliases for `mbridge profile *` → `mbridge config profile *`
+# ---------------------------------------------------------------------------
+# _deprecated_profile_app is a separate hidden group (registered at top of file
+# near the other app.add_typer calls). We cannot reuse the canonical profile_app
+# because the sub-typer callback would fire on both paths.
+
+deprecated_alias(_deprecated_profile_app, "add", "config profile add", cmd_profile_add)
+deprecated_alias(_deprecated_profile_app, "list", "config profile list", cmd_profile_list)
+deprecated_alias(_deprecated_profile_app, "use", "config profile use", cmd_profile_use)
+deprecated_alias(_deprecated_profile_app, "show", "config profile show", cmd_profile_show)
+deprecated_alias(_deprecated_profile_app, "remove", "config profile remove", cmd_profile_remove)
+
+
+# ---------------------------------------------------------------------------
 # config — show / upgrade
 # ---------------------------------------------------------------------------
 
@@ -2689,6 +2664,8 @@ config_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(config_app, name="config")
+# R2b: profile is the canonical home under config
+config_app.add_typer(profile_app, name="profile")
 
 
 @config_app.command("show")
