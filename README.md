@@ -42,6 +42,7 @@ mbridge project scan / rules / rules init                项目扫描 / 规则 /
 mbridge mcp list / tools / resources / prompts           MCP 客户端
 mbridge mcp serve                  把 ModelBridge 自己作为 MCP server
 mbridge bridge install / status / on / off               浏览器侧边栏宿主 (装扩展见下方章节)
+mbridge skill list / show / add / remove                 用户自定义 skill（Claude Code 兼容）
 
 mbridge version [--check]          显示版本号
 mbridge --version / -V             同上 (任意位置)
@@ -198,6 +199,38 @@ mbridge bridge status          # 查看注册位置 / 扩展 ID
 > 扩展 ID 已由 manifest key 固定（所有安装一致），`mbridge bridge install` 默认用官方固定 ID；只有你 fork 改了 key 才需要 `--extension-id`。
 
 侧边栏里 AI 可自动调用的网页工具（操作类会先请求确认）：`read_page` / `get_selection` / `query_dom` / `extract` / `click` / `fill` / `navigate`。
+
+---
+
+## Skills（用户自定义）
+
+**Skill** 是一个放在特定目录下的文件夹，包含一个 `SKILL.md` 文件，文件头带有 YAML frontmatter（`name` + `description`）和 Markdown 格式的指令正文。格式与 Claude Code 兼容，可以直接复用为 Claude Code 编写的 skill。
+
+### Skill 存放位置
+
+| 位置 | 作用 |
+|---|---|
+| `~/.modelbridge/skills/<name>/` | 全局 skill，对所有项目生效 |
+| `.modelbridge/skills/<name>/` | 项目级 skill，同名时覆盖全局 |
+
+### 命令
+
+```bash
+mbridge skill list              # 列出所有可用 skill（全局 + 项目级）
+mbridge skill show <name>       # 显示 skill 的详细内容（frontmatter + 指令）
+mbridge skill add <本地路径>    # 把一个本地 skill 目录复制到全局或项目 skills 目录
+mbridge skill remove <name>     # 删除指定 skill
+```
+
+### AI 如何使用 Skill
+
+REPL 启动时，ModelBridge 会把所有可用 skill 的索引（`name` + `description`）注入系统提示，让 AI 知道有哪些 skill 可用。当 AI 判断某个 skill 与当前任务相关时，会调用 `use_skill` 工具来加载并执行该 skill 的指令。
+
+**加载前会请求你确认**——复用与 `write_file` / `run_bash` 相同的审批弹窗，支持「本会话对该 skill 始终同意」（选 **a**）。
+
+### 安全须知
+
+> ⚠️ **skill 是会被 AI 读取并执行的任意指令。添加来路不明的 skill 等于让 AI 执行陌生人的指令——可能删文件、泄露密钥、跑命令。请只添加你信任并亲自审阅过的 skill；加载时务必看清来源再确认。后果自负，ModelBridge 维护者不承担责任。**
 
 ---
 
