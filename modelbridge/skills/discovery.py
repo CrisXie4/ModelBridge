@@ -70,11 +70,19 @@ def discover_skills(project_path: Path | str | None = None) -> list[Skill]:
     """Return all valid skills (project overrides global by name)."""
     found: dict[str, Skill] = {}
     for d, scope in _skills_dirs(project_path):
-        for sub in sorted(d.iterdir()):
-            if not sub.is_dir():
-                continue
-            md = sub / "SKILL.md"
-            if not md.is_file():
+        try:
+            subdirs = sorted(d.iterdir())
+        except OSError:
+            get_logger().warning("skills: 无法读取目录 %s", d)
+            continue
+        for sub in subdirs:
+            try:
+                if not sub.is_dir():
+                    continue
+                md = sub / "SKILL.md"
+                if not md.is_file():
+                    continue
+            except OSError:
                 continue
             sk = parse_skill(md, scope=scope)
             if sk is None:

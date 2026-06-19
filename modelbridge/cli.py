@@ -486,7 +486,10 @@ def _run_repl(
     session = Session(model_name=model_name)
 
     sys_prompt_text = system or _default_system_prompt(allow_bash=allow_bash)
-    sys_prompt_text = wire_skills(registry, sys_prompt_text, project_path=cwd_resolved)
+    try:
+        sys_prompt_text = wire_skills(registry, sys_prompt_text, project_path=cwd_resolved)
+    except Exception as e:  # noqa: BLE001 — skills must never block the REPL
+        err_console.print(f"[yellow]跳过 skills 加载: {e}[/yellow]")
     prompt_builder = PromptBuilder().with_system_prompt(sys_prompt_text).with_project(cwd_resolved)
 
     repl_prefix_hash = ""
