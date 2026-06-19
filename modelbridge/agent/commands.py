@@ -157,8 +157,9 @@ def _context(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: 
         ptable = Table(title="最近 6 条 (不含 system)", show_lines=False)
         ptable.add_column("role", style="dim", no_wrap=True)
         ptable.add_column("preview", overflow="fold")
+        from ..schemas import text_of
         for m in preview:
-            txt = (m.content or "").replace("\n", " ").strip()
+            txt = text_of(m.content).replace("\n", " ").strip()
             if not txt and m.tool_calls:
                 txt = f"<tool_calls × {len(m.tool_calls)}>"
             if not txt:

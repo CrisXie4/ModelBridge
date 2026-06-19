@@ -28,6 +28,7 @@ Subcommands:
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -99,7 +100,7 @@ from .router import (
     escalate_after_failure,
     route as route_prompt,
 )
-from .schemas import ChatRequest
+from .schemas import ChatRequest, text_of
 from .agent import (
     AgentContext,
     ApprovalDecision,
@@ -508,7 +509,7 @@ def _run_repl(
 
     initial = prompt_builder.build()
     if initial.messages and initial.messages[0].role == "system":
-        session.add_system(initial.messages[0].content or sys_prompt_text)
+        session.add_system(text_of(initial.messages[0].content) or sys_prompt_text)
     else:
         session.add_system(sys_prompt_text)
 
@@ -551,7 +552,8 @@ def _run_repl(
             f"policy    : {policy.describe()}\n"
             f"prefix    : {repl_prefix_hash or '(empty)'}\n"
             f"{cache_line}\n\n"
-            f"[dim]/help 列出所有命令 · /exit 退出 · /clear 清空历史 · Ctrl-D 退出[/dim]",
+            f"[dim]/help 命令 · @文件名 引用文件(实时补全, 内容注入本轮) · "
+            f"/exit 退出 · Ctrl-D[/dim]",
             title="mbridge",
             border_style="cyan",
         )
@@ -575,25 +577,94 @@ def _run_repl(
 
     _AGREE_WORDS = {"同意", "更新", "升级", "update", "upgrade", "yes", "y"}
 
-    def read_input() -> str:
-        # Defensive cursor reset before the prompt.
+    # --- @file 提及：惰性文件索引 + prompt_toolkit 实时补全 -------------
+    #
+    # 索引在首次需要时才构建（扫描一次，整段 REPL 复用），构建失败绝不阻断
+    # REPL：补全静默关闭、@提及按普通文字处理。
+    _index_state: dict[str, Any] = {"index": None, "built": False}
+
+    def _get_file_index():
+        if not _index_state["built"]:
+            _index_state["built"] = True
+            try:
+                from .project.file_index import FileIndex
+                _index_state["index"] = FileIndex.build(cwd_resolved)
+            except Exception:  # noqa: BLE001 — 索引失败绝不阻断 REPL
+                _index_state["index"] = None
+        return _index_state["index"]
+
+    # 只在交互式 TTY 且 prompt_toolkit 可用时启用实时下拉补全；否则回退到
+    # console.input（提交后再解析 @提及），保证管道 / 哑终端仍可用。
+    _pt_session = None
+    try:
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            from prompt_toolkit import PromptSession
+            from prompt_toolkit.completion import ThreadedCompleter
+            from prompt_toolkit.history import InMemoryHistory
+
+            from .agent.at_completer import AtFileCompleter
+
+            # ThreadedCompleter runs the (lazy) index build + per-keystroke
+            # scan off the UI thread, so the first '@' (full os.walk) and broad
+            # queries on a big repo don't freeze the prompt.
+            _pt_session = PromptSession(
+                completer=ThreadedCompleter(AtFileCompleter(_get_file_index)),
+                complete_while_typing=True,
+                history=InMemoryHistory(),
+            )
+    except Exception:  # noqa: BLE001 — prompt_toolkit 不可用就回退
+        _pt_session = None
+
+    def _read_raw() -> str:
+        nonlocal _pt_session
+        if _pt_session is not None:
+            from prompt_toolkit.formatted_text import HTML
+            # prompt_toolkit 自行管理光标 / 重绘，无需下面 console.input 那套
+            # cp936 光标修正；EOFError / KeyboardInterrupt 向上抛给 loop。
+            try:
+                return _pt_session.prompt(HTML("<ansigreen><b>you ❯</b></ansigreen> "))
+            except (EOFError, KeyboardInterrupt):
+                raise
+            except Exception as e:  # noqa: BLE001 — 伪 TTY(Git Bash/MSYS) / console
+                # 运行时才暴露的 console 错误：永久禁用补全，落到 console.input。
+                _pt_session = None
+                console.print(
+                    f"[dim]· 实时补全不可用，已回退普通输入 ({type(e).__name__})[/dim]"
+                )
+        # console.input 回退路径 —— 先把光标顶到行首：
         #
-        # The prior turn ends with ``on_turn_done`` printing the status
-        # bar via ``status_bar_text`` — which uses ``no_wrap=True`` +
-        # ``overflow="ellipsis"``. On Windows Terminal under cp936 the
-        # truncation path can leave the cursor mid-line, which then makes
-        # ``console.input("you ❯ ")`` write its prompt on top of the
-        # status bar and the user's typed echo collide with the bar text
-        # (visible as ``model 写一个...`` instead of ``you ❯ 写一个...``).
-        # A hard CR+LF guarantees a fresh row at column 1. The extra blank
-        # line is a small visual cost vs. mis-positioned input.
+        # 上一轮结尾 ``on_turn_done`` 用 ``status_bar_text`` 打状态栏
+        # (no_wrap=True + overflow="ellipsis")。Windows Terminal cp936 下截断
+        # 可能把光标留在行中，使 ``console.input`` 的提示叠到状态栏上、与回显
+        # 串行。硬 CR+LF 保证从第 1 列新起一行。
         try:
             console.file.write("\r\n")
             console.file.flush()
         except Exception:  # noqa: BLE001 — never let UI hygiene crash input
             pass
+        return console.input("[bold green]you ❯[/bold green] ")
+
+    def _apply_mentions(text: str) -> None:
+        from .agent.mentions import inject_file_mentions
+
+        index = _get_file_index()
+        if index is None:
+            return
+        resolved = inject_file_mentions(text, index, session, project_root=cwd_resolved)
+        if resolved.attachments:
+            names = "、".join(
+                a.relpath + ("/" if a.kind == "dir" else "") for a in resolved.attachments
+            )
+            console.print(
+                f"[dim]📎 已把 {len(resolved.attachments)} 项作为上下文附加: {names}[/dim]"
+            )
+        if resolved.unresolved:
+            miss = "、".join(resolved.unresolved)
+            console.print(f"[dim]· 未匹配的 @提及（按普通文字处理）: {miss}[/dim]")
+
+    def read_input() -> str:
         try:
-            text = console.input("[bold green]you ❯[/bold green] ")
+            text = _read_raw()
         except UnicodeDecodeError:
             return ""
         # If an update is pending, a bare 同意 / yes triggers the download
@@ -604,6 +675,18 @@ def _run_repl(
             update_state["release"] = None
             _run_update_flow(rel)
             return ""  # re-prompt
+        # 兑现上面注释：任何其它非空输入都清除待更新态，避免很久以后用户
+        # 真心说一句"同意/yes"被误当成更新确认而触发下载。
+        if update_state["release"] is not None and text.strip():
+            update_state["release"] = None
+        # @file 提及：把被提及文件的内容作为本轮上下文注入会话（在 loop 追加
+        # 用户原话之前），@路径 本身仍原样保留在用户可见消息里。斜杠命令跳过。
+        stripped = text.strip()
+        if stripped and not stripped.startswith("/"):
+            try:
+                _apply_mentions(text)
+            except Exception:  # noqa: BLE001 — 提及解析绝不阻断输入
+                pass
         return text
 
     # State carried across callbacks within a single REPL turn.
@@ -665,6 +748,11 @@ def _run_repl(
                 pass
 
     def on_tool_call(call, result_content: str) -> None:
+        # The agent's own write tools mutate the tree mid-session; drop the
+        # cached file index so a newly created/renamed file is @-mentionable
+        # on the next prompt instead of silently failing to resolve.
+        if call.name in {"write_file", "str_replace"}:
+            _index_state["built"] = False
         args_preview = ", ".join(
             f"{k}={_short_repr(v)}" for k, v in call.arguments.items() if not k.startswith("_")
         )
@@ -1010,7 +1098,7 @@ def _print_chat_dry_run(result, model_opt: Optional[str]) -> None:
     """Print target model + token/cost estimate for ``chat --dry-run``."""
     target = model_opt or load_app_config().default_model
     entry = find_model(target) if target else None
-    text = "\n".join(m.content or "" for m in result.messages)
+    text = "\n".join(text_of(m.content) for m in result.messages)
     n_tokens = estimate_tokens(text)
 
     lines = [

@@ -24,7 +24,7 @@ from typing import Iterable
 
 from ..cost.estimator import estimate_tokens
 from ..models import ModelEntry
-from ..schemas import ChatMessage
+from ..schemas import ChatMessage, text_of
 
 
 # Tokens. **Per-provider values, sourced from each vendor's docs (2026-05).**
@@ -180,7 +180,7 @@ def estimate_message_tokens(m: ChatMessage) -> int:
     """Cheap token estimate for one :class:`ChatMessage`."""
     total = _PER_MESSAGE_OVERHEAD
     if m.content:
-        total += estimate_tokens(m.content)
+        total += estimate_tokens(text_of(m.content))
     if m.reasoning_content:
         total += estimate_tokens(m.reasoning_content)
     if m.tool_calls:
