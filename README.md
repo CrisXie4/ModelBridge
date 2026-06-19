@@ -25,7 +25,7 @@ mbridge model init / add / list / remove   模型管理 (init 推荐入口)
 mbridge config show / upgrade              查看 / 升级 config.yaml
 mbridge config profile add/list/use/show/remove   命名配置切换
 
-mbridge ask "..."                  单轮请求 (非交互；--route/--auto 自动路由；--fallback 失败升级)
+mbridge ask "..."                  单轮请求 (非交互；--route/--auto 自动路由；--fallback 失败升级；--image 贴图)
 mbridge edit "..."                 让 AI 生成 diff 改代码 (review→apply→backup→rollback；--undo 回滚上次)
 mbridge run "pytest -x"            在项目内安全执行白名单 shell 命令
 mbridge route "..."                路由分析 (输出等级与模型，不实调；加 --mode)
@@ -145,12 +145,38 @@ session saved → ~/.modelbridge/sessions/2026-05-23_153012_repl_deepseek-chat.j
 | `write_file(path, content)` | 覆盖 / 创建文件 (500 KB 上限) | **是** |
 | `str_replace(path, old_str, new_str)` | 精确替换；要求 old_str 在文件中唯一出现 | **是** |
 | `run_bash(command)` | 执行 shell；默认 30s 超时；输出截断到 8 KB | **是** (且需 `--allow-bash` 启用) |
+| `view_image(path)` | 让 AI 主动加载一张本地图片来"看" | 否（仅 vision 模型下注册） |
 
 确认弹窗有三个选项：
 
 - **y** — 同意这一次
 - **N** — 拒绝 (默认)
 - **a** — 本会话内对该工具始终同意
+
+### 图片 / 多模态（vision 模型）
+
+把图片交给支持视觉的模型识别。图片**内联进你发给 AI 的那条消息**，AI 当场读图当场回。
+
+**三种贴图方式（REPL 内）：**
+
+- `@图片文件` — 像 `@文件` 提及一样，但图片文件会被识别为图像内联进消息：
+  ```
+  you: @design/mock.png 这个界面有什么可以改进的？
+  🖼 已内联 1 张图片到本轮消息
+  ```
+- `@paste` — 从系统剪贴板抓截图（先 Win+Shift+S 截图，再 `@paste 这是什么报错`）。需要可选依赖：`pip install "modelbridge[vision]"`。
+- 直接把图片 URL 写进消息（`https://….png/.jpg/...`）会被自动识别。
+
+**单次（非交互）：**
+
+```bash
+mbridge ask -m glm-4v "描述这张图" --image ./shot.png
+mbridge ask -m qwen-vl "对比这两张图" --image a.png --image https://x/b.jpg   # --image 可重复
+```
+
+**前置：** 目标模型要在 `models.yaml` 标 `capabilities.vision: true`。否则带图会被直接拒绝，并列出可用的 vision 模型让你切换（`--model` / `/model`）。
+
+> 备注：图像 token 未计入本地估算，实际用量以 provider 账单为准。
 
 ### 安全模型
 
