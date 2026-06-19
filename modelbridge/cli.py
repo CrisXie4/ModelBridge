@@ -101,6 +101,7 @@ from .router import (
     route as route_prompt,
 )
 from .schemas import ChatRequest, text_of
+from . import images
 from .agent import (
     AgentContext,
     ApprovalDecision,
@@ -1121,6 +1122,15 @@ def _print_chat_dry_run(result, model_opt: Optional[str]) -> None:
     console.print(Panel.fit("\n".join(lines), title="dry-run (未实际调用)", border_style="yellow"))
 
 
+def _vision_model_names() -> list[str]:
+    """已注册模型里 capabilities.vision=true 的名字（给 vision 门禁的提示用）。"""
+    try:
+        mf = load_models_file()
+        return [m.name for m in mf.models if getattr(m.capabilities, "vision", False)]
+    except Exception:  # noqa: BLE001 — 提示用途，失败给空表即可
+        return []
+
+
 @app.command(
     "ask",
     help=(
@@ -1177,6 +1187,10 @@ def cmd_ask(
         help="不调用模型：打印组装后的 prompt + 目标模型 + 预估 token/费用 "
              "(等价 --show-prompt 再加估算)。",
     ),
+    image: Optional[list[str]] = typer.Option(
+        None, "--image",
+        help="附加图片（本地路径或 http(s):// / data: URL，可重复）。需模型 capabilities.vision=true。",
+    ),
     max_context: int = typer.Option(
         DEFAULT_MAX_CONTEXT_CHARS, "--max-context",
         help="prompt 总字符上限 (rules+summary+files+user)。超出时按优先级截断。",
@@ -1184,6 +1198,12 @@ def cmd_ask(
 ) -> None:
     """与模型单轮对话。"""
     logger = get_logger()
+
+    if image and (use_route or auto):
+        err_console.print(
+            "[red]--image 暂不支持与 --route/--auto 同用；请显式 --model 指定 vision 模型。[/red]"
+        )
+        raise typer.Exit(code=2)
 
     if (use_route or auto) and model:
         err_console.print(
@@ -1205,7 +1225,15 @@ def cmd_ask(
     # the project scan + file selection (no project_rules / summary /
     # project_files in the result); with --project we add them.
     if not (use_route or auto):
-        builder = PromptBuilder().with_user_request(prompt)
+        image_blocks: list[dict] = []
+        if image:
+            for arg in image:
+                try:
+                    image_blocks.append(images.resolve_image_arg(arg))
+                except images.ImageError as e:
+                    err_console.print(f"[red]{e}[/red]")
+                    raise typer.Exit(code=2)
+        builder = PromptBuilder().with_user_request(prompt, images=image_blocks)
         if system:
             builder = builder.with_system_prompt(system)
         summary: Optional[ProjectSummary] = None
@@ -1276,6 +1304,17 @@ def cmd_ask(
         if entry is None:
             err_console.print(f"[red]找不到模型 '{target_model}'。[/red]")
             raise typer.Exit(code=2)
+        if image_blocks:
+            try:
+                images.ensure_vision(
+                    has_images=True,
+                    model_is_vision=bool(getattr(entry.capabilities, "vision", False)),
+                    model_name=entry.name,
+                    available_vision=_vision_model_names(),
+                )
+            except images.ImageError as e:
+                err_console.print(f"[red]{e}[/red]")
+                raise typer.Exit(code=2)
         provider = get_provider(entry)
         req = ChatRequest(
             model=entry.model,
