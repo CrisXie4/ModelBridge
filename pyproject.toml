@@ -42,6 +42,7 @@ dependencies = [
     "httpx>=0.27.0",
     "PyYAML>=6.0",
     "rich>=13.7.0",
+    "prompt_toolkit>=3.0.0",  # @file 提及的实时补全 (REPL)；无 TTY 时自动回退
     "keyring>=24.0",       # OS credential vault for api_key (preferred)
     "cryptography>=42.0",  # Fernet fallback when no keyring backend
 ]
@@ -53,6 +54,8 @@ dev = [
     "mypy>=1.8",
     "types-PyYAML>=6.0",
 ]
+# 仅 @paste 剪贴板读图用到；其余图像功能（路径/URL）零额外依赖。
+vision = ["Pillow>=10.0"]
 
 [project.scripts]
 mbridge = "modelbridge.cli:app"
