@@ -599,7 +599,7 @@ def _run_repl(
 
     # 只在交互式 TTY 且 prompt_toolkit 可用时启用实时下拉补全；否则回退到
     # console.input（提交后再解析 @提及），保证管道 / 哑终端仍可用。
-    _pt_session = None
+    _pt_session: Any = None
     try:
         if sys.stdin.isatty() and sys.stdout.isatty():
             from prompt_toolkit import PromptSession
