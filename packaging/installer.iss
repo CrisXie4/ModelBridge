@@ -16,7 +16,7 @@
 ; ===========================================================================
 
 #define MyAppName        "ModelBridge"
-#define MyAppVersion     "1.1.4"
+#define MyAppVersion     "1.1.6"
 #define MyAppPublisher   "ModelBridge Contributors"
 #define MyAppURL         "https://github.com/CrisXie4/ModelBridge"
 #define MyAppExeName     "mbridge.exe"
