@@ -292,6 +292,11 @@ from .bridge.cli import bridge_app  # noqa: E402
 
 app.add_typer(bridge_app, name="bridge")
 
+# Skill management subcommands.
+from .skills.cli import skill_app  # noqa: E402
+
+app.add_typer(skill_app, name="skill")
+
 
 # ---------------------------------------------------------------------------
 # Root: `mbridge` with no subcommand → interactive agent REPL
