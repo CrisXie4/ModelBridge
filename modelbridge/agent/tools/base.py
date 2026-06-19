@@ -27,6 +27,11 @@ class ToolResult:
     is_error: bool = False
     # Optional structured output kept for the session log; not sent on the wire.
     structured: dict[str, Any] | None = None
+    # Extra messages the loop appends to the session *after* the tool result.
+    # Used by ``view_image`` to inject an image as a user message (OpenAI-style
+    # role=tool content can't carry images). Typed loosely to avoid importing
+    # ChatMessage into the tool layer.
+    extra_messages: list[Any] | None = None
 
     def to_tool_message(self, *, tool_call_id: str) -> dict[str, Any]:
         return {

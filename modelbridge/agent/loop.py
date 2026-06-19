@@ -131,6 +131,10 @@ def run_agent_turn(
             for call in calls:
                 result = registry.dispatch(call, ctx)
                 session.add_tool_result(tool_call_id=call.id, content=result.content)
+                # A tool may inject extra messages (e.g. view_image attaches the
+                # image as a user message the vision model reads next turn).
+                for extra in (getattr(result, "extra_messages", None) or []):
+                    session.messages.append(extra)
                 answered.add(call.id)
                 executed.append(call)
                 if on_tool_call is not None:
