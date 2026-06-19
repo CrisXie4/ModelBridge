@@ -109,6 +109,7 @@ from .agent import (
 )
 from .agent.commands import SlashContext, handle_slash
 from .agent.tools import build_default_registry
+from .skills.wiring import wire_skills
 from .agent.ui import (
     AssistantStream,
     compute_turn_stats,
@@ -480,6 +481,7 @@ def _run_repl(
     session = Session(model_name=model_name)
 
     sys_prompt_text = system or _default_system_prompt(allow_bash=allow_bash)
+    sys_prompt_text = wire_skills(registry, sys_prompt_text, project_path=cwd_resolved)
     prompt_builder = PromptBuilder().with_system_prompt(sys_prompt_text).with_project(cwd_resolved)
 
     repl_prefix_hash = ""
