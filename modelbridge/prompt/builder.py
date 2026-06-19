@@ -133,6 +133,10 @@ class PromptBuilder:
     system_prompt_override: str | None = None
     history: list[ChatMessage] = field(default_factory=list)
     user_request: str | None = None
+    # Multimodal blocks attached to the current user turn (image_url blocks).
+    # When non-empty, the final user message content becomes a list:
+    # ``[{"type":"text","text": user_body}, *user_images]``.
+    user_images: list[dict] = field(default_factory=list)
     tools_schema_text: str = ""  # reserved for v0.5+ — placeholder for now
     # Internal counter: how many role=="system" messages were dropped from
     # the last with_history() call. Surfaced as a warning in build().
@@ -176,8 +180,11 @@ class PromptBuilder:
         self.history = filtered
         return self
 
-    def with_user_request(self, text: str | None) -> "PromptBuilder":
+    def with_user_request(
+        self, text: str | None, *, images: list[dict] | None = None
+    ) -> "PromptBuilder":
         self.user_request = text
+        self.user_images = list(images or [])
         return self
 
     def with_tools_schema(self, schema_text: str) -> "PromptBuilder":
@@ -319,7 +326,17 @@ class PromptBuilder:
                 user_body = f"{files_block}\n\n{self.user_request}"
             else:
                 user_body = self.user_request
-            messages.append(ChatMessage(role="user", content=user_body))
+            if self.user_images:
+                # Multimodal turn: text first, then image_url blocks. Images
+                # ride in the dynamic user message (not the stable prefix), so
+                # prefix-cache stability is preserved.
+                content: list[dict] = [
+                    {"type": "text", "text": user_body},
+                    *self.user_images,
+                ]
+                messages.append(ChatMessage(role="user", content=content))
+            else:
+                messages.append(ChatMessage(role="user", content=user_body))
 
         # ------- hashes -------------------------------------------------
         rules_blob = sections.get("global_rules", "") + sections.get("project_rules", "")
