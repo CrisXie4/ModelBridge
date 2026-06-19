@@ -181,6 +181,7 @@ def run_interactive(
     on_turn_done: Callable[[], None] | None = None,
     timeout: float = 120.0,
     max_iters_per_turn: int = 20,
+    pending_images: dict[str, Any] | None = None,
 ) -> Session:
     """Run a persistent REPL until ``read_input`` raises EOFError.
 
@@ -265,7 +266,12 @@ def run_interactive(
 
         if on_user_echo is not None:
             on_user_echo(text)
-        session.add_user(text)
+        # Images staged by the REPL's mention handler (``@image`` / ``@paste``
+        # / inline URL) ride inline in this user turn, then the buffer clears.
+        imgs = (pending_images or {}).get("images") if pending_images else None
+        session.add_user(text, images=imgs or None)
+        if pending_images is not None:
+            pending_images["images"] = []
 
         try:
             result = run_agent_turn(

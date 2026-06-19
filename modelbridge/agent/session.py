@@ -45,8 +45,14 @@ class Session:
         # System messages live at the front of the list to keep them sticky.
         self.messages.insert(0, ChatMessage(role="system", content=content))
 
-    def add_user(self, content: str) -> None:
-        self.messages.append(ChatMessage(role="user", content=content))
+    def add_user(self, content: str, images: list[dict] | None = None) -> None:
+        if images:
+            # Multimodal turn: text first, then image_url blocks — one message
+            # the vision model reads as "picture + question together".
+            blocks = [{"type": "text", "text": content}, *images]
+            self.messages.append(ChatMessage(role="user", content=blocks))
+        else:
+            self.messages.append(ChatMessage(role="user", content=content))
 
     def add_assistant(self, resp: ChatResponse) -> None:
         """Append the assistant turn, preserving every field a provider needs.

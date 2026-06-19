@@ -645,23 +645,60 @@ def _run_repl(
             pass
         return console.input("[bold green]you ❯[/bold green] ")
 
-    def _apply_mentions(text: str) -> None:
-        from .agent.mentions import inject_file_mentions
+    # Images staged by @image / @paste / inline-URL for the *next* user turn;
+    # consumed (and cleared) by run_interactive when it builds the message.
+    pending_turn: dict[str, Any] = {"images": []}
+
+    def _apply_mentions(text: str) -> bool:
+        """注入文本附件 + 收集图像块到 pending_turn；带图但模型非 vision 时拦下本轮。
+
+        返回 True=可继续发送；False=被 vision 门禁拦下（read_input 改返回空串跳过）。
+        """
+        from .agent.mentions import (
+            collect_image_blocks,
+            inject_file_mentions,
+            resolve_mentions,
+        )
+        from .project.file_index import FileIndex
 
         index = _get_file_index()
-        if index is None:
-            return
-        resolved = inject_file_mentions(text, index, session, project_root=cwd_resolved)
-        if resolved.attachments:
+        if index is not None:
+            resolved = inject_file_mentions(text, index, session, project_root=cwd_resolved)
+        else:
+            # 无项目索引：@paste / 内联图片 URL 仍可用（不依赖文件索引）。
+            resolved = resolve_mentions(
+                text, FileIndex(root=cwd_resolved, entries=[]), project_root=cwd_resolved
+            )
+
+        text_atts = [a for a in resolved.attachments if a.kind != "image"]
+        if text_atts:
             names = "、".join(
-                a.relpath + ("/" if a.kind == "dir" else "") for a in resolved.attachments
+                a.relpath + ("/" if a.kind == "dir" else "") for a in text_atts
             )
             console.print(
-                f"[dim]📎 已把 {len(resolved.attachments)} 项作为上下文附加: {names}[/dim]"
+                f"[dim]📎 已把 {len(text_atts)} 项作为上下文附加: {names}[/dim]"
             )
         if resolved.unresolved:
             miss = "、".join(resolved.unresolved)
             console.print(f"[dim]· 未匹配的 @提及（按普通文字处理）: {miss}[/dim]")
+
+        img_blocks = collect_image_blocks(resolved)
+        if img_blocks:
+            entry = find_model(model_name)
+            try:
+                images.ensure_vision(
+                    has_images=True,
+                    model_is_vision=bool(getattr(entry.capabilities, "vision", False)) if entry else False,
+                    model_name=model_name or "(未指定)",
+                    available_vision=_vision_model_names(),
+                )
+            except images.ImageError as e:
+                console.print(f"[red]{e}[/red]")
+                pending_turn["images"] = []
+                return False
+            pending_turn["images"] = img_blocks
+            console.print(f"[dim]🖼 已内联 {len(img_blocks)} 张图片到本轮消息[/dim]")
+        return True
 
     def read_input() -> str:
         try:
@@ -685,7 +722,8 @@ def _run_repl(
         stripped = text.strip()
         if stripped and not stripped.startswith("/"):
             try:
-                _apply_mentions(text)
+                if not _apply_mentions(text):
+                    return ""  # vision 门禁拦下本轮：跳过这次输入
             except Exception:  # noqa: BLE001 — 提及解析绝不阻断输入
                 pass
         return text
@@ -854,6 +892,7 @@ def _run_repl(
             on_turn_done=on_turn_done,
             timeout=timeout,
             max_iters_per_turn=max_iters,
+            pending_images=pending_turn,
         )
     finally:
         if mcp_manager is not None:
