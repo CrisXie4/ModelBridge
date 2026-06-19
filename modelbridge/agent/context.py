@@ -55,6 +55,9 @@ class AgentContext:
     cwd: Path
     approve: ApprovalFn = field(default=auto_no)
     allow_bash: bool = False
+    # True when the active model has capabilities.vision — lets ``read_file``
+    # return an image as an image block (vs. a "binary image" text note).
+    model_is_vision: bool = False
     # Set by the browser side-panel host so browser tools can reach the page.
     # ``None`` in the CLI / REPL (no browser tools registered there).
     browser_bridge: BrowserBridge | None = None

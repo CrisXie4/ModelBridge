@@ -427,14 +427,13 @@ def _run_repl(
         raise typer.Exit(code=2) from e
 
     approval = _make_approval(yes=yes)
-    agent_ctx = AgentContext(
-        policy=policy, cwd=cwd_resolved, approve=approval, allow_bash=allow_bash,
-    )
     _repl_entry = find_model(model_name) if model_name else None
     _model_is_vision = bool(getattr(getattr(_repl_entry, "capabilities", None), "vision", False))
-    registry = build_default_registry(
-        include_bash=allow_bash, include_view_image=_model_is_vision
+    agent_ctx = AgentContext(
+        policy=policy, cwd=cwd_resolved, approve=approval, allow_bash=allow_bash,
+        model_is_vision=_model_is_vision,
     )
+    registry = build_default_registry(include_bash=allow_bash)
 
     # Browser tools are always available: the agent can read/operate the active
     # web page by relaying to the side-panel extension via the LocalBridge host.

@@ -140,12 +140,11 @@ session saved → ~/.modelbridge/sessions/2026-05-23_153012_repl_deepseek-chat.j
 
 | 工具 | 用途 | 需要确认 |
 |---|---|---|
-| `read_file(path)` | 读取文件 (200 KB 上限，超出截断) | 否 |
+| `read_file(path)` | 读取文件；**图片文件**在 vision 模型下直接作为图像识别 | 否 |
 | `list_dir(path)` | 列目录 (默认隐藏点文件) | 否 |
 | `write_file(path, content)` | 覆盖 / 创建文件 (500 KB 上限) | **是** |
 | `str_replace(path, old_str, new_str)` | 精确替换；要求 old_str 在文件中唯一出现 | **是** |
 | `run_bash(command)` | 执行 shell；默认 30s 超时；输出截断到 8 KB | **是** (且需 `--allow-bash` 启用) |
-| `view_image(path)` | 让 AI 主动加载一张本地图片来"看" | 否（仅 vision 模型下注册） |
 
 确认弹窗有三个选项：
 
@@ -166,6 +165,8 @@ session saved → ~/.modelbridge/sessions/2026-05-23_153012_repl_deepseek-chat.j
   ```
 - `@paste` — 从系统剪贴板抓截图（先 Win+Shift+S 截图，再 `@paste 这是什么报错`）。需要可选依赖：`pip install "modelbridge[vision]"`。
 - 直接把图片 URL 写进消息（`https://….png/.jpg/...`）会被自动识别。
+
+**AI 自己读图：** 在 `mbridge` 会话里，AI 用普通的 `read_file` 工具读到图片文件时，vision 模型会**直接看到图像**（无需单独的命令）；非 vision 模型则收到一句"这是图片、无法识别"的说明，而不是乱码。
 
 **单次（非交互）：**
 

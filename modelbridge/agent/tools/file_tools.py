@@ -13,6 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ... import images
+from ...schemas import ChatMessage
 from ..context import AgentContext
 from ..security import PathDenied
 from .base import Tool, ToolResult
@@ -64,6 +66,13 @@ class ReadFileTool(Tool):
         if resolved.is_dir():
             return self.err(f"{resolved} 是目录，请使用 list_dir。")
 
+        # Images: read them as *pictures*, not garbled text. A vision model
+        # gets the image as an image block (injected as a follow-up user
+        # message, since role=tool can't carry images); a non-vision model
+        # gets a clear note instead of decoded bytes.
+        if images.is_image_path(resolved.name):
+            return self._read_image(resolved, ctx)
+
         try:
             data = resolved.read_bytes()
         except OSError as e:
@@ -79,6 +88,32 @@ class ReadFileTool(Tool):
             )
 
         return self.ok(text, structured={"path": str(resolved), "bytes": len(data)})
+
+    def _read_image(self, resolved: Path, ctx: AgentContext) -> ToolResult:
+        if not getattr(ctx, "model_is_vision", False):
+            return self.ok(
+                f"[{resolved.name} 是图片文件，当前模型不支持 vision，无法识别图像内容。"
+                f"换一个 capabilities.vision=true 的模型再读。]",
+                structured={"path": str(resolved), "image": True, "vision": False},
+            )
+        try:
+            block = images.block_from_path(str(resolved))
+        except images.ImageError as e:
+            return self.err(str(e))
+        # role=tool can't carry an image; attach it as a follow-up user message
+        # the vision model reads next turn (ToolResult.extra_messages).
+        msg = ChatMessage(
+            role="user",
+            content=[
+                {"type": "text", "text": f"[read_file 加载的图片: {resolved.name}]"},
+                block,
+            ],
+        )
+        return ToolResult(
+            content=f"已加载图片 {resolved.name}，见下一条消息。",
+            structured={"path": str(resolved), "image": True, "vision": True},
+            extra_messages=[msg],
+        )
 
 
 # ---------------------------------------------------------------------------

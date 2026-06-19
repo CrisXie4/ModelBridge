@@ -57,7 +57,7 @@
 | 内联剪贴板截图 | REPL 消息里 `@paste 问题`（伪提及，复用同管道） | 系统剪贴板位图 → base64（Pillow，懒加载） |
 | 内联图片 URL | REPL 消息里出现 `https://….png/.jpg/...` 自动识别 | 远程 URL → 透传（不下载） |
 | 单次带图 | `mbridge ask --image <path\|url>`（可多次） | 本地→base64；URL→透传 |
-| AI 主动读图 | agent 工具 `view_image(path)` | 本地路径 → base64，经 PathPolicy 安全校验 |
+| AI 主动读图 | 主工具 `read_file(path)`（vision 模型直接看到图像） | 本地路径 → base64，经 PathPolicy 安全校验 |
 
 ---
 
@@ -143,7 +143,9 @@ def ensure_vision(entry, has_images: bool) -> None:
 
 > 回退路径（无 prompt_toolkit / 非 TTY）：`@文件`、`@paste`、URL 识别全部基于纯文本解析，与补全器无关，**回退读取器下同样可用**（只是没有 `@` 自动补全）。
 
-### 4.6 AI 读图：`view_image` 工具 + `ToolResult.extra_messages`
+### 4.6 AI 读图：主工具 `read_file` 直接读图 + `ToolResult.extra_messages`
+
+> **修订（2026-06-19，实现后）**：取消独立的 `view_image` 工具，改为让**主命令 `mbridge` 里既有的 `read_file` 工具**直接处理图片——AI 不需要学一个新命令，读图片就用 `read_file`。`read_file` 命中图片扩展名时：vision 模型 → 走下面的图像块注入；非 vision 模型 → 返回"这是图片、当前模型无法识别"的文字说明（不再吐乱码）。是否 vision 由 `AgentContext.model_is_vision`（REPL 构造时按当前模型 `capabilities.vision` 设置）决定。下文机制不变，仅触发入口从 `view_image` 改为 `read_file`。
 
 OpenAI 兼容 API 的 `role=tool` 消息**只能纯文本**，没法直接回图。机制：
 

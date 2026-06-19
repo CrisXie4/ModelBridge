@@ -52,16 +52,15 @@ class ToolRegistry:
             )
 
 
-def build_default_registry(
-    *, include_bash: bool = False, include_view_image: bool = False
-) -> ToolRegistry:
+def build_default_registry(*, include_bash: bool = False) -> ToolRegistry:
     """Default toolset: read/list always on; write/edit always on; bash opt-in.
 
     ``include_bash=False`` *also* removes the tool from the schema list sent
     to the model — keeping the model from even attempting it when disabled.
 
-    ``include_view_image`` registers the ``view_image`` tool — pass it only
-    when the active model is vision-capable (no point offering it otherwise).
+    Image reading is handled by ``read_file`` itself (it returns an image
+    block when the file is an image and the model is vision-capable), so there
+    is no separate image tool to register.
     """
     reg = ToolRegistry()
     reg.register(ReadFileTool())
@@ -70,10 +69,6 @@ def build_default_registry(
     reg.register(StrReplaceTool())
     if include_bash:
         reg.register(RunBashTool())
-    if include_view_image:
-        from .image_tools import ViewImageTool
-
-        reg.register(ViewImageTool())
     return reg
 
 
