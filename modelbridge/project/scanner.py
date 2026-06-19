@@ -46,6 +46,28 @@ SENSITIVE_FILE_PATTERNS: tuple[str, ...] = (
     "*credentials*",
     "secrets.yaml",
     "secrets.yml",
+    # Common credential / auth files — text, so the binary-skip won't catch
+    # them; without these @file (and the scanner) would read tokens verbatim.
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
+    ".pgpass",
+    ".htpasswd",
+    ".dockercfg",
+    "kubeconfig",
+    "*.kubeconfig",
+    "id_dsa",
+    "id_dsa.*",
+    "id_ecdsa",
+    "id_ecdsa.*",
+    "*.p12",
+    "*.pfx",
+    "*.jks",
+    "*.keystore",
+    "*.ppk",
+    "*.ovpn",
+    "*.gpg",
+    "secring.*",
 )
 
 #: Directories we never descend into (matched against directory basename).
