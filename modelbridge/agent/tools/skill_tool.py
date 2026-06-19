@@ -4,6 +4,9 @@ The tool looks up the skill via :func:`modelbridge.skills.discovery.find_skill`,
 asks the user for approval (``allow_always=True`` so one "always" click covers
 all future skill invocations in the session), and returns the skill's body
 on approval or an error result otherwise.
+
+The project root is injected at construction time (via ``project_path``), NOT
+asked of the model — the model has no knowledge of the filesystem layout.
 """
 
 from __future__ import annotations
@@ -15,13 +18,18 @@ from ...skills.discovery import find_skill
 from ..context import AgentContext
 from .base import Tool, ToolResult
 
+_MAX_SKILL_CHARS = 16_000
+
 
 class UseSkillTool(Tool):
     name = "use_skill"
     description = (
-        "加载并执行一个用户定义的 skill（skill 名 + 可选项目路径）。"
-        "执行前会请求用户确认；批准后返回 skill 的完整指令正文。"
+        "加载一个用户 skill 的完整指令到对话中（加载前会请求用户确认）。"
+        "name 取自系统提示里的「可用 Skills」索引。"
     )
+
+    def __init__(self, project_path: Path | str | None = None) -> None:
+        self._project_path = project_path
 
     def json_schema(self) -> dict[str, Any]:
         return {
@@ -29,11 +37,7 @@ class UseSkillTool(Tool):
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Skill 名称（与 SKILL.md 中 name 字段一致）。",
-                },
-                "project_path": {
-                    "type": "string",
-                    "description": "项目根目录路径（可选；不传时只查全局 skills）。",
+                    "description": "Skill 名称（与系统提示 skill 索引中的名称一致）。",
                 },
             },
             "required": ["name"],
@@ -47,17 +51,11 @@ class UseSkillTool(Tool):
 
         skill_name = skill_name.strip()
 
-        raw_project_path = args.get("project_path")
-        if raw_project_path is not None:
-            project_path: Path | None = Path(raw_project_path)
-        else:
-            project_path = None
-
-        skill = find_skill(skill_name, project_path=project_path)
+        skill = find_skill(skill_name, project_path=self._project_path)
         if skill is None:
             return self.err(
                 f"未找到 skill: {skill_name}",
-                hint="请用 `list_skills` 查看可用 skill，或检查 SKILL.md 是否存在且格式正确。",
+                hint="请用 `mbridge skill list` 查看可用 skill，或检查 SKILL.md 是否存在且格式正确。",
             )
 
         if not ctx.confirm(
@@ -68,8 +66,12 @@ class UseSkillTool(Tool):
         ):
             return self.err(f"用户拒绝加载 skill: {skill_name}")
 
+        body = skill.body
+        if len(body) > _MAX_SKILL_CHARS:
+            body = body[:_MAX_SKILL_CHARS] + "\n…[已截断]"
+
         return self.ok(
-            skill.body,
+            f"# Skill: {skill.name}\n\n{body}",
             structured={"skill_name": skill.name, "scope": skill.scope, "path": str(skill.path)},
         )
 

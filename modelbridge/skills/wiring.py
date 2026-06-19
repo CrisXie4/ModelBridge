@@ -30,7 +30,7 @@ def wire_skills(
     if not skills:
         return system_prompt
 
-    registry.register(UseSkillTool())
+    registry.register(UseSkillTool(project_path=project_path))
 
     index = build_skills_index(skills)
     return system_prompt + "\n\n" + index
