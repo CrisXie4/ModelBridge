@@ -16,6 +16,11 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
+# A single OpenAI-style content block, e.g. ``{"type": "text", "text": ...}``
+# or ``{"type": "image_url", "image_url": {"url": ...}}``.
+ContentBlock = dict[str, Any]
+
+
 # ---------------------------------------------------------------------------
 # Messages
 # ---------------------------------------------------------------------------
@@ -31,7 +36,11 @@ class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     role: str
-    content: str | None = None
+    # ``str`` for ordinary text turns; ``list[ContentBlock]`` for multimodal
+    # user turns (text + image_url blocks). Assistant *output*
+    # (:class:`ChatResponse.content`) stays ``str`` — only message *input*
+    # content widens here.
+    content: str | list[ContentBlock] | None = None
     name: str | None = None
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
@@ -56,6 +65,27 @@ class ChatMessage(BaseModel):
         if self.reasoning_content is not None:
             msg["reasoning_content"] = self.reasoning_content
         return msg
+
+
+def text_of(content: "str | list[ContentBlock] | None") -> str:
+    """Collapse message content to plain text.
+
+    ``str`` passes through; ``list`` joins its ``text`` blocks (space-separated)
+    and ignores image blocks; ``None`` becomes ``""``. Use this anywhere code
+    reads a :class:`ChatMessage`'s content as a string (token estimation, UI,
+    history rendering) now that content may be a multimodal list.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            t = block.get("text")
+            if isinstance(t, str) and t:
+                parts.append(t)
+    return " ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +210,9 @@ class ProviderError(Exception):
 
 
 __all__ = [
+    "ContentBlock",
     "ChatMessage",
+    "text_of",
     "ChatRequest",
     "ChatResponse",
     "ModelCapability",
