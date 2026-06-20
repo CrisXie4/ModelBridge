@@ -4,9 +4,43 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Atomic file writes
+# ---------------------------------------------------------------------------
+
+def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+    """Write ``text`` to ``path`` atomically (temp file in the same dir +
+    ``os.replace``).
+
+    A crash / Ctrl-C / power loss mid-write can never leave a truncated
+    file: a concurrent reader sees either the old content or the new, never
+    a torn half. ``os.replace`` is atomic on the same volume on both POSIX
+    and Windows. This matters for state files like ``budget.json`` whose
+    corruption would otherwise silently reset spend tracking and
+    ``hard_stop`` on the next load.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
 
 # ---------------------------------------------------------------------------
 # Paths

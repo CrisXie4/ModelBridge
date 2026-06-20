@@ -3,11 +3,25 @@
 
 from __future__ import annotations
 
+import pytest
+
 from modelbridge.providers.base import _StreamAccumulator
 
 
 def _acc():
     return _StreamAccumulator(provider="t", model_default="m")
+
+
+@pytest.mark.parametrize("chunk", [
+    {"choices": [None]},
+    {"choices": ["oops"]},
+    {"choices": [123]},
+    {"choices": "bad"},
+])
+def test_consume_tolerates_non_dict_choice(chunk):
+    # A malformed SSE chunk must not crash the stream with an AttributeError.
+    acc = _acc()
+    acc.consume(chunk)  # must not raise
 
 
 def test_consume_tolerates_non_numeric_index():

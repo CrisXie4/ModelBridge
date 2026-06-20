@@ -153,8 +153,8 @@ class BaseProvider(ABC):
         return m.to_wire()
 
     def parse_chat_response(self, data: dict[str, Any]) -> ChatResponse:
-        choices = data.get("choices") or []
-        if not choices:
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
             raise ProviderError(
                 "响应中没有 choices",
                 provider=self.name,
@@ -163,7 +163,21 @@ class BaseProvider(ABC):
                 raw=data,
             )
         choice = choices[0]
-        message = choice.get("message") or {}
+        if not isinstance(choice, dict):
+            # A 2xx body with valid JSON but a non-OpenAI shape (e.g.
+            # ``{"choices": ["err"]}`` or ``[null]``) must surface as an
+            # actionable decode error, not a raw KeyError/AttributeError
+            # crash that escapes the provider layer.
+            raise ProviderError(
+                "响应 choices[0] 不是对象",
+                provider=self.name,
+                error_type="decode",
+                hint="endpoint 可能不是 OpenAI-compatible。",
+                raw=data,
+            )
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            message = {}
         content = message.get("content")
         if not isinstance(content, str):
             content = "" if content is None else str(content)
@@ -442,9 +456,14 @@ class _StreamAccumulator:
             events.append(StreamEvent(kind="usage", usage=u))
 
         choices = chunk.get("choices") or []
-        if not choices:
+        if not isinstance(choices, list) or not choices:
             return events
         choice = choices[0]
+        if not isinstance(choice, dict):
+            # Tolerate a malformed SSE chunk (``{"choices": [null]}`` etc.)
+            # the same way non-dict tool-call entries are skipped below,
+            # instead of crashing the stream with an AttributeError.
+            return events
         delta = choice.get("delta") or {}
 
         if isinstance(delta.get("content"), str) and delta["content"]:

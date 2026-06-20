@@ -7,8 +7,13 @@ moves the secret off the YAML file:
   (Windows Credential Manager / macOS Keychain / Linux Secret Service).
   ``models.yaml`` then only holds the marker ``keyring:<name>``.
 * **Fernet (fallback)** — if keyring has no usable backend, symmetric-encrypt
-  with a machine-local key at ``~/.modelbridge/secret.key`` (chmod 600). The
-  YAML stores ``enc:<token>``.
+  with a machine-local key at ``~/.modelbridge/secret.key``. The YAML stores
+  ``enc:<token>``. The key file is created restricted to the current user
+  (POSIX: ``O_EXCL`` + mode ``0o600`` in one step; Windows: best-effort
+  ``icacls`` ACL tightening — ``chmod`` can't restrict NTFS ACLs there). On
+  Windows, if the ACL tightening fails the key inherits the user-profile
+  directory's ACL; prefer **keyring** or an env-var ``api_key`` reference for
+  the strongest at-rest protection.
 * **plaintext (last resort)** — if neither ``keyring`` nor ``cryptography`` is
   installed, the value is left as-is and a warning is logged. Nothing breaks;
   it's just no more secure than before.
@@ -22,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 
 from .utils import get_app_dir
 
@@ -77,17 +83,43 @@ def _fernet():
         if path.exists():
             key = path.read_bytes()
         else:
-            key = Fernet.generate_key()
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(key)
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass  # best-effort on platforms without POSIX perms
+            key = _create_key_private(path, Fernet.generate_key())
         return Fernet(key)
     except OSError as e:
         log.debug("fernet key io failed: %s", e)
         return None
+
+
+def _create_key_private(path, key: bytes) -> bytes:
+    """Create ``path`` containing ``key``, readable only by the current user.
+
+    Uses ``O_EXCL`` so the file is created (not truncated) in one step with
+    mode ``0o600`` — no world-readable window between write and chmod, and no
+    clobbering if another process won a concurrent first-create race (we
+    re-read the winner's key in that case). On Windows the mode bits are
+    largely ignored, so we additionally tighten the NTFS ACL via ``icacls``.
+    Returns the key actually persisted on disk.
+    """
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return path.read_bytes()
+    try:
+        os.write(fd, key)
+    finally:
+        os.close(fd)
+    if os.name == "nt":
+        user = os.environ.get("USERNAME") or ""
+        if user:
+            try:
+                subprocess.run(
+                    ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"],
+                    capture_output=True, timeout=5, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass  # best-effort; key still works, just with inherited ACL
+    return key
 
 
 def _fernet_encrypt(secret: str) -> str | None:

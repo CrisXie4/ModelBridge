@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import load_app_config
-from ..utils import get_app_dir, now_iso
+from ..utils import atomic_write_text, get_app_dir, now_iso
 
 CACHE_FILE_NAME = "cache.json"
 
@@ -132,11 +132,11 @@ def load_cache_stats() -> CacheStats:
 
 def save_cache_stats(stats: CacheStats) -> None:
     stats.last_updated = now_iso()
-    path = get_cache_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    # Atomic write so an interrupted save can't truncate cache.json (which
+    # load would then silently discard, losing cumulative hits/savings).
+    atomic_write_text(
+        get_cache_path(),
         json.dumps(stats.to_dict(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
 
 

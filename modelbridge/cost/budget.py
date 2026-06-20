@@ -26,12 +26,13 @@ that the CLI can surface as warnings (``warn`` / ``over_*``).
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..utils import get_app_dir, now_iso
+from ..utils import atomic_write_text, get_app_dir, now_iso
 
 BUDGET_FILE_NAME = "budget.json"
 
@@ -171,7 +172,21 @@ def load_budget() -> Budget:
         return Budget()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError:
+        return Budget()
+    except json.JSONDecodeError:
+        # A corrupt budget.json (e.g. a write interrupted before atomic
+        # writes landed) used to silently reset spend + limits + hard_stop.
+        # Preserve the bad file under .bad and warn, so a vanished hard_stop
+        # is visible rather than silent. Then start fresh.
+        try:
+            path.replace(path.with_suffix(".json.bad"))
+            logging.getLogger("modelbridge").warning(
+                "budget.json 损坏，已备份为 %s 并重置；之前的预算/限额可能已丢失。",
+                path.with_suffix(".json.bad"),
+            )
+        except OSError:
+            pass
         return Budget()
     if not isinstance(data, dict):
         return Budget()
@@ -181,11 +196,11 @@ def load_budget() -> Budget:
 
 
 def save_budget(b: Budget) -> None:
-    path = get_budget_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    # Atomic write: an interrupted save must never truncate budget.json
+    # (which load_budget would then treat as "no budget" → hard_stop gone).
+    atomic_write_text(
+        get_budget_path(),
         json.dumps(b.to_dict(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
 
 

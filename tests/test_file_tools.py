@@ -63,6 +63,40 @@ def test_read_blocked_sensitive_file_denied(tmp_path):
     assert "敏感" in res.content or "拒绝" in res.content
 
 
+def test_from_config_blocks_secrets_beyond_config_literals(tmp_path, monkeypatch):
+    """The agent REPL builds its policy via PathPolicy.from_config, whose
+    block list only has a few literals (.env / id_rsa / …). Regression for the
+    leak where read_file/write_file would happily read .env.local / *.pem /
+    .npmrc etc. — the policy must union the scanner's glob baseline so all
+    read/write paths refuse the same secrets that @file and `mbridge edit` do.
+    """
+    import pytest
+
+    import modelbridge.agent.security as sec
+    from modelbridge.models import AppConfig
+
+    cfg = AppConfig()  # default security.block_sensitive_files = no globs
+    monkeypatch.setattr(sec, "load_app_config", lambda: cfg)
+    policy = sec.PathPolicy.from_config(extra_cwd=tmp_path.resolve())
+
+    for name in (
+        ".env.local",
+        ".env.production",
+        "server.pem",
+        "deploy.key",
+        ".npmrc",
+        ".netrc",
+        "credentials.json",
+    ):
+        (tmp_path / name).write_text("secret", encoding="utf-8")
+        with pytest.raises(sec.PathDenied):
+            policy.resolve(name)
+
+    # A normal source file is still allowed.
+    (tmp_path / "main.py").write_text("print(1)", encoding="utf-8")
+    assert policy.resolve("main.py").name == "main.py"
+
+
 # --- list_dir ---------------------------------------------------------------
 
 def test_list_dir_hides_dotfiles_by_default(tmp_path):

@@ -56,8 +56,17 @@ class JsonRpcError:
 
     @classmethod
     def from_wire(cls, raw: dict[str, Any]) -> "JsonRpcError":
+        # ``code`` comes from an untrusted server. A non-numeric value
+        # (string / list / dict) must not raise a bare ValueError/TypeError
+        # here — that would escape the decode path (which only wraps
+        # JSONDecodeError) and crash the whole connect_all loop, killing
+        # every sibling server's session. Coerce defensively instead.
+        try:
+            code = int(raw.get("code", 0))
+        except (TypeError, ValueError):
+            code = -32603  # JSON-RPC INTERNAL_ERROR
         return cls(
-            code=int(raw.get("code", 0)),
+            code=code,
             message=str(raw.get("message", "")),
             data=raw.get("data"),
         )

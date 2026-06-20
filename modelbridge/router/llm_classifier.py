@@ -191,6 +191,17 @@ def classify_task_llm(
         reasons.append(f"上下文 tokens 较大 ({context_tokens})")
         level = max(level, ModelLevel.AGENT, key=_LEVEL_ORDER.index)
         complexity = "hard"
+    if risk_level == "high":
+        # Mirror the keyword classifier's deliberate security floor: a
+        # high-risk request must never route below expert. We also pin
+        # task_type to security_review so router.apply_mode's "economy never
+        # drops security below expert" rule (which keys on task_type, not
+        # risk_level) actually holds — otherwise economy could still shift
+        # it down a notch despite the floor.
+        reasons.append("risk_level=high → 安全下限 expert")
+        level = max(level, ModelLevel.EXPERT, key=_LEVEL_ORDER.index)
+        if task_type != "security_review":
+            task_type = "security_review"
     if previous_failures >= 2:
         reasons.append(f"previous_failures={previous_failures} → expert")
         level = ModelLevel.EXPERT

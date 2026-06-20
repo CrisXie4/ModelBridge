@@ -18,8 +18,9 @@ Both return *names*, not provider instances — the caller can then
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
-from ..config import find_model, load_app_config
+from ..config import load_app_config, load_models_file
 from ..models import ModelLevel
 
 
@@ -58,6 +59,9 @@ def resolve_with_fallback(level: ModelLevel) -> FallbackResult:
     """
     cfg = load_app_config()
     levels_map = cfg.routing.levels.model_dump()
+    # Load models.yaml once and resolve candidates in memory — find_model()
+    # would re-read + re-validate the whole file for every level on the chain.
+    models_by_name = {m.name: m for m in load_models_file().models}
 
     chain: list[tuple[ModelLevel | None, str | None, str]] = []
 
@@ -68,14 +72,14 @@ def resolve_with_fallback(level: ModelLevel) -> FallbackResult:
         if not candidate:
             chain.append((cur, None, "未在 routing.levels 中配置"))
             continue
-        if find_model(candidate) is None:
+        if candidate not in models_by_name:
             chain.append((cur, candidate, "未在 models.yaml 中找到"))
             continue
         chain.append((cur, candidate, "OK"))
         return FallbackResult(chosen_model=candidate, chosen_level=cur, chain=chain)
 
     # Last resort — default_model.
-    if cfg.default_model and find_model(cfg.default_model):
+    if cfg.default_model and cfg.default_model in models_by_name:
         chain.append((None, cfg.default_model, "default_model 兜底"))
         return FallbackResult(
             chosen_model=cfg.default_model, chosen_level=None, chain=chain
@@ -116,9 +120,10 @@ class EscalationResult:
         return self.step.to_level
 
 
-def _config_fallback_enabled() -> bool:
+def _config_fallback_enabled(cfg: Any = None) -> bool:
     try:
-        cfg = load_app_config()
+        if cfg is None:
+            cfg = load_app_config()
         fb = getattr(cfg.routing, "fallback", None)
         if fb is None:
             return True
@@ -127,9 +132,10 @@ def _config_fallback_enabled() -> bool:
         return True
 
 
-def _max_upgrade_steps() -> int:
+def _max_upgrade_steps(cfg: Any = None) -> int:
     try:
-        cfg = load_app_config()
+        if cfg is None:
+            cfg = load_app_config()
         fb = getattr(cfg.routing, "fallback", None)
         if fb is None:
             return 2
@@ -150,8 +156,14 @@ def escalate_after_failure(
     this turn (so a caller looping over failures stays within
     ``max_upgrade_steps``).
     """
-    enabled = _config_fallback_enabled()
-    max_steps = _max_upgrade_steps()
+    # Load config once and reuse it for both the enabled / max-steps checks
+    # and the level map below (was three separate load_app_config() calls).
+    try:
+        cfg = load_app_config()
+    except Exception:  # noqa: BLE001 — helpers below fall back to defaults
+        cfg = None
+    enabled = _config_fallback_enabled(cfg)
+    max_steps = _max_upgrade_steps(cfg)
 
     if not enabled:
         return EscalationResult(
@@ -176,8 +188,10 @@ def escalate_after_failure(
             ),
         )
 
-    cfg = load_app_config()
+    if cfg is None:
+        cfg = load_app_config()  # config genuinely unreadable → surface it
     levels_map = cfg.routing.levels.model_dump()
+    models_by_name = {m.name: m for m in load_models_file().models}
 
     chain: list[EscalationStep] = []
 
@@ -198,7 +212,7 @@ def escalate_after_failure(
                 note="未在 routing.levels 中配置，跳过",
             ))
             continue
-        if find_model(candidate) is None:
+        if candidate not in models_by_name:
             chain.append(EscalationStep(
                 from_level=current_level,
                 to_level=cur,

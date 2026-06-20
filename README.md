@@ -12,6 +12,21 @@
 
 ---
 
+## 💛 赞助 · Sponsor
+
+本项目由 **[6哥 API（6geapi.com）](https://6geapi.com)** 友情赞助，特此鸣谢 🙏
+
+> **6哥 API —— 一站式 AI 大模型中转站（API 聚合中转）。**
+> 一个 **OpenAI 兼容**接口、一个 **API Key**，即可统一调用 GPT / Claude / Gemini / DeepSeek / Qwen / GLM / Kimi 等海内外主流大模型：国内直连、稳定低延迟、按量计费，不必逐家注册充值。
+>
+> 用 ModelBridge 把国产模型接进你的工作流，用 6哥 API 一站拿齐所有模型的 Key —— 省心、省事、省钱。
+>
+> 👉 注册与文档：**<https://6geapi.com>**
+
+感谢 6 哥对开源的支持！如果 ModelBridge 帮到了你，也欢迎去 [6geapi.com](https://6geapi.com) 看看。
+
+---
+
 ## 命令一览
 
 ```

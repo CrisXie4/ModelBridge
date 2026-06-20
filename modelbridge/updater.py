@@ -276,21 +276,47 @@ def download_asset(
     Raises on network/IO error so the caller can fall back to the release
     page.
     """
-    dest = download_dir() / asset.name
+    # Sanitise the asset name to a bare basename — never trust the Releases
+    # API to keep it path-free. A name containing '/', '\\', '..' or a drive
+    # letter must not let the write escape the downloads dir.
+    safe = Path(asset.name).name
+    if not safe or safe in (".", ".."):
+        raise ValueError(f"unsafe asset name: {asset.name!r}")
+    ddir = download_dir().resolve()
+    dest = ddir / safe
+    if not _is_within(dest, ddir):
+        raise ValueError(f"asset would escape download dir: {asset.name!r}")
     tmp = dest.with_name(dest.name + ".part")
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-        with client.stream("GET", asset.url) as r:
-            r.raise_for_status()
-            total = int(r.headers.get("Content-Length") or asset.size or 0)
-            done = 0
-            with open(tmp, "wb") as f:
-                for chunk in r.iter_bytes(chunk_size=65536):
-                    f.write(chunk)
-                    done += len(chunk)
-                    if progress is not None:
-                        progress(done, total)
-    tmp.replace(dest)
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            with client.stream("GET", asset.url) as r:
+                r.raise_for_status()
+                total = int(r.headers.get("Content-Length") or asset.size or 0)
+                done = 0
+                with open(tmp, "wb") as f:
+                    for chunk in r.iter_bytes(chunk_size=65536):
+                        f.write(chunk)
+                        done += len(chunk)
+                        if progress is not None:
+                            progress(done, total)
+        tmp.replace(dest)
+    except BaseException:
+        # Network error / timeout / Ctrl-C mid-stream: don't leave a partial
+        # .part file behind to accumulate or masquerade as a finished download.
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
     return dest
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root)
+        return True
+    except (ValueError, OSError):
+        return False
 
 
 # ---------------------------------------------------------------------------

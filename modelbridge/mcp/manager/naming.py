@@ -27,12 +27,15 @@ def qualify(server_id: str, name: str) -> str:
 
 
 def split_qualified(qualified: str) -> tuple[str, str] | None:
-    """Inverse of :func:`qualify` on the *sanitised* server_id.
+    """Split a qualified name into ``(sanitised_server_part, name_part)``.
 
-    Returns ``(server_id_part, name_part)`` or ``None`` if unqualified. Because
-    sanitisation isn't reversible, the manager resolves the real server_id by
-    matching the prefix against its registered (sanitised) ids — see
-    :meth:`Catalog.resolve_tool`.
+    Returns ``None`` if unqualified. This is a **display/diagnostic helper
+    only** — it is *not* used for dispatch. Actual resolution is a direct
+    dict lookup on the full qualified name (see :meth:`Catalog.resolve_tool`
+    / ``_tool_index``), which is exact and needs no prefix de-sanitisation.
+    Because ``sanitize`` is not reversible, prefix matching could be
+    ambiguous; :meth:`Catalog.add_server` instead *rejects* two server ids
+    whose sanitised prefixes collide, keeping qualified names unique.
     """
     if SEP not in qualified:
         return None

@@ -1,5 +1,7 @@
 # tests/test_bash_tool_encoding.py
-"""run_bash must decode subprocess output as UTF-8 (Windows pipes default to GBK)."""
+"""run_bash delegates to the hardened runner and passes its decoded output
+through unchanged. (Decode-fallback itself is covered by
+test_runner_encoding.py; here we pin the tool's contract.)"""
 
 from __future__ import annotations
 
@@ -7,13 +9,7 @@ from modelbridge.agent.context import AgentContext, auto_yes
 from modelbridge.agent.security import PathPolicy
 from modelbridge.agent.tools import bash_tool as bash_mod
 from modelbridge.agent.tools.bash_tool import RunBashTool
-
-
-class _FakeCompleted:
-    def __init__(self, stdout="ok", stderr="", returncode=0):
-        self.stdout = stdout
-        self.stderr = stderr
-        self.returncode = returncode
+from modelbridge.executor.runner import CommandResult
 
 
 def _ctx(tmp_path):
@@ -23,9 +19,21 @@ def _ctx(tmp_path):
     )
 
 
-def _patch(monkeypatch, fake_run):
-    monkeypatch.setattr(bash_mod.subprocess, "run", fake_run)
-    # Decouple from the command allowlist — this test is only about encoding.
+def _result(stdout="ok", stderr="", exit_code=0, truncated=False, timed_out=False):
+    return CommandResult(
+        command="x",
+        stdout=stdout,
+        stderr=stderr,
+        exit_code=exit_code,
+        duration_ms=1,
+        truncated=truncated,
+        timed_out=timed_out,
+    )
+
+
+def _patch(monkeypatch, result):
+    monkeypatch.setattr(bash_mod, "run_command", lambda *a, **k: result)
+    # Decouple from the command allowlist — these tests are about output handling.
     monkeypatch.setattr(
         bash_mod.CommandPolicy,
         "from_config",
@@ -33,28 +41,27 @@ def _patch(monkeypatch, fake_run):
     )
 
 
-def test_bash_tool_runs_subprocess_as_utf8(tmp_path, monkeypatch):
-    captured = {}
-
-    def fake_run(command, **kwargs):
-        captured.update(kwargs)
-        return _FakeCompleted()
-
-    _patch(monkeypatch, fake_run)
+def test_bash_tool_passes_decoded_output_through(tmp_path, monkeypatch):
+    # Non-ASCII (CJK) output must arrive intact, not mangled.
+    _patch(monkeypatch, _result(stdout="构建成功 好的"))
     res = RunBashTool().execute({"command": "echo hi"}, _ctx(tmp_path))
 
     assert not res.is_error
-    assert captured.get("encoding") == "utf-8"
-    assert captured.get("errors") == "replace"
+    assert "构建成功 好的" in res.content
+    assert res.structured["exit"] == 0
+
+
+def test_bash_tool_reports_timeout(tmp_path, monkeypatch):
+    _patch(monkeypatch, _result(timed_out=True, exit_code=-1))
+    res = RunBashTool().execute({"command": "sleep 999"}, _ctx(tmp_path))
+
+    assert res.is_error
+    assert "超时" in res.content
 
 
 def test_bash_tool_truncation_message_uses_chars_not_bytes(tmp_path, monkeypatch):
     long_stdout = "好" * 9000  # > _MAX_OUTPUT (8000) characters
-
-    def fake_run(command, **kwargs):
-        return _FakeCompleted(stdout=long_stdout)
-
-    _patch(monkeypatch, fake_run)
+    _patch(monkeypatch, _result(stdout=long_stdout, truncated=True))
     res = RunBashTool().execute({"command": "echo hi"}, _ctx(tmp_path))
 
     assert res.structured["truncated"] is True

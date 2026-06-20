@@ -11,7 +11,13 @@ We pass the command verbatim to the platform shell (``cmd`` on Windows,
   path would be strictly more dangerous than the human one.
 * Every invocation calls ``ctx.confirm`` (with ``allow_always=False`` so a
   one-off "always" can't silently arm future shell execution).
-* Output is truncated to 8 KB combined stdout+stderr.
+* Execution goes through :func:`modelbridge.executor.runner.run_command`,
+  the same hardened runner as ``mbridge run``: on timeout it kills the
+  **whole process tree** (``taskkill /F /T`` on Windows / ``killpg`` on
+  POSIX), so a long-running grandchild of ``cmd.exe`` can't keep the pipes
+  open and hang the call / leak an orphan process. It also decodes output
+  with a UTF-8→locale→GBK fallback.
+* Output is truncated to 8000 characters combined stdout+stderr.
 * Working directory comes from ``ctx.cwd``.
 * ``timeout`` defaults to 30 s, capped at 120 s.
 
@@ -20,10 +26,10 @@ If you need real isolation, run mbridge inside a container yourself.
 
 from __future__ import annotations
 
-import subprocess
 from typing import Any
 
 from ...executor.command_validator import CommandPolicy, CommandRejected
+from ...executor.runner import run_command
 from ..context import AgentContext
 from .base import Tool, ToolResult
 
@@ -37,7 +43,7 @@ class RunBashTool(Tool):
     name = "run_bash"
     description = (
         "在项目 cwd 内执行一条 shell 命令。"
-        "默认 30 秒超时；输出截断到 8KB。每次调用都会请求用户确认。"
+        "默认 30 秒超时；输出截断到 8000 字符。每次调用都会请求用户确认。"
         "只有 mbridge 启动时加了 --allow-bash 才会启用此工具。"
     )
 
@@ -93,32 +99,27 @@ class RunBashTool(Tool):
             return self.err("用户拒绝执行命令。")
 
         try:
-            proc = subprocess.run(
+            res = run_command(
                 command,
-                shell=True,
-                cwd=str(ctx.cwd),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
+                cwd=ctx.cwd,
                 timeout=timeout,
-                # On Windows, subprocess uses cmd.exe with shell=True; on POSIX /bin/sh.
-                check=False,
+                max_output=_MAX_OUTPUT,
             )
-        except subprocess.TimeoutExpired:
-            return self.err(f"命令超时 ({timeout:.0f}s) 被终止。")
         except OSError as e:
             return self.err(f"无法启动 shell: {e}")
 
-        stdout = proc.stdout or ""
-        stderr = proc.stderr or ""
+        if res.timed_out:
+            return self.err(f"命令超时 ({timeout:.0f}s) 被终止。")
+
+        stdout = res.stdout
+        stderr = res.stderr
         combined = stdout + (("\n--- stderr ---\n" + stderr) if stderr.strip() else "")
-        truncated = False
+        truncated = res.truncated
         if len(combined) > _MAX_OUTPUT:
             combined = combined[:_MAX_OUTPUT]
             truncated = True
 
-        header = f"[exit={proc.returncode}]"
+        header = f"[exit={res.exit_code}]"
         body = combined.rstrip()
         if truncated:
             body += f"\n\n[... 输出超过 {_MAX_OUTPUT} 字符已截断 ...]"
@@ -128,7 +129,7 @@ class RunBashTool(Tool):
             result,
             structured={
                 "command": command,
-                "exit": proc.returncode,
+                "exit": res.exit_code,
                 "stdout_len": len(stdout),
                 "stderr_len": len(stderr),
                 "truncated": truncated,

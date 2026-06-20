@@ -75,6 +75,26 @@ def test_delete_file(tmp_path):
     assert not (tmp_path / "old.py").exists()
 
 
+def test_delete_with_empty_hunk_body_is_refused(tmp_path):
+    # A deletion diff whose hunk carries no removed/context lines gives the
+    # applier nothing to verify the content against — it must refuse rather
+    # than blindly unlink a file it never matched.
+    (tmp_path / "keep.py").write_text("important = 1\n", encoding="utf-8")
+    diff = "--- a/keep.py\n+++ /dev/null\n@@ -1,1 +0,0 @@\n"
+    res = _apply(diff, tmp_path)
+    assert res.any_failure
+    assert (tmp_path / "keep.py").exists()  # NOT deleted
+
+
+def test_delete_with_mismatched_content_is_refused(tmp_path):
+    # The classic guard: removed lines that don't match the file are refused.
+    (tmp_path / "old.py").write_text("real\ncontent\n", encoding="utf-8")
+    diff = "--- a/old.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-wrong\n-lines\n"
+    res = _apply(diff, tmp_path)
+    assert res.any_failure
+    assert (tmp_path / "old.py").exists()
+
+
 def test_conflict_refuses_and_leaves_file_untouched(tmp_path):
     (tmp_path / "f.py").write_text("a = 1\n", encoding="utf-8")
     diff = (

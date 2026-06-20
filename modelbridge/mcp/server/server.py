@@ -18,7 +18,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from ..protocol.capabilities import KNOWN_VERSIONS, PROTOCOL_VERSION
-from ..protocol.codec import INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, PARSE_ERROR
+from ..protocol.codec import (
+    INTERNAL_ERROR,
+    INVALID_PARAMS,
+    INVALID_REQUEST,
+    METHOD_NOT_FOUND,
+)
 
 ToolFn = Callable[[dict[str, Any]], str]
 
@@ -55,7 +60,10 @@ class MCPServer:
                 self.initialized = True
             return None
         if not isinstance(method, str):
-            return _error(msg_id, PARSE_ERROR, "缺少 method")
+            # The frame parsed as JSON fine; an absent/non-string ``method``
+            # is an Invalid Request (-32600), not a Parse error (-32700,
+            # reserved for input that isn't valid JSON at all).
+            return _error(msg_id, INVALID_REQUEST, "缺少 method 或 method 不是字符串")
 
         try:
             if method == "initialize":

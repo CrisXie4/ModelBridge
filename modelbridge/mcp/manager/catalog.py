@@ -43,7 +43,8 @@ class Catalog:
     # qualified_name -> (server_id, raw_name)
     _tool_index: dict[str, tuple[str, str]] = field(default_factory=dict)
     _prompt_index: dict[str, tuple[str, str]] = field(default_factory=dict)
-    # sanitised server_id -> real server_id (to invert namespacing)
+    # sanitised server_id -> real server_id. Used to detect prefix collisions
+    # (two distinct ids that sanitise to the same qualified-name prefix).
     _server_alias: dict[str, str] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
@@ -55,7 +56,23 @@ class Catalog:
         resources: list[MCPResource],
         prompts: list[MCPPrompt],
     ) -> None:
-        self._server_alias[sanitize(server_id)] = server_id
+        # Guard the namespacing prefix itself: distinct server ids that
+        # differ only in characters sanitize() collapses (``foo.bar`` /
+        # ``foo bar`` / ``foo/bar`` all → ``foo_bar``) would produce
+        # identical qualified names, silently shadowing each other's tools
+        # (or worse, routing one server's calls to another by config order).
+        # Refuse loudly instead of dropping tools one warning at a time.
+        prefix = sanitize(server_id)
+        existing = self._server_alias.get(prefix)
+        if existing is not None and existing != server_id:
+            mcp_logger().error(
+                "mcp.catalog server-id prefix collision: %r and %r both "
+                "sanitise to %r; rename one (ids may differ only in "
+                "[a-zA-Z0-9_-]). Skipping %r.",
+                existing, server_id, prefix, server_id,
+            )
+            return
+        self._server_alias[prefix] = server_id
         for t in tools:
             qn = qualify(server_id, t.name)
             if qn in self._tool_index:

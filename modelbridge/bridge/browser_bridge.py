@@ -55,10 +55,15 @@ class BrowserBridge:
     def _await(
         self, rid: str, frame: dict[str, Any], timeout: float, send: SendFn
     ) -> dict[str, Any] | None:
-        if self._cancelled.is_set():
-            return None
         event = threading.Event()
+        # Check-cancel and register atomically under the same lock that
+        # cancel() takes. Otherwise a cancel() landing between an unlocked
+        # pre-check and registration would set _cancelled but not find this
+        # rid in _pending, so the worker would block for the full timeout
+        # (up to 5 min) instead of aborting promptly.
         with self._lock:
+            if self._cancelled.is_set():
+                return None
             self._pending[rid] = {"event": event, "msg": None}
         send(frame)
         got = event.wait(timeout)

@@ -5,7 +5,11 @@ This is a thin wrapper over :func:`subprocess.Popen` that:
 * locks the working directory to a caller-supplied ``cwd``;
 * enforces a wall-clock timeout (default 30 s);
 * captures stdout and stderr separately;
-* truncates output to ``max_output`` bytes total (8 KB by default,
+* decodes child output with a **UTF-8 → OS-locale → GBK** fallback so
+  tools that print in the Windows console code page (cp936/GBK on
+  Chinese Windows) aren't mangled into ``�`` by a hard-coded UTF-8
+  decode (only ``errors="replace"`` as a last resort);
+* truncates output to ``max_output`` characters total (8 KB by default,
   matching ``agent.tools.bash_tool``);
 * measures elapsed time so the CLI can show it;
 * on timeout, kills the **whole process tree** — without this, on
@@ -22,6 +26,7 @@ fix`` / ``mbridge loop`` paths.
 
 from __future__ import annotations
 
+import locale
 import os
 import subprocess
 import sys
@@ -31,6 +36,32 @@ from pathlib import Path
 
 
 _IS_WINDOWS = sys.platform == "win32"
+
+
+def _decode_child(raw: bytes) -> str:
+    """Decode child-process output bytes, tolerant of the OS code page.
+
+    Order: UTF-8 (so UTF-8 tools and mbridge-spawned output stay exact) →
+    the OS preferred encoding (cp936/GBK on Chinese Windows) → GBK
+    explicitly (so cp936 output still decodes even when mbridge itself
+    runs in a UTF-8 locale) → UTF-8 with ``errors="replace"`` as a last
+    resort. UTF-8 is tried first, so genuinely-UTF-8 text never falls
+    through to a lossy code-page guess.
+    """
+    if not raw:
+        return ""
+    encs: list[str] = ["utf-8"]
+    pref = locale.getpreferredencoding(False)
+    if pref and pref.lower() not in ("utf-8", "utf8"):
+        encs.append(pref)
+    if not any(e.lower() == "gbk" for e in encs):
+        encs.append("gbk")
+    for enc in encs:
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", errors="replace")
 
 
 @dataclass
@@ -68,21 +99,21 @@ def run_command(
         Wall-clock cap in seconds. On expiry the process tree is
         killed; the result has ``timed_out=True`` and ``exit_code=-1``.
     max_output:
-        Total stdout+stderr ceiling. Each stream is independently
-        truncated to ``max_output // 2`` so a noisy stderr cannot crowd
-        out the actual error message in stdout.
+        Total stdout+stderr ceiling, in characters. Each stream is
+        independently truncated to ``max_output // 2`` so a noisy stderr
+        cannot crowd out the actual error message in stdout.
     """
     start = time.perf_counter()
     timed_out = False
 
+    # Capture raw bytes (no text/encoding) so we can apply our own
+    # locale-tolerant decode; a hard-coded UTF-8 decode mangles cp936/GBK
+    # tool output on Chinese Windows.
     popen_kwargs: dict = dict(
         cwd=str(cwd),
         shell=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
     )
     if _IS_WINDOWS:
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]  # Windows-only
@@ -91,28 +122,31 @@ def run_command(
 
     proc = subprocess.Popen(command, **popen_kwargs)
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
+        raw_out, raw_err = proc.communicate(timeout=timeout)
         exit_code = proc.returncode
     except subprocess.TimeoutExpired:
         timed_out = True
         _kill_tree(proc)
         try:
-            stdout, stderr = proc.communicate(timeout=5)
+            raw_out, raw_err = proc.communicate(timeout=5)
         except subprocess.TimeoutExpired:
-            stdout, stderr = "", ""
-        stderr = (stderr or "").rstrip()
-        stderr = (stderr + f"\n[timeout after {timeout:.0f}s]").lstrip("\n")
+            raw_out, raw_err = b"", b""
         exit_code = -1
+
+    stdout = _decode_child(raw_out)
+    stderr = _decode_child(raw_err)
+    if timed_out:
+        stderr = (stderr.rstrip() + f"\n[timeout after {timeout:.0f}s]").lstrip("\n")
 
     duration_ms = int((time.perf_counter() - start) * 1000)
 
     half = max(0, max_output // 2)
     truncated = False
     if stdout and len(stdout) > half:
-        stdout = stdout[:half] + f"\n[... stdout truncated at {half} bytes ...]"
+        stdout = stdout[:half] + f"\n[... stdout truncated at {half} chars ...]"
         truncated = True
     if stderr and len(stderr) > half:
-        stderr = stderr[:half] + f"\n[... stderr truncated at {half} bytes ...]"
+        stderr = stderr[:half] + f"\n[... stderr truncated at {half} chars ...]"
         truncated = True
 
     return CommandResult(

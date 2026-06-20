@@ -214,6 +214,20 @@ class StdioTransport(Transport):
             self._kill_tree(proc)
         except OSError:
             pass
+        # Unblock and reap the reader threads so repeated reconnects don't
+        # leak them. Closing the child's read pipes forces a blocked
+        # ``for line in stdout`` to raise OSError/ValueError, which the pump
+        # loops already swallow — this handles the case where a surviving
+        # grandchild kept the write end open past the tree-kill.
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None:
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
+        for t in (self._reader, self._stderr_reader):
+            if t is not None and t.is_alive():
+                t.join(timeout=1)
         log_lifecycle(self.server_id, "closed")
 
     # ------------------------------------------------------------------

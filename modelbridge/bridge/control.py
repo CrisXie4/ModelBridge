@@ -165,42 +165,57 @@ class ControlServer(threading.Thread):
                     pass
 
         try:
-            first = P.read_message(stream)
-        except P.ProtocolError:
-            conn.close()
-            return
-        if not first or first.get("type") != P.T_AUTH or first.get("token") != self._token:
-            send(P.error(id=None, message="auth failed"))
-            conn.close()
-            return
-
-        # Acknowledge with the same ready payload the panel gets.
-        send(self._host._ready_message())
-
-        # The agent runs in the external `mbridge` process; this server is a
-        # pure relay for single browser-tool execs. Each `exec` runs in a thread
-        # so this reader stays free to receive the tool_result the relay blocks
-        # on (which arrives from the *extension* over stdin, not this socket).
-        while not self._stopped.is_set():
             try:
-                msg = P.read_message(stream)
-            except P.ProtocolError as e:
-                send(P.error(id=None, message=f"protocol error: {e}"))
-                continue
-            if msg is None:
-                break
-            if msg.get("type") == P.T_EXEC:
-                threading.Thread(
-                    target=self._do_exec, args=(msg, send), daemon=True
-                ).start()
-            elif msg.get("type") == P.T_CANCEL:
-                router = self._host.pending_router
-                if router is not None:
-                    router.cancel()
-        try:
-            conn.close()
-        except OSError:
-            pass
+                first = P.read_message(stream)
+            except P.ProtocolError:
+                return
+            # Constant-time token compare (defence-in-depth; the server is
+            # loopback-only). str(...) coercion keeps both operands str so
+            # compare_digest can't raise on a missing/non-string token.
+            if (
+                not first
+                or first.get("type") != P.T_AUTH
+                or not secrets.compare_digest(
+                    str(first.get("token") or ""), str(self._token)
+                )
+            ):
+                send(P.error(id=None, message="auth failed"))
+                return
+
+            # Acknowledge with the same ready payload the panel gets.
+            send(self._host._ready_message())
+
+            # The agent runs in the external `mbridge` process; this server is a
+            # pure relay for single browser-tool execs. Each `exec` runs in a
+            # thread so this reader stays free to receive the tool_result the
+            # relay blocks on (arrives from the *extension* over stdin).
+            while not self._stopped.is_set():
+                try:
+                    msg = P.read_message(stream)
+                except P.ProtocolError as e:
+                    send(P.error(id=None, message=f"protocol error: {e}"))
+                    continue
+                if msg is None:
+                    break
+                if msg.get("type") == P.T_EXEC:
+                    threading.Thread(
+                        target=self._do_exec, args=(msg, send), daemon=True
+                    ).start()
+                elif msg.get("type") == P.T_CANCEL:
+                    router = self._host.pending_router
+                    if router is not None:
+                        router.cancel()
+        finally:
+            # Close the buffered stream (releases its io refs → closes the
+            # socket fd); the explicit conn.close() is then a harmless no-op.
+            try:
+                stream.close()
+            except OSError:
+                pass
+            try:
+                conn.close()
+            except OSError:
+                pass
 
     def _do_exec(self, msg: dict[str, Any], send) -> None:
         rid = msg.get("id")

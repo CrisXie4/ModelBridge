@@ -213,16 +213,24 @@ class MCPClientSession:
         """
         if self.state == SessionState.CLOSED:
             raise MCPError("session 已关闭，无法重连", server_id=self.server_id)
-        try:
-            self.transport.close()
-        except Exception:  # noqa: BLE001 — old channel may be half-dead
-            pass
-        self._set_state(SessionState.FAILED)
-        self.transport = build_transport(self.cfg)
-        self.handshake = None
-        self.dirty.clear()
-        log_lifecycle(self.server_id, "reconnecting")
-        return self.connect()
+        # Swap the transport under _rpc_lock so it is mutually exclusive with
+        # any in-flight _call's send/receive. Otherwise the heartbeat thread
+        # (which calls reconnect() after a failed ping, *outside* the ping's
+        # own lock hold) could close/replace self.transport while an agent
+        # thread is blocked in receive() on the old one — its request goes to
+        # the dead channel and its response never arrives. _rpc_lock is an
+        # RLock, so the nested connect()→_call() re-acquisition is fine.
+        with self._rpc_lock:
+            try:
+                self.transport.close()
+            except Exception:  # noqa: BLE001 — old channel may be half-dead
+                pass
+            self._set_state(SessionState.FAILED)
+            self.transport = build_transport(self.cfg)
+            self.handshake = None
+            self.dirty.clear()
+            log_lifecycle(self.server_id, "reconnecting")
+            return self.connect()
 
     def ping(self, *, timeout: float | None = None) -> None:
         """MCP ``ping`` — raises on a dead/unresponsive server (M5 heartbeat)."""

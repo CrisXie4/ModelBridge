@@ -96,12 +96,11 @@ _DEFAULT_DENY_SUBSTRINGS: tuple[str, ...] = (
 
 _FORBIDDEN_METACHARS: tuple[str, ...] = (
     ";",
-    "&",        # cmd.exe unconditional separator *and* POSIX background; also
-                #   covers "&&" below. Without it, `python -c pass & curl evil`
-                #   smuggles a second command past the first-token allowlist.
-    "&&",
-    "||",
-    "|",
+    "&",        # cmd.exe unconditional separator *and* POSIX background.
+                #   Substring matches also cover "&&". Without it,
+                #   `python -c pass & curl evil` smuggles a second command
+                #   past the first-token allowlist.
+    "|",        # substring match also covers "||".
     "`",
     "$(",
     ">",
@@ -151,7 +150,9 @@ class CommandPolicy:
             if ch in command:
                 raise CommandRejected(
                     f"禁止复合命令 / 重定向 (检测到 {ch!r})。"
-                    "执行器只允许单条命令，不能用 ;|&> 等元字符串接。"
+                    "执行器只允许单条命令，不能用 ;|&<>`$( 等元字符串接。"
+                    "注意：即使这些字符出现在引号内的字面量里也会被拦截，"
+                    "请改写命令以避免使用它们。"
                 )
 
         # Layer 3a: substring patterns that survive layer 1 (e.g. "rm -rf"

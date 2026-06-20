@@ -203,12 +203,16 @@ def _apply_delete(
                     hunks_total=len(fd.hunks),
                 )
             removed.append(ln.text)
-    if removed and "\n".join(removed).rstrip() != original.rstrip("\n"):
+    # An empty ``removed`` set (a /dev/null deletion whose hunk carries no
+    # context/removed lines) means we have nothing to verify against — treat
+    # that as "cannot verify → refuse", not as "verification passed".
+    # Otherwise a model could unlink a file whose content it never matched.
+    if not removed or "\n".join(removed).rstrip() != original.rstrip("\n"):
         # Not fatal but we surface a warning by failing — the user can
         # delete manually if they really meant to.
         return FileApplyResult(
             path=target_rel, status="failed", operation="delete",
-            reason="待删内容与文件实际内容不一致，拒绝删除",
+            reason="待删内容缺失或与文件实际内容不一致，拒绝删除",
             hunks_total=len(fd.hunks), original_text=original,
         )
     if not dry_run:

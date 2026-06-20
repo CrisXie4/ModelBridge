@@ -6,11 +6,51 @@ loss when two servers declared the same resource URI.
 """
 
 from modelbridge.mcp.manager.catalog import Catalog
-from modelbridge.mcp.protocol.types import MCPResource
+from modelbridge.mcp.protocol.types import MCPResource, MCPTool
 
 
 def _make_resource(uri: str, name: str = "") -> MCPResource:
     return MCPResource(uri=uri, name=name or uri)
+
+
+class TestServerIdPrefixCollision:
+    """Two distinct server ids that sanitise to the same qualified-name prefix
+    (``foo.bar`` / ``foo/bar`` → ``foo_bar``) must not silently shadow each
+    other's tools or misroute calls — the second one is refused."""
+
+    def test_colliding_server_ids_second_is_refused(self):
+        cat = Catalog()
+        t = MCPTool(name="search")
+        cat.add_server("foo.bar", tools=[t], resources=[], prompts=[])
+        cat.add_server("foo/bar", tools=[t], resources=[], prompts=[])
+
+        assert len(cat.tools) == 1
+        assert cat.tools[0].server_id == "foo.bar"
+
+    def test_colliding_prefix_resolves_to_first_server(self):
+        cat = Catalog()
+        cat.add_server("foo.bar", tools=[MCPTool(name="search")], resources=[], prompts=[])
+        cat.add_server("foo/bar", tools=[MCPTool(name="search")], resources=[], prompts=[])
+
+        resolved = cat.resolve_tool("foo_bar__search")
+        assert resolved is not None
+        assert resolved[0] == "foo.bar"
+
+    def test_distinct_prefixes_both_kept(self):
+        cat = Catalog()
+        cat.add_server("alpha", tools=[MCPTool(name="search")], resources=[], prompts=[])
+        cat.add_server("beta", tools=[MCPTool(name="search")], resources=[], prompts=[])
+        assert len(cat.tools) == 2
+
+    def test_re_adding_same_server_id_is_allowed(self):
+        # Same id (e.g. after remove_server during a hot refresh) must not be
+        # treated as a collision.
+        cat = Catalog()
+        cat.add_server("alpha", tools=[MCPTool(name="search")], resources=[], prompts=[])
+        cat.remove_server("alpha")
+        cat.add_server("alpha", tools=[MCPTool(name="search")], resources=[], prompts=[])
+        assert len(cat.tools) == 1
+        assert cat.tools[0].server_id == "alpha"
 
 
 class TestResourceCollisionDetection:

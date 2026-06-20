@@ -188,6 +188,10 @@ app = typer.Typer(
         "管理类操作走子命令；运行 `mbridge --help` 查看全部，`mbridge <命令> --help` 看子命令。\n\n"
         "起步：`mbridge init` → `mbridge model init` → `mbridge` (进入 REPL)。"
     ),
+    epilog=(
+        "💛 赞助 by 6哥API (https://6geapi.com) —— AI 大模型中转站，"
+        "一个 Key 调用 GPT / Claude / Gemini / DeepSeek 等海内外模型，OpenAI 兼容。感谢支持！"
+    ),
     invoke_without_command=True,
     add_completion=True,
 )
@@ -556,6 +560,8 @@ def _run_repl(
             f"policy    : {policy.describe()}\n"
             f"prefix    : {repl_prefix_hash or '(empty)'}\n"
             f"{cache_line}\n\n"
+            f"[yellow]💛 感谢 [bold]6哥API[/bold] 赞助[/yellow]  [cyan]https://6geapi.com[/cyan]\n"
+            f"[dim]   AI 大模型中转站 · 一个 Key 调用 GPT / Claude / Gemini / DeepSeek 等海内外模型 · OpenAI 兼容[/dim]\n\n"
             f"[dim]/help 命令 · @文件名 引用文件(实时补全, 内容注入本轮) · "
             f"/exit 退出 · Ctrl-D[/dim]",
             title="mbridge",

@@ -23,6 +23,7 @@ from .models import (
 )
 from .secrets import is_protected, protect
 from .utils import (
+    atomic_write_text,
     get_app_dir,
     get_config_path,
     get_logs_dir,
@@ -136,15 +137,16 @@ def _safe_load_yaml(path: Path) -> dict[str, Any]:
 
 
 def _safe_dump_yaml(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(
-            data,
-            f,
-            allow_unicode=True,
-            sort_keys=False,
-            default_flow_style=False,
-        )
+    # Atomic write (temp + os.replace): an interrupted or concurrent write
+    # can never leave a truncated/interleaved config.yaml / models.yaml —
+    # the last writer wins cleanly instead of corrupting the file.
+    text = yaml.safe_dump(
+        data,
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+    )
+    atomic_write_text(path, text)
 
 
 # ---------------------------------------------------------------------------
