@@ -1,6 +1,6 @@
 {
   "name": "mbridge",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "description": "ModelBridge (mbridge) — 国产模型优先的 AI Coding Agent + CLI. Installs a self-contained binary (no Python required).",
   "bin": {
     "mbridge": "bin/cli.js"
