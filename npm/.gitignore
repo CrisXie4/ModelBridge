@@ -1,0 +1,4 @@
+# Downloaded binary (per-machine, fetched by postinstall) — never commit/publish.
+vendor/
+node_modules/
+*.tgz

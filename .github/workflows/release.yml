@@ -46,6 +46,17 @@ jobs:
         shell: pwsh
         run: dist/mbridge/mbridge.exe version
 
+      # Raw onedir tarball for the npm wrapper (and portable use). The Inno
+      # installer below can't be exec'd directly; npm needs the bare binary.
+      # tar ships with windows-latest; -C dist makes it expand to mbridge/.
+      - name: Package onedir tarball (for npm)
+        shell: pwsh
+        run: |
+          $ver = ([regex]::Match((Get-Content pyproject.toml -Raw), 'version\s*=\s*"(.*?)"')).Groups[1].Value
+          New-Item -ItemType Directory -Force -Path packaging/Output | Out-Null
+          tar -C dist -czf "packaging/Output/mbridge-$ver-windows-x86_64.tar.gz" mbridge
+          Get-ChildItem packaging/Output
+
       # Inno Setup 6 is pre-installed on windows-latest at this path.
       # If GitHub ever moves it, install via Chocolatey: ``choco install innosetup -y``.
       - name: Build installer (Inno Setup)
@@ -60,7 +71,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ModelBridge-windows
-          path: packaging/Output/ModelBridge-Setup-*.exe
+          path: |
+            packaging/Output/ModelBridge-Setup-*.exe
+            packaging/Output/mbridge-*-windows-*.tar.gz
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
@@ -140,8 +153,46 @@ jobs:
           find artifacts -type f \( -name "*.exe" -o -name "*.tar.gz" \) -exec cp {} release-assets/ \;
           ls -lh release-assets
 
+      - name: Generate SHA256SUMS
+        run: |
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       - uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*
           draft: false
           generate_release_notes: true
+
+  # ---------------------------------------------------------------------------
+  # Publish the npm wrapper (mbridge) that downloads the binary above. Runs
+  # after the release assets exist. No-ops until an NPM_TOKEN secret is added,
+  # so it never blocks a release before you're ready. Version is taken from
+  # the tag so the published package fetches the matching release binaries.
+  # ---------------------------------------------------------------------------
+  publish-npm:
+    needs: [release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish to npm (skips if NPM_TOKEN unset)
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "NPM_TOKEN 未配置 → 跳过 npm publish。"
+            echo "（在仓库 Settings → Secrets 添加 NPM_TOKEN 后，下次打 tag 会自动发布。）"
+            exit 0
+          fi
+          VER="${GITHUB_REF_NAME#v}"
+          npm version "$VER" --no-git-tag-version --allow-same-version
+          npm publish --access public
