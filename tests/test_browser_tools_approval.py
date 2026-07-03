@@ -26,7 +26,8 @@ def _ctx(approve):
 def test_always_on_one_write_tool_approves_all_browser_writes():
     asks = {"n": 0}
 
-    def approve(*, tool, summary, detail=""):  # noqa: ARG001
+    def approve(*, tool, summary, detail="",  # noqa: ARG001
+                save_pattern=None, auto=False):  # noqa: ARG001
         asks["n"] += 1
         return ApprovalDecision.ALWAYS
 
@@ -43,7 +44,8 @@ def test_always_on_one_write_tool_approves_all_browser_writes():
 def test_no_approval_still_blocks_each():
     asks = {"n": 0}
 
-    def approve(*, tool, summary, detail=""):  # noqa: ARG001
+    def approve(*, tool, summary, detail="",  # noqa: ARG001
+                save_pattern=None, auto=False):  # noqa: ARG001
         asks["n"] += 1
         return ApprovalDecision.NO
 

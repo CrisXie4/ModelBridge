@@ -5,6 +5,11 @@
 *.pem
 *.crx
 
+# Local NPM auth — must never be committed (holds publish token).
+# Commit a `.npmrc.example` instead and let contributors copy it.
+.npmrc
+npm/.npmrc
+
 # Python
 __pycache__/
 *.py[cod]

@@ -185,7 +185,8 @@ def test_run_bash_always_is_not_remembered(tmp_path, monkeypatch):
     monkeypatch.setenv("MBRIDGE_HOME", str(tmp_path))
     calls = {"n": 0}
 
-    def approve_always(*, tool, summary, detail=""):  # noqa: ARG001
+    def approve_always(*, tool, summary, detail="",  # noqa: ARG001
+                       save_pattern=None, auto=False):  # noqa: ARG001
         calls["n"] += 1
         return ApprovalDecision.ALWAYS
 

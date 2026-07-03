@@ -129,6 +129,17 @@ def _exit(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG
     return CommandResult(exit_repl=True)
 
 
+def _auto_mode(sctx: SlashContext, *, args: list[str]) -> CommandResult:
+    """Toggle or set /auto mode: LLM auto-judge all confirmations."""
+    if args and args[0].lower() in ("off", "0", "false", "no"):
+        sctx.agent_ctx._auto_mode = False
+        sctx.console.print("[dim]Auto mode OFF[/dim]")
+    else:
+        sctx.agent_ctx._auto_mode = True
+        sctx.console.print("[green]Auto mode ON - AI will judge safety before every action[/green]")
+    return CommandResult()
+
+
 def _clear(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
     sctx.console.print("[dim]history cleared (system prompt kept)[/dim]")
     return CommandResult(clear_history=True)
@@ -643,6 +654,7 @@ _COMMANDS: dict[str, CommandFn] = {
     "exit": _exit,
     "quit": _exit,
     "q":    _exit,
+    "auto": _auto_mode,
     "clear": _clear,
     "cls":   _clear,
     "context": _context,
@@ -669,6 +681,7 @@ _COMMANDS: dict[str, CommandFn] = {
 
 _HELP_ROWS: list[tuple[str, str]] = [
     ("/help, /?",          "显示此菜单"),
+    ("/auto [off]",        "开启 AI 自动判断安全模式 (关: /auto off)"),
     ("/context, /ctx",     "显示会话历史摘要 + 最近 6 条预览"),
     ("/tokens, /t",        "显示当前 token 使用 / 上下文窗口剩余"),
     ("/think on [N]",      "开启 thinking 模式 (N 为可选 thinking_budget)"),

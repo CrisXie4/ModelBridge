@@ -450,6 +450,17 @@ def _run_repl(
 
     for tool in build_browser_registry(include_write=True).tools.values():
         registry.register(tool)
+
+    # Sub-agent tool — lets the AI spin up focused sub-agents for complex tasks.
+    # User confirmation is required (y / N / a=always); "always" is persisted.
+    from .agent.tools.subagent_tool import SpawnSubagentTool
+    registry.register(SpawnSubagentTool())
+
+    # Computer control tools: mouse, keyboard, screenshot, and inject_js.
+    from .agent.tools.computer_control_tools import build_computer_registry
+    for tool in build_computer_registry().tools.values():
+        registry.register(tool)
+
     browser_bridge = RemoteBrowserBridge()
     agent_ctx.browser_bridge = browser_bridge
     ok, reason = browser_bridge.available()
@@ -918,28 +929,133 @@ def _make_approval(*, yes: bool):
     """Return an approval callback used by tools.
 
     ``--yes`` short-circuits to YES; otherwise we render a small panel and
-    use rich's prompt with y / N / a (always) options.
+    use rich's prompt with y / N / a (always) / o (auto) options.
+
+    When ``save_pattern`` is passed (non-None), the user picked "always" and
+    the callback persists the pattern to disk for permanent approval.
+
+    When ``auto=True`` is passed, a tiny LLM judges safety first — if safe
+    the action proceeds automatically, otherwise it falls through to the
+    manual prompt.
     """
+    import json as _json
+
+    _APPROVED_PATH = get_app_dir() / "approved_patterns.json"
+
+    def _load_approved() -> dict:
+        if _APPROVED_PATH.exists():
+            try:
+                return _json.loads(_APPROVED_PATH.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+        return {}
+
+    def _save_pattern_to_disk(pattern: str, label: str) -> None:
+        try:
+            patterns = _load_approved()
+            patterns[pattern] = label
+            _APPROVED_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _APPROVED_PATH.write_text(
+                _json.dumps(patterns, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            console.print(f"[dim]已永久批准此模式（保存至 {_APPROVED_PATH.name}）。"
+                          " 以后同类请求将自动通过。[/dim]")
+        except Exception as e:
+            console.print(f"[dim]永久批准保存失败: {e}[/dim]")
+
+    def _auto_judge(*, tool: str, summary: str, detail: str) -> tuple[bool, str]:
+        """Call a tiny model to judge if this action is safe to auto-approve.
+
+        Returns (is_safe, reason).
+        """
+        from modelbridge.providers import get_provider
+        from modelbridge.config import load_app_config, load_models_file
+        from modelbridge.client import find_model
+
+        prompt = (
+            f"判断以下操作是否安全。分析后先给出理由，再给出结论「安全」或「不安全」。\n"
+            f"工具: {tool}\n操作: {summary}\n详情: {detail[:300]}"
+        )
+        try:
+            cfg = load_app_config()
+            # Try to find a tiny/cheap model for fast safety judgement
+            models_file = load_models_file()
+            tiny_model = None
+            for m in models_file.models:
+                if getattr(m, "level", None) in ("tiny", "cheap") or "tiny" in m.name.lower():
+                    tiny_model = m
+                    break
+            if tiny_model is None and cfg.default_model:
+                tiny_model = find_model(cfg.default_model)
+
+            if tiny_model is None:
+                return False, "(无法找到可用模型)"
+
+            entry = find_model(tiny_model.name)
+            if entry is None:
+                return False, "(无法解析模型配置)"
+
+            provider = get_provider(entry)
+            from modelbridge.schemas import ChatMessage, ChatRequest
+            resp = provider.chat(ChatRequest(model=entry.model, messages=[
+                ChatMessage(role="user", content=prompt)
+            ]), timeout=15.0)
+            content = resp.content or ""
+            is_safe = "安全" in content and "不安全" not in content
+            # Fold long reason for terminal display
+            reason = content.strip() if len(content) <= 200 else (
+                content.strip()[:200] + "…"
+            )
+            return is_safe, reason
+        except Exception as e:
+            return False, f"(AI 判断失败: {e})"
+
     if yes:
-        def _yes(*, tool: str, summary: str, detail: str = ""):  # noqa: ARG001
+        def _yes(*, tool: str, summary: str, detail: str = "",  # noqa: ARG001
+                  save_pattern: str | None = None, auto: bool = False):
             return ApprovalDecision.YES
         return _yes
 
-    def _ask(*, tool: str, summary: str, detail: str = ""):
+    def _ask(*, tool: str, summary: str, detail: str = "",
+             save_pattern: str | None = None, auto: bool = False):
+        # ── Auto-judge phase ───────────────────────────────────────────────
+        if auto:
+            console.print("[dim]AI safety check...[/dim]")
+            is_safe, reason = _auto_judge(tool=tool, summary=summary, detail=detail)
+            console.print(f"[dim]  reason: {reason}[/dim]")
+            if is_safe:
+                console.print("[green]  -> safe, auto-approved[/green]")
+                return ApprovalDecision.YES
+            console.print("[yellow]  -> not safe, requires manual confirm[/yellow]")
+            # falls through to human prompt
+
         console.print(Panel(
             f"[bold]{summary}[/bold]\n\n{detail}",
             title=f"批准 · {tool}",
             border_style="yellow",
         ))
+        choices = ["y", "n", "a", "o"] if auto else ["y", "n", "a"]
+        prompt_str = (
+            r"执行?  \[y]es / \[N]o / \[a]lways / \[o]auto(AI判断)"
+            if auto else r"执行?  \[y]es / \[N]o / \[a]lways"
+        )
         choice = Prompt.ask(
-            r"执行?  \[y]es / \[N]o / \[a]lways",
-            choices=["y", "n", "a"],
+            prompt_str,
+            choices=choices,
             default="n",
             show_choices=False,
         ).lower()
         if choice == "y":
             return ApprovalDecision.YES
         if choice == "a":
+            if save_pattern:
+                _save_pattern_to_disk(save_pattern, summary)
+            return ApprovalDecision.ALWAYS
+        if choice == "o" and auto:
+            # user chose to always auto-judge for this class of actions
+            if save_pattern:
+                _save_pattern_to_disk(save_pattern + ":auto", f"{summary} [auto]")
             return ApprovalDecision.ALWAYS
         return ApprovalDecision.NO
 
@@ -1541,7 +1657,7 @@ def _chat_with_routing(
             "确认 routing.levels.tiny（或 default_model）指向一个可达模型。[/yellow]"
         )
         raise typer.Exit(code=2) from e
-    _print_route_result(result)
+    _print_route_result(result, verbose=verbose)
 
     if not result.chosen_model:
         err_console.print(
@@ -2132,8 +2248,66 @@ def cmd_doctor_route(
     _run_route_test(mode)
 
 
-def _print_route_result(result: RouteResult) -> None:
-    """Render a RouteResult into the standard route panel + tables."""
+def _print_route_trace(result: RouteResult) -> None:
+    """Print a verbose step-by-step routing trace."""
+    profile = result.profile
+    steps: list[tuple[str, str]] = []
+
+    # Helper: strip the "LLM 分级 (模型 xxx): " boilerplate prefix.
+    def _strip_llm_prefix(r: str) -> str:
+        marker = "): "
+        idx = r.find(marker)
+        return r[idx + len(marker):] if idx != -1 else r
+
+    # Step 1: LLM classifier verdict
+    for r in profile.reasons:
+        if r.startswith("LLM 分级"):
+            steps.append(("① LLM 分级器", _strip_llm_prefix(r)))
+            break
+    else:
+        # keyword classifier path
+        for r in profile.reasons:
+            if r.startswith("命中 "):
+                steps.append(("① 关键词分类", r))
+                break
+        else:
+            steps.append(("① 分类器", profile.reasons[0] if profile.reasons else "无"))
+
+    # Step 2: caller-fact floors
+    floors = [r for r in profile.reasons
+              if any(k in r for k in ("has_files", "wants_edit", "wants_tools", "risk_level=high", "previous_failures"))]
+    if floors:
+        steps.append(("② 显式信号约束", " | ".join(floors)))
+
+    # Step 3: mode shift
+    if result.mode_note:
+        steps.append(("③ 模式偏移", result.mode_note.replace("mode=", "mode=")))
+
+    # Step 4: fallback walk
+    chain = result.fallback.chain
+    tried: list[str] = []
+    for lvl, mdl, status in chain:
+        lvl_s = lvl.value if lvl else "(default)"
+        if status == "OK":
+            tried.append(f"[green]✓ {lvl_s} → {mdl}[/green]")
+        else:
+            tried.append(f"[red]✗ {lvl_s} → {status}[/red]")
+    steps.append(("④ 回退链", " → ".join(tried) if tried else "(无回退)"))
+
+    trace = Table(title="routing trace (--verbose)", show_lines=False)
+    trace.add_column("step", style="dim", width=14)
+    trace.add_column("detail")
+    for step, detail in steps:
+        trace.add_row(step, detail)
+    console.print(trace)
+
+
+def _print_route_result(result: RouteResult, verbose: bool = False) -> None:
+    """Render a RouteResult into the standard route panel + tables.
+
+    ``verbose=True`` adds the LLM classifier's own reasoning and the full
+    per-step routing trace (mode shift, caller-fact floors, fallback walk).
+    """
     profile = result.profile
     chosen_model_str = (
         f"[bold green]{result.chosen_model}[/bold green]"
@@ -2166,24 +2340,56 @@ def _print_route_result(result: RouteResult) -> None:
         except PricingNotFound:
             pass
 
+    # ---- Risk badge -------------------------------------------------------
+    risk_style = {
+        "low": "green", "medium": "yellow", "high": "red"
+    }.get(profile.risk_level, "dim")
+    risk_badge = f"[{risk_style}]{profile.risk_level}[/]"
+
+    # ---- Level arrow (shows mode shift if any) ----------------------------
+    raw_level = result.decision.level
+    final_level = result.chosen_level or raw_level
+    if result.mode_note:
+        level_str = f"[bold]{raw_level.value}[/bold]  ─[yellow]▶[/yellow]  [bold cyan]{final_level.value}[/bold cyan]"
+    elif final_level != raw_level:
+        level_str = f"[bold]{raw_level.value}[/bold]  ─▶  [bold cyan]{final_level.value}[/bold cyan]"
+    else:
+        level_str = f"[bold]{final_level.value}[/bold]"
+
     header_lines = [
-        f"prompt        : {result.prompt[:80]!r}{'…' if len(result.prompt) > 80 else ''}",
-        f"task_type     : [bold]{profile.task_type}[/bold]",
-        f"complexity    : {profile.complexity}",
-        f"risk_level    : {profile.risk_level}",
-        f"mode          : {result.mode}",
-        f"level         : [bold]{result.decision.level.value}[/bold]"
-        + (
-            f"  → 实际落到 [bold]{result.chosen_level.value}[/bold]"
-            if result.chosen_level and result.chosen_level != result.decision.level
-            else ""
-        ),
-        f"model         : {chosen_model_str}",
-        f"cache         : {cache_str}",
-        f"cost_band     : {cost_band}",
-        f"tokens≈       : {estimate_tokens(result.prompt)}",
+        f"[dim]▶ routing · {result.mode} mode[/dim]",
+        f"[bold]task_type  :[/bold] {profile.task_type}   [bold]complexity:[/bold] {profile.complexity}   [bold]risk:[/bold] {risk_badge}",
+        f"[bold]level      :[/bold] {level_str}",
+        f"[bold]model      :[/bold] {chosen_model_str}   [dim]cache: {cache_str}[/dim]   cost: {cost_band}",
     ]
+
+    # In verbose mode: surface the LLM classifier's own reasoning front-and-centre.
+    llm_reason = ""
+    if verbose:
+        for r in profile.reasons:
+            if r.startswith("LLM 分级"):
+                llm_reason = r
+                break
+
+    if llm_reason and verbose:
+        # Strip the "LLM 分级 (模型 xxx): " prefix to show just the useful part.
+        prefix = "LLM 分级 ("
+        if prefix in llm_reason:
+            llm_reason = llm_reason.split(prefix, 1)[1]
+            colon_idx = llm_reason.find("): ")
+            if colon_idx != -1:
+                llm_reason = llm_reason[colon_idx + 3:]
+        header_lines.append(f"[dim]  └─ AI 分级理由：[/dim][italic]{llm_reason}[/italic]")
+    elif llm_reason:
+        header_lines.append(f"[dim]  └─ AI: {llm_reason}[/dim]")
+
+    header_lines.append(f"[dim]tokens≈ {estimate_tokens(result.prompt)}[/dim]")
+
     console.print(Panel.fit("\n".join(header_lines), title="route", border_style="cyan"))
+
+    # ---- Verbose: step-by-step routing trace ------------------------------
+    if verbose:
+        _print_route_trace(result)
 
 
 _ROUTE_TEST_PROMPTS: list[str] = [
@@ -2262,6 +2468,10 @@ def cmd_route(
     explain: bool = typer.Option(
         True, "--explain/--no-explain", help="是否输出路由理由与回退链。",
     ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v",
+        help="输出详细路由推理过程：LLM 分级理由、每步决策trace。",
+    ),
 ) -> None:
     """对一段 prompt 输出推荐模型与原因 (分级会调用最低层 tiny 模型)。"""
     if prompt.strip().lower() == "test":
@@ -2290,9 +2500,10 @@ def cmd_route(
             "并已配置好 API key / 本地服务。[/yellow]"
         )
         raise typer.Exit(1)
-    _print_route_result(result)
+    _print_route_result(result, verbose=verbose)
 
-    if explain:
+    if explain and not verbose:
+        # Verbose mode already includes the trace table inside _print_route_result.
         reasons_table = Table(title="classifier reasons", show_lines=False)
         reasons_table.add_column("#", style="dim")
         reasons_table.add_column("reason")

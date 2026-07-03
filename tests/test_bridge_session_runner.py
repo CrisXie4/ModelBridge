@@ -119,7 +119,8 @@ def test_approve_always_persists_across_turns():
         def __init__(self):
             self.asked = 0
 
-        def request_approval(self, *, tool, summary, detail=""):
+        def request_approval(self, *, tool, summary, detail="",
+                              save_pattern=None, auto=False):  # noqa: ARG001
             self.asked += 1
             return "always"
 

@@ -69,6 +69,14 @@ def render_user_bubble(console: Console, text: str) -> None:
         padding=(0, 1),
     )
     console.print(Align(panel, align="right"))
+    # After printing, the cursor is on a new line inside the scroll region.
+    # Move it to row H so the sticky footer (Prompt.ask input row) stays clean.
+    try:
+        h = console.size.height
+        sys.stdout.write(f"\x1b[{h};1H")
+        sys.stdout.flush()
+    except Exception:  # noqa: BLE001 — cursor escape is best-effort
+        pass
 
 
 def render_tool_bubble(

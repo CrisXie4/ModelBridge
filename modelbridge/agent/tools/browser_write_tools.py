@@ -26,7 +26,8 @@ class _WriteBrowserTool(_BrowserTool):
         summary, detail = self._approval(args)
         # Shared group: choosing ALWAYS on any browser write tool auto-approves
         # all of them this session (web automation chains click/fill/navigate).
-        if not ctx.confirm(tool=self.name, summary=summary, detail=detail, group="browser_write"):
+        if not ctx.confirm(tool=self.name, summary=summary, detail=detail,
+                           group="browser_write", pattern_key="browser_write", auto=True):
             return self.err("用户拒绝了该操作。")
         return self._relay(args, ctx)
 

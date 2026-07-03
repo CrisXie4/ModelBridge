@@ -45,6 +45,8 @@ T_CANCEL = "cancel"
 T_AUTH = "auth"  # CLI control-socket handshake (token), not used over stdio
 T_EXEC = "exec"  # CLI control-socket: relay ONE browser tool to the extension
 T_EXEC_RESULT = "exec_result"  # host -> CLI: that tool's result
+T_INJECT_JS = "inject_js"  # host -> extension: inject JS with auto-remove
+T_INJECT_RESULT = "inject_result"  # extension -> host: inject result
 
 # host -> extension
 T_READY = "ready"

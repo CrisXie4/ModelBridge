@@ -1,0 +1,7 @@
+# Example only — copy to `.npmrc` and fill in your own token from
+# https://www.npmjs.com/settings/<user>/tokens
+#
+# Pick "Fine-grained" + "Read and publish" limited to scope `@crisxie/mbridge`.
+# Do NOT commit your real `.npmrc`; it is in `.gitignore`.
+#
+;registry.npmjs.org/:_authToken=${NPM_TOKEN}

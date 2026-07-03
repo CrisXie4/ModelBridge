@@ -70,7 +70,13 @@ class SessionRunner:
         return self.session
 
     def _build_context(self, bridge: BrowserBridge) -> AgentContext:
-        def approve(*, tool: str, summary: str, detail: str = "") -> ApprovalDecision:
+        def approve(*, tool: str, summary: str, detail: str = "",
+                    save_pattern: str | None = None, auto: bool = False) -> ApprovalDecision:
+            # ``save_pattern`` / ``auto`` are CLI-side concerns (persistent
+            # approval + LLM auto-judge). The bridge round-trip doesn't
+            # support either; silently drop them so the protocol stays
+            # forward-compatible without changing the bridge payload.
+            _ = (save_pattern, auto)  # noqa: ARG001 — bridge ignores these
             decision = bridge.request_approval(tool=tool, summary=summary, detail=detail)
             return {
                 "yes": ApprovalDecision.YES,
