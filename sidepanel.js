@@ -687,6 +687,30 @@ function pageToolDispatcher(name, args) {
       el.dispatchEvent(new Event("change", { bubbles: true }));
       return ok("已填写: " + args.selector);
     }
+    if (name === "inject_js") {
+      if (!args.code) return fail("缺少 code");
+      // Wrap in a self-removing pattern: create <script>, run, remove.
+      // This ensures the script tag itself is gone from the DOM after execution.
+      const wrappedCode = `(function(){
+        const s = document.createElement('script');
+        s.textContent = ${JSON.stringify(args.code)};
+        (document.head || document.documentElement).appendChild(s);
+        try {
+          const result = window.eval(s.textContent);
+          s.remove();
+          return { ok: true, content: result !== undefined ? String(result) : '(无返回值)' };
+        } catch(e) {
+          s.remove();
+          return { ok: false, content: String(e) };
+        }
+      })()`;
+      try {
+        const result = window.eval(wrappedCode);
+        return result;
+      } catch (e) {
+        return fail("JS 执行出错: " + String(e));
+      }
+    }
     // navigate 不在页面里执行 — 侧边栏用 chrome.tabs.update 处理并等待加载完成。
     return fail("未知的浏览器工具: " + name);
   } catch (e) {
