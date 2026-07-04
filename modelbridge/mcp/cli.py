@@ -34,7 +34,15 @@ mcp_app = typer.Typer(
     name="mcp",
     help=(
         "MCP 客户端 + 服务端：连接外部 MCP server (list / tools / resources / "
-        "prompts / call / read / ping)，或用 serve 把 ModelBridge 暴露为 MCP server。"
+        "prompts / call / read / ping)，或用 serve 把 ModelBridge 暴露为 MCP server。\n\n"
+        "常用示例:\n"
+        "    mbridge mcp list                                  # 看 server 连接状态\n"
+        "    mbridge mcp tools                                 # 列所有工具 (限定名)\n"
+        "    mbridge mcp ping                                  # 心跳 / 延迟检查\n"
+        "    mbridge mcp call filesystem__list_dir -a '{\"path\":\".\"}'\n"
+        "                                                     # 手动调一个工具\n"
+        "    mbridge mcp serve                                 # 把 ModelBridge 自己\n"
+        "                                                     # 暴露为 MCP server"
     ),
     invoke_without_command=True,
 )
@@ -200,18 +208,6 @@ def ping_servers(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None
         console.print(table)
     finally:
         manager.shutdown()
-
-
-@mcp_app.command("serve", hidden=True)
-def serve() -> None:
-    """把 ModelBridge 作为 MCP server 跑在 stdio 上（chat / list_models / route）。
-
-    在 Claude Desktop / Cursor 等 MCP host 里配置:
-      command: mbridge   args: [mcp, serve]
-    """
-    from .server import build_modelbridge_server
-
-    raise typer.Exit(code=build_modelbridge_server().serve_stdio())
 
 
 @mcp_app.command("read", hidden=True)

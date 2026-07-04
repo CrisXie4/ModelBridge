@@ -1,10 +1,11 @@
-"""R2a CLI IA tests: usage group absorbs cost/budget/cache; old paths deprecated+hidden.
+"""R2a CLI IA tests (post-v1.2 cleanup): usage group absorbs cost/cache; deprecated top-level aliases REMOVED.
 
 Tests validate:
-  1. New canonical paths work: usage cost / usage budget / usage budget set / usage cache
-  2. Old paths still work AND emit a deprecation notice
-  3. mbridge --help no longer lists cost/budget/cache as top-level groups; lists usage
-  4. usage --help lists cost / budget / cache
+  1. New canonical paths work: usage cost / usage cache
+  2. mbridge --help no longer lists cost/cache/chat/profile as top-level groups
+  3. usage --help lists cost / cache
+  4. Deprecated IA aliases are GONE (chat / cost / cache / profile / model test / bridge control
+     return "No such command" — not a deprecation warning)
 
 CliRunner in this Typer version has NO ``mix_stderr`` kwarg — use CliRunner() plain.
 """
@@ -70,18 +71,6 @@ def test_usage_cost_new_path(home):
     assert "no such command" not in r.output.lower(), r.output
 
 
-def test_usage_budget_new_path(home):
-    """usage budget (bare / show) exits 0."""
-    r = runner.invoke(app, ["usage", "budget", "show"])
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-
-
-def test_usage_budget_set_new_path(home):
-    """usage budget set --monthly 50 exits 0."""
-    r = runner.invoke(app, ["usage", "budget", "set", "--monthly", "50"])
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-
-
 def test_usage_cache_new_path(home):
     """usage cache stats (bare) exits 0."""
     r = runner.invoke(app, ["usage", "cache", "stats"])
@@ -89,54 +78,15 @@ def test_usage_cache_new_path(home):
 
 
 # ---------------------------------------------------------------------------
-# 2. Old paths still work AND emit a deprecation notice
-# ---------------------------------------------------------------------------
-
-def test_old_cost_estimate_deprecated(home):
-    """cost estimate still works and warns."""
-    r = runner.invoke(app, ["cost", "estimate", "hello"])
-    # exit 0/1/2 accepted (depends on model presence); must not be unknown-command
-    assert r.exit_code in (0, 1, 2), f"exit_code={r.exit_code}\n{r.output}"
-    assert "no such command" not in r.output.lower(), r.output
-    # Deprecation notice must appear (stderr merged into output by CliRunner)
-    assert "移至" in r.output or "v1.2" in r.output, (
-        f"Expected deprecation notice in output, got:\n{r.output}"
-    )
-
-
-def test_old_budget_show_deprecated(home):
-    """budget show still works and warns."""
-    r = runner.invoke(app, ["budget", "show"])
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v1.2" in r.output, (
-        f"Expected deprecation notice in output, got:\n{r.output}"
-    )
-
-
-def test_old_budget_set_deprecated(home):
-    """budget set still works and warns."""
-    r = runner.invoke(app, ["budget", "set", "--monthly", "30"])
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v1.2" in r.output, (
-        f"Expected deprecation notice in output, got:\n{r.output}"
-    )
-
-
-def test_old_cache_stats_deprecated(home):
-    """cache stats still works and warns."""
-    r = runner.invoke(app, ["cache", "stats"])
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v1.2" in r.output, (
-        f"Expected deprecation notice in output, got:\n{r.output}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# 3. mbridge --help top level: no cost/budget/cache groups; usage IS listed
+# 2. mbridge --help top level: no IA-alias groups; usage IS listed
 # ---------------------------------------------------------------------------
 
 def test_root_help_hides_old_groups_and_shows_usage():
-    """Root help must list usage but NOT cost/budget/cache as separate commands."""
+    """Root help must list usage but NOT cost/cache/chat/profile/budget as top-level commands.
+
+    All five are IA-deprecated aliases that were physically removed in
+    v1.2 — the canonical paths live under `usage` and `config` now.
+    """
     r = runner.invoke(app, ["--help"])
     assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
     listed = _listed_commands(r.output)
@@ -144,24 +94,59 @@ def test_root_help_hides_old_groups_and_shows_usage():
     assert "usage" in listed, (
         f"Expected `usage` in root Commands table, got: {listed}\n{r.output}"
     )
-    # cost/budget/cache must NOT be listed as top-level commands
-    for old in ("cost", "budget", "cache"):
+    # IA-deprecated top-level groups must NOT appear (all removed in v1.2)
+    for old in ("cost", "cache", "chat", "profile", "budget"):
         assert old not in listed, (
-            f"Expected `{old}` hidden from root Commands table, but it is listed.\n"
+            f"Expected `{old}` absent from root Commands table (IA v1.2 cleanup), but it is listed.\n"
             f"Commands: {listed}\n{r.output}"
         )
 
 
 # ---------------------------------------------------------------------------
-# 4. usage --help lists cost / budget / cache
+# 3. usage --help lists cost / cache (no budget — removed)
 # ---------------------------------------------------------------------------
 
 def test_usage_help_lists_subgroups():
-    """usage --help must list cost, budget, cache."""
+    """usage --help must list cost and cache, NOT budget."""
     r = runner.invoke(app, ["usage", "--help"])
     assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
     listed = _listed_commands(r.output)
-    for cmd in ("cost", "budget", "cache"):
+    for cmd in ("cost", "cache"):
         assert cmd in listed, (
             f"Expected `{cmd}` in `usage --help` Commands table, got: {listed}\n{r.output}"
         )
+    # budget must NOT be listed under usage (removed)
+    assert "budget" not in listed, (
+        f"Expected `budget` absent from `usage --help` (removed 2026-07), got: {listed}\n{r.output}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 4. IA-deprecated aliases are GONE — they return "No such command"
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("args", [
+    ["chat", "--help"],                # was: deprecated alias for `ask`
+    ["cost", "estimate", "hello"],     # was: deprecated alias for `usage cost`
+    ["cache", "stats"],                 # was: deprecated alias for `usage cache`
+    ["cache", "reset"],                 # was: deprecated alias for `usage cache reset`
+    ["cache", "clean"],                 # was: deprecated alias for `usage cache clean`
+    ["profile", "list"],                # was: deprecated alias for `config profile list`
+    ["model", "test", "x"],             # was: deprecated alias for `doctor model`
+    ["bridge", "control", "on"],        # was: deprecated alias for `bridge on`
+])
+def test_ia_aliases_return_no_such_command(args):
+    """IA v1.2 cleanup: top-level deprecated aliases are physically deleted.
+
+    Each of these used to print a "移至 v1.2" warning and forward to the
+    canonical command. After v1.2 cleanup, they must return exit_code=2
+    with a "No such command" error — no soft-deprecation fallback.
+    """
+    r = runner.invoke(app, args)
+    assert r.exit_code == 2, (
+        f"`mbridge {' '.join(args)}` should be unknown (exit_code=2), got {r.exit_code}.\n"
+        f"Output:\n{r.output}"
+    )
+    assert "no such command" in r.output.lower(), (
+        f"Expected 'No such command' error, got:\n{r.output}"
+    )

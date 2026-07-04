@@ -21,9 +21,8 @@ def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None
     A crash / Ctrl-C / power loss mid-write can never leave a truncated
     file: a concurrent reader sees either the old content or the new, never
     a torn half. ``os.replace`` is atomic on the same volume on both POSIX
-    and Windows. This matters for state files like ``budget.json`` whose
-    corruption would otherwise silently reset spend tracking and
-    ``hard_stop`` on the next load.
+    and Windows. This matters for state files like ``cache_stats.json``
+    whose corruption would otherwise silently lose provider-cache savings.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

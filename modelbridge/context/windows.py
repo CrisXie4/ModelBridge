@@ -1,6 +1,6 @@
 """Per-model context window lookup + session-level token accounting.
 
-Values reflect each provider's public docs / model cards as of 2026-05.
+Values reflect each provider's public docs / model cards as of 2026-07.
 Lookup falls back to a longest-prefix match before defaulting, so
 unreleased variants under the same family (e.g. ``deepseek-v4-pro-preview``)
 inherit the family's window.
@@ -13,8 +13,8 @@ Users can always override per model in ``models.yaml`` ::
 NOTE: this is the *token-window* side of the ``context`` package — how many
 tokens a model can accept. The sibling :mod:`modelbridge.context.budget`
 handles the *char-budget* side — how much file text to paste into the prompt
-before truncating. Neither is related to :mod:`modelbridge.cost.budget`, which
-tracks money spent.
+before truncating. Neither deals with monetary spend (the cost-budget
+sub-package was removed in 2026-07).
 """
 
 from __future__ import annotations
@@ -27,41 +27,29 @@ from ..models import ModelEntry
 from ..schemas import ChatMessage, text_of
 
 
-# Tokens. **Per-provider values, sourced from each vendor's docs (2026-05).**
+# Tokens. **Per-provider values, sourced from each vendor's docs as of 2026-07.**
+# Cross-checked via ModelScope API where available; see per-entry comments.
 #
-# DeepSeek
-#   - legacy `deepseek-chat` / `deepseek-reasoner` (retiring 2026-07-24): 64K input
-#   - V4 family (`deepseek-v4-*`): 1M
+# DeepSeek (V4 era; V3 + chat/reasoner EOL'd 2026-07-24, removed)
+#   - V4 family: 1M
 # Qwen / 阿里云百炼
 #   - qwen-plus / 3.6-plus: 1M
 #   - qwen-max / qwen3-max: 256K
-#   - qwen3-coder-* : 256K native, 1M extended
+#   - qwen3-coder-* : 1M
 #   - qwen-turbo: 1M
-# Kimi / Moonshot
-#   - kimi-k2.x family (k2 retiring 2026-05-25, use k2.6): 256K
-#   - moonshot-v1-{8k,32k,128k}: per the name
+# Kimi / Moonshot (K2.x era; K2 base EOL'd 2026-05-25, removed)
+#   - kimi-k2.5 / k2.6 / k2-thinking / k2-thinking-turbo: 256K
+#   - kimi-k2.7-code: 256K (2026-06 release)
 # MiMo / 小米 (released 2026-03)
-#   - mimo-v2-pro / v2.5-pro: 1M
-#   - mimo-v2-omni: 256K
-# GLM / 智谱
-#   - glm-5 / glm-4.7: 200K
-#   - glm-4.5 and below: 128K
+#   - mimo-v2 family: 1M (v2-omni 256K, v2-tts 128K)
+# GLM / 智谱 (5.x era; old 4-plus/4-flash/4-flashx/4.5/z1 removed)
+#   - glm-5.2: 1M (2026-Q2 flagship)
+#   - glm-5 / 4.7 / 4.6: 200K
 #   - glm-4-long: 1M
-# MiniMax
-#   - minimax-m2 / m2.7: 200K
-#   - minimax-m2.5: 192K
-#   - abab6.5 series: 245K
-#   - minimax-01 series: 4M
-# OpenAI (kept for completeness)
-#   - gpt-4o / 4o-mini: 128K
-#   - gpt-4.1 family: ~1M
+# MiniMax (M3 era; M2 + abab6.5 + 01 removed)
+#   - minimax-m3: 1M (multimodal, MSA sparse attn, 2026-06 release)
 DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
-    # DeepSeek
-    "deepseek-chat":              64_000,
-    "deepseek-reasoner":          64_000,
-    "deepseek-v3":               128_000,
-    "deepseek-v3.1":             128_000,
-    "deepseek-v3.2":             128_000,
+    # DeepSeek (V4 era)
     "deepseek-v4":             1_000_000,
     "deepseek-v4-pro":         1_000_000,
     "deepseek-v4-flash":       1_000_000,
@@ -79,18 +67,12 @@ DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
     "qwen3-coder-plus":        1_000_000,
     "qwen3-coder-flash":       1_000_000,
 
-    # Kimi / Moonshot
-    "kimi-k2":                   256_000,        # legacy K2 series — retiring 2026-05-25
+    # Kimi / Moonshot (K2.x era)
     "kimi-k2.5":                 262_144,
     "kimi-k2.6":                 262_144,
     "kimi-k2-thinking":          262_144,
     "kimi-k2-thinking-turbo":    262_144,
-    "kimi-k2-turbo-preview":     262_144,
-    "kimi-k2-0905-preview":      262_144,
-    "moonshot-v1-8k":              8_192,
-    "moonshot-v1-32k":            32_768,
-    "moonshot-v1-128k":          131_072,
-    "moonshot-v1-auto":          131_072,
+    "kimi-k2.7-code":            262_144,    # 2026-06 release; "256K context" per ModelScope README
 
     # MiMo / 小米
     "mimo-v2":                 1_000_000,
@@ -101,30 +83,14 @@ DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
     "mimo-v2-tts":               131_072,
 
     # GLM / 智谱
+    "glm-5.2":                 1_000_000,    # 2026-Q2 release; "Solid 1M Context" per ModelScope README
     "glm-5":                     200_000,
     "glm-4.7":                   200_000,
     "glm-4.6":                   200_000,
-    "glm-4.5":                   131_072,
-    "glm-4-plus":                131_072,
-    "glm-4-flash":               131_072,
-    "glm-4-flashx":              131_072,
     "glm-4-long":              1_000_000,
-    "glm-z1-flash":              131_072,
 
-    # MiniMax
-    "minimax-m2":                200_000,
-    "minimax-m2.5":              192_000,
-    "minimax-m2.7":              200_000,
-    "abab6.5-chat":              245_000,
-    "abab6.5s-chat":             245_000,
-    "minimax-01":              4_000_000,
-
-    # OpenAI (kept for reference)
-    "gpt-4o":                    128_000,
-    "gpt-4o-mini":               128_000,
-    "gpt-4.1":                 1_047_576,
-    "gpt-4.1-mini":            1_047_576,
-    "gpt-4.1-nano":            1_047_576,
+    # MiniMax (M3 era)
+    "minimax-m3":              1_000_000,    # 2026-06 release; "native multimodal with 1M context" per ModelScope
 }
 
 DEFAULT_LOCAL_WINDOW = 8_192        # most quantized local models

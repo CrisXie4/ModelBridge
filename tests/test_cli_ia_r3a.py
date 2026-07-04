@@ -3,10 +3,11 @@
 Tests validate:
   1. ``ask --help`` exits 0; description does NOT contain "测试用".
   2. ``mbridge --help`` lists ``ask`` and does NOT list ``chat``.
-  3. ``chat "..."`` (old alias) still runs (deprecated) and prints deprecation notice.
+  3. ``chat`` no longer resolves — `mbridge chat` returns ``No such command``
+     (v1.2 physical removal of the ``chat``→``ask`` alias).
   4. ``bridge on``/``bridge off`` / ``bridge status`` exist and exit 0 on ``--help``.
   5. ``bridge --help`` lists ``on`` and ``off`` but does NOT list ``control``.
-  6. ``bridge control on`` still works and prints a deprecation notice.
+     (legacy ``bridge control on/off`` was REMOVED in v1.2 — see ``test_cli_ia_r2a.py``.)
 
 CliRunner in this Typer version has NO ``mix_stderr`` kwarg — use CliRunner() plain.
 """
@@ -101,24 +102,30 @@ def test_root_help_hides_chat():
 
 
 # ---------------------------------------------------------------------------
-# 3. chat (old alias) still works and emits deprecation notice
+# 3. chat (old alias) is GONE in v1.2 → must return "No such command"
 # ---------------------------------------------------------------------------
 
-def test_chat_alias_help_exits_ok():
-    """mbridge chat --help must exit 0 (deprecated alias still resolves)."""
+def test_chat_alias_no_such_command():
+    """mbridge chat --help must return exit_code=2 + 'no such command' after v1.2 cleanup."""
     r = runner.invoke(app, ["chat", "--help"])
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-
-
-def test_chat_alias_dry_run_emits_deprecation(home):
-    """mbridge chat ... --dry-run must print a deprecation notice."""
-    r = runner.invoke(app, ["chat", "hello", "--dry-run"])
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v1.2" in r.output, (
-        f"Expected deprecation notice in output, got:\n{r.output}"
+    assert r.exit_code == 2, (
+        f"`mbridge chat --help` should be unknown (exit_code=2) after v1.2 cleanup, "
+        f"got exit_code={r.exit_code}.\nOutput:\n{r.output}"
     )
-    assert "ask" in r.output, (
-        f"Expected 'ask' mentioned in deprecation notice, got:\n{r.output}"
+    assert "no such command" in r.output.lower(), (
+        f"Expected 'No such command' error after v1.2 cleanup, got:\n{r.output}"
+    )
+
+
+def test_chat_alias_invocation_no_such_command(home):
+    """mbridge chat <args> (any args) must also return 'No such command' after v1.2."""
+    r = runner.invoke(app, ["chat", "hello", "--dry-run"], env={"MBRIDGE_HOME": str(home)})
+    assert r.exit_code == 2, (
+        f"`mbridge chat ...` should be unknown (exit_code=2) after v1.2 cleanup, "
+        f"got exit_code={r.exit_code}.\nOutput:\n{r.output}"
+    )
+    assert "no such command" in r.output.lower(), (
+        f"Expected 'No such command' error after v1.2 cleanup, got:\n{r.output}"
     )
 
 
@@ -176,29 +183,4 @@ def test_bridge_help_hides_control():
     assert "control" not in listed, (
         f"Expected `control` hidden from bridge --help Commands table, but it is listed.\n"
         f"Commands: {listed}\n{r.output}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# 6. bridge control on still works and emits deprecation
-# ---------------------------------------------------------------------------
-
-def test_bridge_control_on_emits_deprecation(home):
-    """mbridge bridge control on must print a deprecation notice."""
-    r = runner.invoke(bridge_app, ["control", "on"], env={"MBRIDGE_HOME": str(home)})
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v1.2" in r.output, (
-        f"Expected deprecation notice in output, got:\n{r.output}"
-    )
-    assert "bridge on" in r.output, (
-        f"Expected 'bridge on' in deprecation notice, got:\n{r.output}"
-    )
-
-
-def test_bridge_control_off_emits_deprecation(home):
-    """mbridge bridge control off must print a deprecation notice."""
-    r = runner.invoke(bridge_app, ["control", "off"], env={"MBRIDGE_HOME": str(home)})
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v1.2" in r.output, (
-        f"Expected deprecation notice in output, got:\n{r.output}"
     )

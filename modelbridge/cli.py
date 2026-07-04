@@ -17,7 +17,7 @@ Subcommands:
 * ``mbridge route "..."``               — show which level/model a prompt routes to (+ --mode)
 * ``mbridge route test``                — run built-in 8-prompt suite
 * ``mbridge cost estimate "..."``       — estimate per-model cost for a prompt
-* ``mbridge budget show|set``           — read/set monthly + daily spend budget
+* ``mbridge budget show|set``           — REMOVED in 2026-07 (was: read/set monthly + daily spend budget)
 * ``mbridge cache stats|reset|clean``   — prefix-cache statistics
 * ``mbridge profile add|list|use|show|remove`` — named bundles of default_model + routing.levels
 * ``mbridge config show|upgrade``       — view / re-emit ~/.modelbridge/config.yaml
@@ -67,15 +67,9 @@ from .config import (
 from .cost import (
     CostEstimate,
     PricingNotFound,
-    add_spend,
-    check_guard,
     estimate_cost,
     estimate_tokens,
     get_pricing,
-    load_budget,
-    set_daily_limit,
-    set_guard,
-    set_monthly_limit,
 )
 from .doctor import (
     next_steps_for_global,
@@ -205,33 +199,17 @@ doctor_app = typer.Typer(
     help="环境与模型自检 (mbridge doctor / doctor model NAME / doctor all)。",
     invoke_without_command=True,
 )
-cost_app = typer.Typer(
-    name="cost",
-    help="成本估算 (mbridge cost estimate \"...\")。",
-    no_args_is_help=True,
-)
-budget_app = typer.Typer(
-    name="budget",
-    help="月度预算 (mbridge budget show / set <amount>)。",
-    no_args_is_help=True,
-)
-cache_app = typer.Typer(
-    name="cache",
-    help="缓存统计 (mbridge cache stats / reset)。",
-    no_args_is_help=True,
-)
 
 # ---------------------------------------------------------------------------
-# usage group — absorbs cost / budget / cache (R2a)
+# usage group — cost (estimate) + cache (stats/reset/clean).
+# (IA v1.2 cleanup: deprecated top-level `cost` / `cache` / `profile` / `chat`
+# aliases are GONE — no hidden add_typer, no deprecated_alias wrappers. Use
+# the canonical paths: `mbridge usage cost`, `mbridge usage cache stats`,
+# `mbridge config profile ...`.)
 # ---------------------------------------------------------------------------
 usage_app = typer.Typer(
     name="usage",
-    help="用量与成本查询：费用估算、预算管理、缓存统计。",
-    no_args_is_help=True,
-)
-_usage_budget_app = typer.Typer(
-    name="budget",
-    help="月度预算 (mbridge usage budget / usage budget set <amount>)。",
+    help="用量与成本查询：费用估算、缓存统计。",
     no_args_is_help=True,
 )
 _usage_cache_app = typer.Typer(
@@ -246,20 +224,7 @@ profile_app = typer.Typer(
 )
 app.add_typer(model_app, name="model")
 app.add_typer(doctor_app, name="doctor")
-# R2a: cost/budget/cache are now under `usage`; old top-level groups kept hidden for compat
-app.add_typer(cost_app, name="cost", hidden=True)
-app.add_typer(budget_app, name="budget", hidden=True)
-app.add_typer(cache_app, name="cache", hidden=True)
-# R2b: profile is now under `config`; _deprecated_profile_app keeps old `mbridge profile *` working
-_deprecated_profile_app = typer.Typer(
-    name="profile",
-    help="[已移至 config profile] 配置切换。",
-    hidden=True,
-    no_args_is_help=True,
-)
-app.add_typer(_deprecated_profile_app, name="profile", hidden=True)
 app.add_typer(usage_app, name="usage")
-usage_app.add_typer(_usage_budget_app, name="budget")
 usage_app.add_typer(_usage_cache_app, name="cache")
 
 prompt_app = typer.Typer(
@@ -379,12 +344,48 @@ def _run_repl(
     except ConfigError as e:
         err_console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=2) from e
-    model_name = model or cfg.default_model
+    # Mutable holder so ``/model`` can swap the active model mid-session.
+    # ``model_name`` is kept as a local alias for the initial value, but
+    # any code that needs the *current* name should call ``_active_model()``
+    # or read ``model_holder[0]``.
+    model_holder: list[str] = [model or cfg.default_model]
+    model_name = model_holder[0]
+
+    def _active_model() -> str:
+        return model_holder[0]
+
+    def _set_active_model(new_name: str) -> None:
+        """Switch the active model; re-sync thinking_state to its profile.
+
+        Raises ``ValueError`` (caught by /model handler) if the model is
+        not registered. We do NOT clear session history — multi-turn
+        reasoning invariants for Kimi-thinking / MiMo / DeepSeek-reasoner
+        require the prior turns to stay intact.
+        """
+        from .agent.thinking import profile_for
+        new_entry = find_model(new_name)
+        if new_entry is None:
+            mf = load_models_file()
+            names = [m.name for m in mf.models]
+            hint = f" 可用: {', '.join(names)}" if names else " (models.yaml 是空的)"
+            raise ValueError(f"模型 {new_name!r} 不在 models.yaml。{hint}")
+        model_holder[0] = new_name
+        # Re-sync thinking to the new model's profile. If it doesn't have
+        # one, disable thinking (the next /think on will warn accordingly).
+        profile = profile_for(new_name)
+        if profile is not None:
+            thinking_state["enabled"] = True
+            thinking_state["level"] = profile.default_level
+            thinking_state["budget"] = profile.budget_for_level(profile.default_level)
+        else:
+            thinking_state["enabled"] = False
+            thinking_state["level"] = None
+            thinking_state["budget"] = None
 
     # Fallback: default_model not set / not in models.yaml. If exactly one
     # model is configured, just use it — and persist that choice so the
     # next `mbridge` run is silent.
-    if not model_name or find_model(model_name) is None:
+    if not model_holder[0] or find_model(model_holder[0]) is None:
         try:
             mf = load_models_file()
         except ConfigError as e:
@@ -405,7 +406,7 @@ def _run_repl(
                 else "未设置 default_model，"
             )
             console.print(f"[dim]{note}已自动使用唯一可用模型 [bold]{sole}[/bold]。[/dim]")
-            model_name = sole
+            model_holder[0] = sole
             # Persist so next time it's silent.
             try:
                 cfg.default_model = sole
@@ -415,7 +416,7 @@ def _run_repl(
         else:
             names = ", ".join(m.name for m in mf.models)
             err_console.print(
-                f"[red]找不到模型 {model_name!r}。[/red]  "
+                f"[red]找不到模型 {_active_model()!r}。[/red]  "
                 f"可用模型: {names}\n"
                 f"试试 `mbridge -m <name>`，或编辑 ~/.modelbridge/config.yaml 把 "
                 "default_model 改成上面其中一个。"
@@ -622,8 +623,23 @@ def _run_repl(
             from prompt_toolkit import PromptSession
             from prompt_toolkit.completion import ThreadedCompleter
             from prompt_toolkit.history import InMemoryHistory
+            from prompt_toolkit.key_binding import KeyBindings
 
             from .agent.at_completer import AtFileCompleter
+
+            # Ctrl+O toggles thinking display mode (full ↔ collapse).
+            # We capture the binding on thinking_state which is captured
+            # by reference; toggle is visible to the next AssistantStream
+            # created by on_assistant_start.
+            _pt_bindings = KeyBindings()
+
+            @_pt_bindings.add("c-o")
+            def _toggle_thinking_display(event) -> None:
+                thinking_state["show_full"] = not thinking_state.get("show_full", False)
+                mode = "[green]▣ 全显[/green]" if thinking_state["show_full"] else "[dim]▢ 折叠[/dim]"
+                # Print the new state on its own line so the next prompt
+                # redraw leaves a visible breadcrumb in the scrollback.
+                console.print(f"  thinking display: {mode}  [dim](Ctrl+O 切换)[/dim]")
 
             # ThreadedCompleter runs the (lazy) index build + per-keystroke
             # scan off the UI thread, so the first '@' (full os.walk) and broad
@@ -632,6 +648,7 @@ def _run_repl(
                 completer=ThreadedCompleter(AtFileCompleter(_get_file_index)),
                 complete_while_typing=True,
                 history=InMemoryHistory(),
+                key_bindings=_pt_bindings,
             )
     except Exception:  # noqa: BLE001 — prompt_toolkit 不可用就回退
         _pt_session = None
@@ -709,7 +726,7 @@ def _run_repl(
                 images.ensure_vision(
                     has_images=True,
                     model_is_vision=bool(getattr(entry.capabilities, "vision", False)) if entry else False,
-                    model_name=model_name or "(未指定)",
+                    model_name=_active_model() or "(未指定)",
                     available_vision=_vision_model_names(),
                 )
             except images.ImageError as e:
@@ -768,7 +785,12 @@ def _run_repl(
                 turn_state["stream"].__exit__(None, None, None)
             except Exception:  # noqa: BLE001
                 pass
-        s = AssistantStream(console, model_name=model_name)
+        s = AssistantStream(
+            console,
+            model_name=_active_model(),
+            show_full=bool(thinking_state.get("show_full", False)),
+            collapse_threshold=int(thinking_state.get("collapse_threshold", 800)),
+        )
         s.__enter__()
         turn_state["stream"] = s
         turn_state["saw_reasoning"] = False
@@ -860,7 +882,7 @@ def _run_repl(
         # the terminal width on a narrow window, the ellipsis path can
         # leave the cursor mid-line and break the next ``you ❯`` prompt.
         # Flip both to wrap-friendly here so the bar lays out naturally.
-        bar = status_bar_text(stats, model_name=model_name)
+        bar = status_bar_text(stats, model_name=_active_model())
         bar.no_wrap = False
         bar.overflow = "fold"
         console.print(bar)
@@ -871,22 +893,48 @@ def _run_repl(
         turn_state["last_response"] = None
 
     # Mutable state shared with the slash-command dispatcher.
-    thinking_state: dict[str, object] = {}
+    # Initialize from the active model's thinking profile so /think
+    # has a sensible default on the first turn (no manual `on` needed).
+    thinking_state: dict[str, object] = {
+        "enabled": False,
+        "level": None,
+        "budget": None,
+        "collapse_threshold": 800,
+        "show_full": False,
+    }
+    try:
+        from .agent.thinking import profile_for
+        init_entry = find_model(model_name)
+        if init_entry is not None:
+            init_profile = profile_for(init_entry.name)
+            if init_profile is not None:
+                thinking_state["enabled"] = True
+                thinking_state["level"] = init_profile.default_level
+                thinking_state["budget"] = init_profile.budget_for_level(
+                    init_profile.default_level
+                )
+    except Exception:  # noqa: BLE001 — never let init crash the REPL
+        pass
 
     def _command_handler(text: str):
         # Rebuild SlashContext on every call so `/think on` mutations
-        # land in the same `thinking_state` dict the loop reads next turn.
-        entry = find_model(model_name)
+        # land in the same `thinking_state` dict the loop reads next turn,
+        # and so a `/model` swap mid-session is visible to subsequent
+        # commands. ``_active_model()`` reads the live holder, not the
+        # initial ``model_name`` alias.
+        active = _active_model()
+        entry = find_model(active)
         sctx = SlashContext(
             console=console,
             session=session,
             agent_ctx=agent_ctx,
             registry=registry,
-            model_name=model_name,
+            model_name=active,
             entry=entry,
             thinking_state=thinking_state,
             project_path=cwd_resolved,
             mcp_manager=mcp_manager,
+            on_model_change=_set_active_model,
         )
         return handle_slash(text, sctx)
 
@@ -896,7 +944,8 @@ def _run_repl(
             session=session,
             ctx=agent_ctx,
             registry=registry,
-            model_name=model_name,
+            model_name=_active_model(),
+            model_resolver=_active_model,  # live read each turn for /model
             read_input=read_input,
             stream=True,
             command_handler=_command_handler,
@@ -1137,32 +1186,6 @@ def _default_system_prompt(*, allow_bash: bool) -> str:
 # ---------------------------------------------------------------------------
 # version / init
 # ---------------------------------------------------------------------------
-
-@app.command("version")
-def cmd_version(
-    check: bool = typer.Option(
-        False, "--check", "-c", help="顺便检查 GitHub 上是否有新版本。",
-    ),
-) -> None:
-    """显示版本号 (加 --check 检查更新)。"""
-    import platform as _platform
-
-    console.print(f"ModelBridge (mbridge) v{__version__}")
-    console.print(
-        f"[dim]{_platform.system()} {_platform.machine()} · "
-        f"Python {_platform.python_version()} · "
-        f"{'binary' if updater.install_mode() == 'frozen' else 'source'}[/dim]"
-    )
-    if check:
-        rel = updater.check_for_update(force=True)
-        if rel is None:
-            console.print("[green]已是最新版本。[/green]")
-        else:
-            console.print(
-                f"[yellow]发现新版本 [bold]v{rel.version}[/bold]。"
-                f"运行 `mbridge update` 下载更新。[/yellow]"
-            )
-
 
 @app.command("update")
 def cmd_update(
@@ -1500,7 +1523,6 @@ def cmd_ask(
             f"{resp.elapsed_ms}ms · prefix={result.prompt_prefix_hash}"
         )
         console.print(Panel(resp.content or "[dim](empty)[/dim]", title=title, border_style="cyan"))
-        _record_spend_for_response(entry, resp, fallback_prompt=prompt)
         _record_cache_outcome(entry, resp)
 
         meta_parts = [
@@ -1542,31 +1564,6 @@ def cmd_ask(
     # chance to fire.
 
 
-# R3a: `chat` → deprecated alias for `ask`
-deprecated_alias(app, "chat", "ask", cmd_ask)
-
-
-def _extract_io_tokens(entry: ModelEntry, resp, prompt: str) -> tuple[int, int]:
-    """Pull (input, output) token counts from resp.usage; fall back to estimate."""
-    in_tok = out_tok = 0
-    if isinstance(resp.usage, dict):
-        in_tok = int(
-            resp.usage.get("prompt_tokens")
-            or resp.usage.get("input_tokens")
-            or 0
-        )
-        out_tok = int(
-            resp.usage.get("completion_tokens")
-            or resp.usage.get("output_tokens")
-            or 0
-        )
-    if in_tok <= 0:
-        in_tok = estimate_tokens(prompt)
-    if out_tok <= 0 and resp.content:
-        out_tok = estimate_tokens(resp.content)
-    return in_tok, out_tok
-
-
 def _record_cache_outcome(entry: ModelEntry, resp) -> None:
     """Read provider-reported cache hit/miss from ``resp.usage`` and persist.
 
@@ -1593,46 +1590,6 @@ def _record_cache_outcome(entry: ModelEntry, resp) -> None:
         record_hit(saved_tokens=hit, saved_cost=saved_cost)
     else:
         record_miss()
-
-
-def _record_spend_for_response(entry: ModelEntry, resp, *, fallback_prompt: str) -> None:
-    """Estimate cost, write to budget.json, surface warn / over flags."""
-    try:
-        pricing = get_pricing(entry)
-    except PricingNotFound:
-        return  # silent — `mbridge cost estimate` will surface this elsewhere
-    if entry.capabilities.local:
-        return  # free, don't pollute history
-
-    in_tok, out_tok = _extract_io_tokens(entry, resp, fallback_prompt)
-    cost = pricing.cost(input_tokens=in_tok, output_tokens=out_tok)
-    outcome = add_spend(model=entry.name, cost=cost, currency=pricing.currency)
-
-    if outcome.currency_mismatch:
-        console.print(
-            f"[yellow]⚠ 货币不一致 ({pricing.currency} ≠ {outcome.budget.currency})，"
-            "已记入 history 但未累加 spent。[/yellow]"
-        )
-    if outcome.over_monthly:
-        console.print(
-            f"[red]⚠ 已超出本月预算 "
-            f"({outcome.budget.spent:.4f}/{outcome.budget.monthly_limit:.2f} {outcome.budget.currency})[/red]"
-        )
-    elif outcome.monthly_warn:
-        pct = outcome.budget.monthly_percent() or 0
-        console.print(
-            f"[yellow]⚠ 本月已用 {pct:.0f}% (阈值 {outcome.budget.warn_at_percent}%)。[/yellow]"
-        )
-    if outcome.over_daily:
-        console.print(
-            f"[red]⚠ 已超出今日预算 "
-            f"({outcome.budget.daily_spent:.4f}/{outcome.budget.daily_limit:.2f} {outcome.budget.currency})[/red]"
-        )
-    elif outcome.daily_warn:
-        pct = outcome.budget.daily_percent() or 0
-        console.print(
-            f"[yellow]⚠ 今日已用 {pct:.0f}% (阈值 {outcome.budget.warn_at_percent}%)。[/yellow]"
-        )
 
 
 def _chat_with_routing(
@@ -1670,14 +1627,6 @@ def _chat_with_routing(
     attempts_used = 0
 
     while True:
-        # Guard
-        entry_pre = find_model(cur_model)
-        is_local = bool(entry_pre and entry_pre.capabilities.local)
-        guard = check_guard(model_is_local=is_local)
-        if not guard.allowed:
-            err_console.print(f"[red]预算守卫拒绝调用：{guard.reason}[/red]")
-            raise typer.Exit(code=4)
-
         try:
             entry, resp = chat_once(
                 prompt,
@@ -1752,7 +1701,6 @@ def _chat_with_routing(
         console.print(
             Panel(resp.content or "[dim](empty)[/dim]", title=title, border_style="cyan")
         )
-        _record_spend_for_response(entry, resp, fallback_prompt=prompt)
         if verbose:
             _print_verbose(entry, resp)
         elif resp.reasoning_content:
@@ -2088,8 +2036,8 @@ def cmd_model_list() -> None:
     console.print(table)
 
 
-# R2b: `model test` is a deprecated alias for `doctor model` — see deprecated_alias call
-# after cmd_doctor_model is defined (below in the doctor section).
+# IA v1.2 cleanup: `mbridge model test` is GONE (was: deprecated alias for `doctor model`)
+# — use `mbridge doctor model <name>`. See the cleaner explanation at cli.py:2132.
 
 
 @model_app.command("remove")
@@ -2181,8 +2129,7 @@ def cmd_doctor_model(
         raise typer.Exit(code=1)
 
 
-# R2b: `model test` → deprecated alias for `doctor model`
-deprecated_alias(model_app, "test", "doctor model", cmd_doctor_model)
+# IA v1.2 cleanup: `mbridge model test` is GONE — use `mbridge doctor model <name>`.
 
 
 @doctor_app.command("all")
@@ -2532,7 +2479,7 @@ def cmd_route(
 
 
 # ---------------------------------------------------------------------------
-# cost / budget
+# cost
 # ---------------------------------------------------------------------------
 
 @usage_app.command("cost")
@@ -2600,106 +2547,6 @@ def cmd_cost_estimate(
     console.print(table)
     if rows == 0:
         raise typer.Exit(code=1)
-
-
-@_usage_budget_app.command("show")
-def cmd_budget_show() -> None:
-    """显示当月 / 当日预算与开销。"""
-    b = load_budget()
-    body_lines = [
-        f"currency         : {b.currency}",
-        f"month            : {b.month}",
-        "monthly_limit    : "
-        + (f"{b.monthly_limit:.2f}" if b.monthly_limit > 0 else "[dim]未设置 (无限制)[/dim]"),
-        f"monthly_spent    : {b.spent:.4f}",
-    ]
-    if b.remaining is not None:
-        body_lines.append(f"monthly_remaining: {b.remaining:.4f}")
-        if b.over_limit:
-            body_lines.append("[red]⚠ 已超出本月预算[/red]")
-    body_lines.append("")
-    body_lines.append(f"today            : {b.today}")
-    body_lines.append(
-        "daily_limit      : "
-        + (f"{b.daily_limit:.2f}" if b.daily_limit > 0 else "[dim]未设置 (无限制)[/dim]")
-    )
-    body_lines.append(f"daily_spent      : {b.daily_spent:.4f}")
-    if b.daily_remaining is not None:
-        body_lines.append(f"daily_remaining  : {b.daily_remaining:.4f}")
-        if b.over_daily:
-            body_lines.append("[red]⚠ 已超出今日预算[/red]")
-    body_lines.append("")
-    body_lines.append(f"warn_at_percent  : {b.warn_at_percent}")
-    body_lines.append(f"hard_stop        : {b.hard_stop}")
-    if b.history:
-        body_lines.append(f"history entries  : {len(b.history)} (最近: {b.history[-1].get('ts')})")
-    console.print(Panel("\n".join(body_lines), title="budget", border_style="cyan"))
-
-
-@_usage_budget_app.command("set")
-def cmd_budget_set(
-    amount: Optional[float] = typer.Argument(
-        None,
-        help="(可选) 旧版位置参数，等价于 --monthly；保留向后兼容。",
-    ),
-    monthly: Optional[float] = typer.Option(
-        None, "--monthly",
-        help="本月预算金额；0 表示取消限制。",
-    ),
-    daily: Optional[float] = typer.Option(
-        None, "--daily",
-        help="每日预算金额；0 表示取消限制。",
-    ),
-    currency: Optional[str] = typer.Option(
-        None, "--currency", "-c",
-        help="货币代码 (CNY / USD)；不传则保留现有设置。",
-    ),
-    warn_at_percent: Optional[int] = typer.Option(
-        None, "--warn-at",
-        help="开销达到该百分比时打 warning (0-100)。",
-    ),
-    hard_stop: Optional[bool] = typer.Option(
-        None, "--hard-stop/--no-hard-stop",
-        help="超额时是否阻止非本地模型调用。",
-    ),
-) -> None:
-    """设定每日 / 每月预算限额、warn 阈值、hard_stop 守卫。"""
-    # 向后兼容：旧用法 `mbridge budget set 30` → 视为 --monthly 30
-    if amount is not None and monthly is None and daily is None:
-        monthly = amount
-
-    if monthly is None and daily is None and warn_at_percent is None and hard_stop is None and currency is None:
-        err_console.print(
-            "[yellow]什么都没改。试试 `mbridge budget set --monthly 30 --daily 2`。[/yellow]"
-        )
-        raise typer.Exit(code=2)
-
-    b = None
-    if monthly is not None:
-        b = set_monthly_limit(monthly, currency=currency)
-    if daily is not None:
-        b = set_daily_limit(daily, currency=currency)
-    if warn_at_percent is not None or hard_stop is not None:
-        b = set_guard(warn_at_percent=warn_at_percent, hard_stop=hard_stop)
-    if b is None:
-        b = load_budget()
-
-    lines = [f"currency       : {b.currency}"]
-    if monthly is not None:
-        if monthly <= 0:
-            lines.append("monthly_limit  : [yellow]已取消[/yellow]")
-        else:
-            lines.append(f"monthly_limit  : {b.monthly_limit:.2f}")
-    if daily is not None:
-        if daily <= 0:
-            lines.append("daily_limit    : [yellow]已取消[/yellow]")
-        else:
-            lines.append(f"daily_limit    : {b.daily_limit:.2f}")
-    if warn_at_percent is not None:
-        lines.append(f"warn_at_percent: {b.warn_at_percent}")
-    if hard_stop is not None:
-        lines.append(f"hard_stop      : {b.hard_stop}")
-    console.print(Panel("\n".join(lines), title="✓ budget updated", border_style="green"))
 
 
 # ---------------------------------------------------------------------------
@@ -2811,20 +2658,11 @@ def cmd_cache_clean(
 # R2a: deprecated aliases (old paths → new canonical paths under `usage`)
 # ---------------------------------------------------------------------------
 # The impl functions are now canonically registered under usage_app /
-# _usage_budget_app / _usage_cache_app (decorators above). The old apps
-# (cost_app / budget_app / cache_app) only keep hidden deprecating aliases.
+# _usage_cache_app (decorators above). The old apps (cost_app / cache_app)
+# only keep hidden deprecating aliases.
 
-# cost estimate → usage cost
-deprecated_alias(cost_app, "estimate", "usage cost", cmd_cost_estimate)
-
-# budget show / set → usage budget show/set
-deprecated_alias(budget_app, "show", "usage budget show", cmd_budget_show)
-deprecated_alias(budget_app, "set", "usage budget set", cmd_budget_set)
-
-# cache stats / reset / clean → usage cache stats/reset/clean
-deprecated_alias(cache_app, "stats", "usage cache", cmd_cache_stats)
-deprecated_alias(cache_app, "reset", "usage cache reset", cmd_cache_reset)
-deprecated_alias(cache_app, "clean", "usage cache clean", cmd_cache_clean)
+# IA v1.2 cleanup: `mbridge cost estimate` / `mbridge cache stats|reset|clean`
+# aliases are GONE — use `mbridge usage cost` and `mbridge usage cache ...`.
 
 
 # ---------------------------------------------------------------------------
@@ -3059,18 +2897,8 @@ def cmd_profile_remove(
         raise typer.Exit(code=2)
 
 
-# ---------------------------------------------------------------------------
-# R2b: deprecated aliases for `mbridge profile *` → `mbridge config profile *`
-# ---------------------------------------------------------------------------
-# _deprecated_profile_app is a separate hidden group (registered at top of file
-# near the other app.add_typer calls). We cannot reuse the canonical profile_app
-# because the sub-typer callback would fire on both paths.
-
-deprecated_alias(_deprecated_profile_app, "add", "config profile add", cmd_profile_add)
-deprecated_alias(_deprecated_profile_app, "list", "config profile list", cmd_profile_list)
-deprecated_alias(_deprecated_profile_app, "use", "config profile use", cmd_profile_use)
-deprecated_alias(_deprecated_profile_app, "show", "config profile show", cmd_profile_show)
-deprecated_alias(_deprecated_profile_app, "remove", "config profile remove", cmd_profile_remove)
+# IA v1.2 cleanup: `mbridge profile add|list|use|show|remove` aliases are GONE —
+# use `mbridge config profile add|list|use|show|remove`.
 
 
 # ---------------------------------------------------------------------------
@@ -3343,7 +3171,6 @@ def cmd_edit(
         _print_provider_error(e)
         raise typer.Exit(code=3) from e
 
-    _record_spend_for_response(entry, resp, fallback_prompt=request)
     logger.info("edit model=%s elapsed=%dms", entry.name, resp.elapsed_ms)
 
     # 4) Extract diff from response
@@ -3431,8 +3258,13 @@ def cmd_edit(
 @app.command(
     "run",
     help=(
-        "在项目目录内安全执行一条 shell 命令。"
-        "命令必须命中白名单 (默认 pytest/python/npm/go/cargo …)，"
+        "在项目目录内安全执行一条 shell 命令。\n\n"
+        "常用示例:\n"
+        "    mbridge run pytest -x              # 跑测试\n"
+        "    mbridge run \"pytest -k smoke -v\"   # 多选项 + 引号\n"
+        "    mbridge run \"python script.py\"    # 跑脚本\n"
+        "    mbridge run --dry-run \"npm test\"  # 仅校验 + 解析报错\n\n"
+        "命令必须命中白名单 (pytest/python/npm/go/cargo …)，"
         "禁止任何 shell 元字符 (;|&> 等)。失败时自动解析 traceback / pytest / Node / 编译错误。"
     ),
 )
@@ -3976,266 +3808,6 @@ def _build_for_hash(
             file_contexts = read_files(selection.files, project_root=project)
             builder = builder.with_project_files(file_contexts)
     return builder.build(), summary, cache_reason
-
-
-@prompt_app.command("hash", hidden=True)
-def cmd_prompt_hash(
-    project: Optional[Path] = typer.Option(
-        Path("."), "--project", "-p", help="项目路径 (默认当前目录)。"
-    ),
-    query: str = typer.Option(
-        "<NEXT_USER_REQUEST>", "--query", "-q",
-        help="用于占位的用户问题；只影响 dynamic_suffix_hash，不影响 stable_prefix_hash。",
-    ),
-    include_files: bool = typer.Option(
-        False, "--include-files",
-        help="同时跑 file_selector 并把选中的文件并入 project_files 段 (会影响 selected_files_hash)。",
-    ),
-) -> None:
-    """打印当前项目下 prompt 各段的稳定 hash。
-
-    输出包括 stable_prefix_hash、rules_hash、project_summary_hash、
-    file_tree_hash、selected_files_hash、dynamic_suffix_hash。
-    用户问题不进入 stable_prefix_hash —— 同项目同规则下，无论问什么问题，
-    stable_prefix_hash 都应该一致。
-    """
-    result, summary, cache_reason = _build_for_hash(
-        project, query, include_files=include_files,
-    )
-
-    console.print(Panel.fit(
-        f"stable_prefix_hash    = [bold]{result.stable_prefix_hash}[/bold]\n"
-        f"rules_hash            = {result.rules_hash}\n"
-        f"project_summary_hash  = {result.project_summary_hash}\n"
-        f"file_tree_hash        = {result.file_tree_hash}\n"
-        f"selected_files_hash   = {result.selected_files_hash}\n"
-        f"dynamic_suffix_hash   = {result.dynamic_suffix_hash}",
-        title=f"prompt hash · query={query!r}",
-        border_style="cyan",
-    ))
-
-    table = Table(title="section hashes", show_lines=False)
-    table.add_column("#", style="dim", no_wrap=True)
-    table.add_column("section", style="bold")
-    table.add_column("hash", style="dim", no_wrap=True)
-    table.add_column("chars")
-    table.add_column("in_prefix", no_wrap=True)
-    for i, name in enumerate(SECTION_ORDER, start=1):
-        chars = len(result.sections.get(name, ""))
-        h = result.section_hashes.get(name, "")
-        in_prefix = "✓" if name in PREFIX_SECTIONS else ""
-        table.add_row(str(i), name, h, str(chars), in_prefix)
-    console.print(table)
-
-    meta = [
-        f"summary cache: [bold]{cache_reason}[/bold]",
-        f"project: {project.resolve() if project else '<none>'}",
-    ]
-    if summary is not None:
-        meta.append(f"files: {summary.total_files}")
-    console.print("[dim]" + "  ·  ".join(meta) + "[/dim]")
-    console.print(
-        "[dim]提示: 同项目同规则下 stable_prefix_hash 应当稳定。"
-        "如果它变了，对照 section hashes 找出漂移的那一段。[/dim]"
-    )
-
-
-@prompt_app.command("diff", hidden=True)
-def cmd_prompt_diff(
-    project: Optional[Path] = typer.Option(
-        Path("."), "--project", "-p", help="项目路径 (默认当前目录)。"
-    ),
-    query: str = typer.Option(
-        "<NEXT_USER_REQUEST>", "--query", "-q",
-        help="占位用户问题。两次构建用同一个 query，因此 stable_prefix_hash 必须一致。",
-    ),
-    include_files: bool = typer.Option(
-        False, "--include-files",
-        help="把 file_selector 的结果并入 project_files 段。",
-    ),
-    context_lines: int = typer.Option(
-        20, "--lines", "-n", min=0, max=500,
-        help="差异输出的前 N 行 (默认 20)。",
-    ),
-) -> None:
-    """连续构建两次 prompt，比较 stable prefix 是否一致。
-
-    用同样的输入构建两次，如果 stable_prefix_hash 不一致则说明 PromptBuilder
-    引入了非确定性内容 (时间戳、随机 ID、未排序的列表等)，需要修复。
-    """
-    import difflib
-
-    result1, _, cache_reason_1 = _build_for_hash(project, query, include_files=include_files)
-    result2, _, cache_reason_2 = _build_for_hash(project, query, include_files=include_files)
-
-    same_prefix = result1.stable_prefix_hash == result2.stable_prefix_hash
-
-    head = (
-        f"build #1 prefix = [bold]{result1.stable_prefix_hash}[/bold]\n"
-        f"build #2 prefix = [bold]{result2.stable_prefix_hash}[/bold]\n"
-        f"identical       = "
-        + ("[green]YES ✓[/green]" if same_prefix else "[red]NO ✗[/red]")
-        + f"\nsummary cache   = #1: {cache_reason_1}  ·  #2: {cache_reason_2}"
-    )
-    console.print(Panel.fit(head, title="prompt diff", border_style="cyan"))
-
-    # Per-section comparison: highlight every section whose hash drifted.
-    diff_table = Table(title="per-section hash", show_lines=False)
-    diff_table.add_column("#", style="dim", no_wrap=True)
-    diff_table.add_column("section", style="bold")
-    diff_table.add_column("build #1 hash", no_wrap=True)
-    diff_table.add_column("build #2 hash", no_wrap=True)
-    diff_table.add_column("match", no_wrap=True)
-    any_section_drift = False
-    for i, name in enumerate(SECTION_ORDER, start=1):
-        h1 = result1.section_hashes.get(name, "")
-        h2 = result2.section_hashes.get(name, "")
-        ok = h1 == h2
-        if not ok:
-            any_section_drift = True
-        diff_table.add_row(
-            str(i), name, h1, h2,
-            "[green]✓[/green]" if ok else "[red]✗[/red]",
-        )
-    console.print(diff_table)
-
-    if same_prefix and not any_section_drift:
-        console.print(
-            "[green]✓ 所有 section 在两次构建中完全一致。stable prefix 可稳定缓存。[/green]"
-        )
-        return
-
-    # Drilldown: unified diff of the actual section contents.
-    drifted = [n for n in SECTION_ORDER if result1.section_hashes.get(n, "") != result2.section_hashes.get(n, "")]
-    console.print(f"[yellow]drifted sections:[/yellow] {', '.join(drifted) or '(prefix-level drift)'}")
-    for name in drifted:
-        a = result1.sections.get(name, "").splitlines()
-        b = result2.sections.get(name, "").splitlines()
-        diff_lines = list(difflib.unified_diff(
-            a, b, fromfile=f"#1:{name}", tofile=f"#2:{name}", lineterm="",
-        ))
-        if context_lines > 0:
-            diff_lines = diff_lines[:context_lines]
-        if not diff_lines:
-            continue
-        console.print(Panel(
-            "\n".join(diff_lines),
-            title=f"diff · {name} (first {context_lines} lines)",
-            border_style="yellow",
-        ))
-
-
-
-@prompt_app.command("edit")
-def cmd_prompt_edit(
-    which: str = typer.Argument(
-        "rules", help="要编辑的文件: rules (默认) 或 system。",
-    ),
-) -> None:
-    """在 $EDITOR 中打开 system.md 或 rules.md。"""
-    target = _system_md_path() if which == "system" else _rules_md_path()
-    if not target.exists():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        body = DEFAULT_SYSTEM_MD if which == "system" else DEFAULT_RULES_MD
-        target.write_text(body, encoding="utf-8")
-        console.print(f"[green]✓[/green] 已用默认内容初始化 {target}")
-
-    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
-    if not editor:
-        err_console.print(
-            f"[yellow]未检测到 $EDITOR / $VISUAL 环境变量。[/yellow]\n"
-            f"请手动打开: [bold]{target}[/bold]"
-        )
-        raise typer.Exit(code=0)
-
-    import shlex
-    import subprocess
-    cmd = shlex.split(editor) + [str(target)]
-    console.print(f"[dim]running: {' '.join(cmd)}[/dim]")
-    try:
-        subprocess.run(cmd, check=False)
-    except OSError as e:
-        err_console.print(f"[red]无法启动编辑器: {e}[/red]")
-        raise typer.Exit(code=1) from e
-
-
-@prompt_app.command("set-system")
-def cmd_prompt_set_system(
-    text: str = typer.Argument(..., help="新的 system prompt 全文 (会替换 system.md 整个文件)。"),
-) -> None:
-    """直接覆盖 ``system.md``。"""
-    target = _system_md_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(text.strip() + "\n", encoding="utf-8")
-    console.print(f"[green]✓[/green] 已写入 {target} ({len(text)} 字符)")
-
-
-@prompt_app.command("reset")
-def cmd_prompt_reset(
-    force: bool = typer.Option(False, "--force", "-f", help="跳过确认。"),
-    which: str = typer.Option(
-        "both", "--which", help="要重置的文件: system / rules / both (默认)。",
-    ),
-) -> None:
-    """把 system.md / rules.md 恢复到内置默认内容。"""
-    targets: list[tuple[Path, str]] = []
-    if which in {"system", "both"}:
-        targets.append((_system_md_path(), DEFAULT_SYSTEM_MD))
-    if which in {"rules", "both"}:
-        targets.append((_rules_md_path(), DEFAULT_RULES_MD))
-    if not targets:
-        err_console.print(f"[red]--which 取值无效: {which!r}[/red]")
-        raise typer.Exit(code=2)
-
-    existing = [(p, body) for p, body in targets if p.exists()]
-    if existing and not force:
-        files = ", ".join(str(p) for p, _ in existing)
-        if not Confirm.ask(f"将覆盖：{files}，确认?", default=False):
-            raise typer.Exit(code=0)
-
-    for path, body in targets:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body, encoding="utf-8")
-        console.print(f"[green]✓[/green] reset {path}")
-
-
-# ---------------------------------------------------------------------------
-# mbridge project ...
-# ---------------------------------------------------------------------------
-
-@project_app.command("scan")
-def cmd_project_scan(
-    path: Path = typer.Option(Path("."), "--path", "-p", help="项目路径。"),
-) -> None:
-    """扫描项目并输出 ProjectSummary。"""
-    summary = scan_project(path)
-    console.print(Panel.fit(
-        f"name     : [bold]{summary.project_name}[/bold]\n"
-        f"path     : {summary.project_path}\n"
-        f"languages: {', '.join(summary.detected_languages) or '(none)'}\n"
-        f"frameworks: {', '.join(summary.detected_frameworks) or '(none)'}\n"
-        f"pkg mgr  : {summary.package_manager or '(unknown)'}\n"
-        f"entrypoints: {', '.join(summary.entrypoints) or '(none)'}",
-        title="project scan", border_style="cyan",
-    ))
-    if summary.important_files:
-        console.print("[bold]important files[/bold]: " + ", ".join(summary.important_files))
-    if summary.scripts:
-        scripts_table = Table(title="scripts", show_lines=False)
-        scripts_table.add_column("name", style="bold cyan", no_wrap=True)
-        scripts_table.add_column("command", overflow="fold")
-        for k, v in list(summary.scripts.items())[:20]:
-            scripts_table.add_row(k, v)
-        console.print(scripts_table)
-    if summary.readme_excerpt:
-        console.print(Panel(
-            summary.readme_excerpt[:600] + ("…" if len(summary.readme_excerpt) > 600 else ""),
-            title="README (excerpt)", border_style="dim",
-        ))
-    if summary.notes:
-        console.print("[yellow]notes[/yellow]:")
-        for n in summary.notes:
-            console.print(f"  · {n}")
 
 
 @project_rules_app.callback(invoke_without_command=True)

@@ -6,7 +6,7 @@
 
 > **国产模型优先的 AI Coding Agent + 兼容 CLI。**
 >
-> 直接运行 `mbridge` 进入**持续会话** (像 Claude Code) — AI 可以读 / 写 / 编辑项目文件，需要时也能跑 shell。管理类操作 (添加模型、自检、路由、成本、预算、缓存) 走子命令。
+> 直接运行 `mbridge` 进入**持续会话** (像 Claude Code) — AI 可以读 / 写 / 编辑项目文件，需要时也能跑 shell。管理类操作 (添加模型、自检、路由、成本、缓存) 走子命令。
 >
 > 支持 DeepSeek / Qwen / Kimi / MiMo / GLM / MiniMax / Ollama / vLLM / LM Studio。Provider Adapter 层吸收国产模型字段差异 (`reasoning_content`、`thinking`、`tool_calls`)。
 
@@ -49,7 +49,6 @@ mbridge doctor                     全局自检
 mbridge doctor model NAME / doctor all / doctor route   模型 / 全部 / 路由自检
 
 mbridge usage cost "..."           成本估算
-mbridge usage budget [set ...]     月度预算 查看 / 设置
 mbridge usage cache                缓存命中统计
 
 mbridge prompt list / show / edit / set-system / reset   提示词与规则文件
@@ -64,7 +63,9 @@ mbridge --version / -V             同上 (任意位置)
 mbridge update [--yes]             检查并下载新版本
 ```
 
-> 旧命令名（chat / cost estimate / budget / cache / profile / bridge control … ）仍可用但会提示已迁移，将在 v1.2 移除。
+> R2a 已物理删除的别名（v1.2 起 `No such command`）：`bridge control`（→ `bridge on/off/status`）、`bridge` 之外的 `bridge control` 嵌套层。  
+> 仍在 R3a 软弃用态（仍 resolve，会打 deprecation 通知，下一阶段再删）：`chat`、`cost estimate`、`cache stats/reset/clean`、`profile add/list/use/show/remove`、`model test`。  
+> **预算功能（`mbridge usage budget`）已在 2026-07 移除。**
 
 > **版本与自动更新**：REPL 启动时会显示当前版本，并在每天检查一次 GitHub
 > Release。发现新版本时会提示 `🔔 发现新版本 vX.Y.Z`，此时直接输入 **同意**
@@ -298,8 +299,8 @@ modelbridge/
 ├── router/               # 模型路由
 │   └── classifier.py · fallback.py · router.py
 │
-├── cost/                 # 成本与预算
-│   └── estimator.py · budget.py
+├── cost/                 # 成本估算
+│   └── estimator.py
 │
 ├── cache/                # 缓存统计
 │   └── manager.py
@@ -390,12 +391,7 @@ pricing:
 
 ### 5. 预算守卫
 
-`budget.json` 同时跟踪**月度**与**每日**开销，每次 `chat` 调用后自动累加：
-
-```bash
-mbridge usage budget set --monthly 30 --daily 2 --warn-at 80 --hard-stop
-mbridge usage budget
-```
+> ⚠️ **预算功能已在 2026-07 移除。** 早期的月度/每日 budget、`hard_stop` 守卫、`budget.json` 持久化都不再维护 — `mbridge usage budget` 子命令已下线。要看 token 用量用 `mbridge` REPL 里的 `/tokens` slash 命令；要估算单次成本用 `mbridge usage cost "..."`。
 
 - `--warn-at N`：到达 N% 时打 warning。
 - `--hard-stop`：超额时**阻止**非本地模型调用（本地模型永远允许）。
@@ -615,7 +611,7 @@ mbridge patch rollback
 
 ### 7. dry-run vs --yes 语义
 
-- `--dry-run`：完整跑 prompt → 模型 → 解析 → 安全检查 → 展示 diff → **停**。不写文件、不建备份、不动 budget。
+- `--dry-run`：完整跑 prompt → 模型 → 解析 → 安全检查 → 展示 diff → **停**。不写文件、不建备份、不持久化任何状态。
 - `--yes`：跳过"确认应用?"那一步弹窗，但前面的**安全检查、备份、应用结果展示**全部照常。`--yes` 不是 "yolo"，它是 "我确认看过这种 prompt 的输出"。
 
 ### 8. 完整流程一条线

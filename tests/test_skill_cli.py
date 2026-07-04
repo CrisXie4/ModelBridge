@@ -122,13 +122,23 @@ def test_skill_add_aborts_on_decline(tmp_path: Path, home: Path):
 
 
 def test_skill_remove_deletes_skill(home_with_skill: Path):
-    """``mbridge skill remove deploy`` should delete the skill from the global dir."""
-    # Verify it's there first
+    """`mbridge skill remove` was PHYSICALLY REMOVED in v1.2 (R2a cleanup).
+
+    Skills now live entirely under the user's responsibility — remove by
+    deleting `~/.modelbridge/skills/<name>/` directly. Guard: `skill remove`
+    must NOT resolve.
+    """
     assert (home_with_skill / "skills" / "deploy").exists()
 
     r = runner.invoke(app, ["skill", "remove", "deploy"])
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    # Skill dir should be gone
-    assert not (home_with_skill / "skills" / "deploy").exists(), (
-        f"Expected skill dir to be removed\noutput:\n{r.output}"
+    assert r.exit_code == 2, (
+        f"`mbridge skill remove` should be unknown (exit_code=2) after v1.2, "
+        f"got exit_code={r.exit_code}\n{r.output}"
+    )
+    assert "no such command" in r.output.lower(), (
+        f"Expected 'No such command' after v1.2 cleanup, got:\n{r.output}"
+    )
+    # And the skill dir is obviously untouched (nothing ran).
+    assert (home_with_skill / "skills" / "deploy").exists(), (
+        f"Skill dir should still exist (no command ran)\noutput:\n{r.output}"
     )

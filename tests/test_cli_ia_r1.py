@@ -127,14 +127,17 @@ def test_mcp_help_hides_debug_commands():
         )
 
 
-def test_mcp_serve_still_invokable():
-    """mcp serve must still resolve (exit_code==0 for --help), even though hidden."""
+def test_mcp_serve_no_such_command():
+    """`mcp serve` was PHYSICALLY REMOVED in v1.2 (R2a completion)."""
     from modelbridge.cli import app
 
     result = runner.invoke(app, ["mcp", "serve", "--help"])
-    assert result.exit_code == 0, (
-        f"Hidden `mcp serve` should still be invokable, "
-        f"but got exit_code={result.exit_code}\n{result.output}"
+    assert result.exit_code == 2, (
+        f"`mcp serve` should be unknown (exit_code=2) after v1.2 cleanup, "
+        f"got exit_code={result.exit_code}\n{result.output}"
+    )
+    assert "no such command" in result.output.lower(), (
+        f"Expected 'No such command' after v1.2 cleanup, got:\n{result.output}"
     )
 
 

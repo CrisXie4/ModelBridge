@@ -175,11 +175,19 @@ class AssistantStream:
         *,
         model_name: str,
         show_reasoning_inline: bool = True,
+        show_full: bool = False,
+        collapse_threshold: int = 800,
         refresh_per_second: int = 8,
     ) -> None:
         self.console = console
         self.model_name = model_name
         self.show_reasoning_inline = show_reasoning_inline
+        # When show_full is True, reasoning_content is always rendered
+        # in full (Ctrl+O toggled this on). Otherwise, the post-exit
+        # render collapses content longer than ``collapse_threshold`` chars
+        # to a preview + "Ctrl+O to expand" hint.
+        self.show_full = show_full
+        self.collapse_threshold = collapse_threshold
         self.refresh_per_second = refresh_per_second
         self._content_parts: list[str] = []
         self._reasoning_parts: list[str] = []
@@ -307,10 +315,30 @@ class AssistantStream:
         # --- Thinking block (dim italic) ---------------------------------
         if self.show_reasoning_inline and reasoning_text:
             items.append(Text("// thinking", style="bold dim"))
-            # Plain dim italic Text — NOT Markdown. Thinking traces from
-            # reasoning models often contain stray ``*`` / ``_`` that
-            # would accidentally bold-toggle if parsed.
-            items.append(Text(reasoning_text, style="dim italic"))
+            # Post-exit view: collapse long reasoning unless Ctrl+O is on.
+            # Live view already uses tail_lines so the threshold is a no-op
+            # during streaming — only the final panel feels the difference.
+            if (
+                live_view is False
+                and not self.show_full
+                and self.collapse_threshold > 0
+                and len(reasoning_text) > self.collapse_threshold
+            ):
+                preview_chars = min(200, self.collapse_threshold)
+                preview = reasoning_text[:preview_chars].rstrip()
+                if len(preview) < len(reasoning_text):
+                    preview = preview.rstrip() + "…"
+                items.append(Text(preview, style="dim italic"))
+                hidden = len(reasoning_text) - len(preview)
+                items.append(Text(
+                    f"… 折叠了 {hidden} 字符 [dim](Ctrl+O 全显 — 当前阈值 {self.collapse_threshold} 字符)[/dim]",
+                    style="dim italic",
+                ))
+            else:
+                # Plain dim italic Text — NOT Markdown. Thinking traces from
+                # reasoning models often contain stray ``*`` / ``_`` that
+                # would accidentally bold-toggle if parsed.
+                items.append(Text(reasoning_text, style="dim italic"))
             if content_text:
                 items.append(Rule(style="dim"))
 

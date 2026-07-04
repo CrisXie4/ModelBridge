@@ -5,8 +5,8 @@
 * :mod:`.windows` — *token window*: each model's max context size + cheap
   session token accounting.
 
-Neither is :mod:`modelbridge.cost.budget`, which tracks money spent — that one
-lives under ``cost/`` on purpose.
+Neither deals with monetary spend (the cost-budget sub-package was removed
+in 2026-07; ``cost.estimator`` only does *estimation*).
 """
 
 from .budget import (

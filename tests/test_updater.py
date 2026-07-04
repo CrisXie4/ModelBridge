@@ -202,16 +202,15 @@ def test_cli_version_flag():
 
 
 def test_cli_version_command():
+    """`mbridge version` was PHYSICALLY REMOVED in v1.2; canonical = --version flag."""
     r = runner.invoke(app, ["version"])
-    assert r.exit_code == 0
-    assert "mbridge" in r.output.lower()
+    assert r.exit_code == 2, f"exit_code={r.exit_code}\n{r.output}"
+    assert "no such command" in r.output.lower(), r.output
 
-
-def test_cli_version_check_uptodate(home, monkeypatch):
-    monkeypatch.setattr(updater, "check_for_update", lambda *a, **k: None)
-    r = runner.invoke(app, ["version", "--check"])
-    assert r.exit_code == 0
-    assert "最新" in r.output
+    # Canonical: --version flag (tests/cli CLI surface).
+    r2 = runner.invoke(app, ["--version"])
+    assert r2.exit_code == 0, f"exit_code={r2.exit_code}\n{r2.output}"
+    assert "mbridge" in r2.output.lower()
 
 
 def test_cli_update_uptodate(home, monkeypatch):

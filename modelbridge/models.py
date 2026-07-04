@@ -160,7 +160,11 @@ class ModelEntry(BaseModel):
 
 
 class ModelsFile(BaseModel):
-    """Schema for ``~/.cnagent/models.yaml``."""
+    """Schema for ``~/.modelbridge/models.yaml`` (the canonical path).
+
+    The on-disk location may historically point at ``~/.cnagent/models.yaml``
+    — see :func:`modelbridge.utils.get_models_path` for the resolution order.
+    """
 
     models: list[ModelEntry] = Field(default_factory=list)
 

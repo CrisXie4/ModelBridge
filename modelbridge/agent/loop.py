@@ -170,6 +170,7 @@ def run_interactive(
     ctx: AgentContext,
     registry: ToolRegistry,
     model_name: str,
+    model_resolver: Callable[[], str] | None = None,
     read_input: InputFn,
     stream: bool = False,
     command_handler: Callable[[str], "Any"] | None = None,
@@ -278,11 +279,16 @@ def run_interactive(
             pending_images["images"] = []
 
         try:
+            # Resolve model name fresh each turn: a /model mid-session
+            # can change the active model. ``model_resolver`` is set by
+            # the CLI wrapper; we fall back to the static ``model_name``
+            # arg if not (e.g. test calls).
+            _active_model = model_resolver() if model_resolver is not None else model_name
             result = run_agent_turn(
                 session=session,
                 ctx=ctx,
                 registry=registry,
-                model_name=model_name,
+                model_name=_active_model,
                 timeout=timeout,
                 max_iters=max_iters_per_turn,
                 stream=stream,

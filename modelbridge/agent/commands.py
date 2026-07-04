@@ -72,6 +72,10 @@ class SlashContext:
     # MCPManager | None — set by the REPL when mcp.enabled; typed Any so the
     # agent layer doesn't import mcp (mcp already imports agent for the adapter).
     mcp_manager: Any = None
+    # Optional callback for /model to swap the active model mid-session.
+    # Wired by cli.py to update its model_holder + re-sync thinking_state.
+    # Any → Callable[[str], None] | None; kept Any to avoid an import cycle.
+    on_model_change: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -206,41 +210,190 @@ def _tokens(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: A
 
 
 def _think(sctx: SlashContext, *, args: list[str]) -> CommandResult:
-    """``/think on|off [budget]`` toggle the next request's thinking mode."""
-    if not args:
-        cur = sctx.thinking_state.get("enabled")
-        budget = sctx.thinking_state.get("budget")
-        sctx.console.print(
-            f"thinking mode: [bold]{cur}[/bold]"
-            + (f"  · budget={budget}" if budget else "")
-            + "\n[dim]用法: /think on [budget]   /think off[/dim]"
-        )
-        return CommandResult()
+    """``/think on|off|level|auto|collapse [N]`` control thinking mode + intensity + display.
 
-    flag = args[0].lower()
-    if flag in ("on", "true", "1", "yes", "y"):
+    Subcommands:
+      (no args)            show current state + model profile
+      on [level]           enable thinking; optional 1-10 or low/med/high/xhigh
+      off                  disable thinking
+      level <1-10|name>    change intensity (also enables)
+      auto                 reset to current model's default level
+      collapse <N>         set collapse threshold (chars; 0 = never collapse)
+    """
+    from .thinking import NAMED_LEVELS, budget_for, parse_level, profile_for
+
+    if not args:
+        return CommandResult(handled=_print_think_status(sctx))
+
+    sub = args[0].lower()
+
+    if sub in ("on", "true", "1", "yes", "y"):
         sctx.thinking_state["enabled"] = True
         if len(args) >= 2:
-            try:
-                sctx.thinking_state["budget"] = int(args[1])
-            except ValueError:
-                sctx.console.print(f"[yellow]忽略非法 budget: {args[1]!r}[/yellow]")
-        msg = "thinking mode: [green]ON[/green]"
-        if "budget" in sctx.thinking_state:
-            msg += f"  · budget={sctx.thinking_state['budget']}"
-        sctx.console.print(msg)
+            level = parse_level(args[1])
+            if level is None:
+                sctx.console.print(f"[yellow]忽略非法 level: {args[1]!r} (1-10 or low/med/high/xhigh)[/yellow]")
+            else:
+                _apply_level(sctx, level)
+        _print_think_status(sctx)
         if sctx.entry and not sctx.entry.capabilities.reasoning:
             sctx.console.print(
                 "[yellow]提示: 当前模型 capabilities.reasoning=false；"
                 "thinking 字段仍会发送，但 provider 可能忽略或返回 400。[/yellow]"
             )
-    elif flag in ("off", "false", "0", "no", "n"):
+    elif sub in ("off", "false", "0", "no", "n"):
         sctx.thinking_state["enabled"] = False
-        sctx.thinking_state.pop("budget", None)
         sctx.console.print("thinking mode: [red]OFF[/red]")
+    elif sub == "level":
+        if len(args) < 2:
+            sctx.console.print(
+                "[yellow]用法: /think level <1-10|low|med|high|xhigh>[/yellow]"
+            )
+            return CommandResult()
+        level = parse_level(args[1])
+        if level is None:
+            sctx.console.print(f"[red]非法 level: {args[1]!r}[/red]")
+            return CommandResult()
+        _apply_level(sctx, level)
+        sctx.thinking_state["enabled"] = True  # implicitly enable
+        _print_think_status(sctx)
+    elif sub == "auto":
+        if not sctx.entry:
+            sctx.console.print("[yellow]没有当前模型 — 无法 auto[/yellow]")
+            return CommandResult()
+        profile = profile_for(sctx.entry.name)
+        if profile is None:
+            sctx.console.print(
+                f"[yellow]当前模型 {sctx.entry.name!r} 没有 thinking profile — 不支持 thinking[/yellow]"
+            )
+            return CommandResult()
+        sctx.thinking_state["level"] = profile.default_level
+        sctx.thinking_state["budget"] = profile.budget_for_level(profile.default_level)
+        sctx.thinking_state["enabled"] = True
+        sctx.console.print(
+            f"[green]✓ reset to {sctx.entry.name} default "
+            f"(level={profile.default_level}, budget≈{sctx.thinking_state['budget']})[/green]"
+        )
+        _print_think_status(sctx)
+    elif sub == "collapse":
+        if len(args) < 2:
+            cur = sctx.thinking_state.get("collapse_threshold", 800)
+            sctx.console.print(f"collapse threshold: {cur} 字符 (0 = 永不折叠)")
+            return CommandResult()
+        try:
+            threshold = max(0, int(args[1]))
+        except ValueError:
+            sctx.console.print(f"[red]非法阈值: {args[1]!r}[/red]")
+            return CommandResult()
+        sctx.thinking_state["collapse_threshold"] = threshold
+        sctx.console.print(f"collapse threshold: {threshold} 字符")
     else:
         sctx.console.print(
-            f"[red]/think 参数无效: {flag!r}[/red]  用法: /think on [budget] | off"
+            f"[red]未知子命令: /think {sub}[/red]\n"
+            f"[dim]可用: on [level] | off | level <N|name> | auto | collapse <N>  "
+            f"(level: 1-10 or {', '.join(NAMED_LEVELS)})[/dim]"
+        )
+    return CommandResult()
+
+
+def _apply_level(sctx: SlashContext, level: int) -> None:
+    """Set thinking_state['level'] and (if model has a profile) the budget."""
+    sctx.thinking_state["level"] = level
+    if sctx.entry:
+        from .thinking import budget_for
+        budget = budget_for(sctx.entry.name, level)
+        if budget is not None:
+            sctx.thinking_state["budget"] = budget
+        else:
+            sctx.thinking_state.pop("budget", None)
+
+
+def _print_think_status(sctx: SlashContext) -> bool:
+    """Print current thinking state. Always returns ``True``."""
+    from .thinking import profile_for
+    enabled = sctx.thinking_state.get("enabled", False)
+    level = sctx.thinking_state.get("level")
+    budget = sctx.thinking_state.get("budget")
+    collapse = sctx.thinking_state.get("collapse_threshold", 800)
+    show_full = sctx.thinking_state.get("show_full", False)
+    state = "[green]ON[/green]" if enabled else "[red]OFF[/red]"
+    show_mode = "[▣ 全显][/green]" if show_full else "[▢ 折叠][/dim]"
+    if not show_full:
+        show_mode = "[▢ 折叠][/dim]"
+    else:
+        show_mode = "[green][▣ 全显][/green]"
+    parts = [f"thinking mode : {state}"]
+    if level is not None:
+        parts.append(f"level={level}")
+    if budget is not None:
+        parts.append(f"budget≈{budget}")
+    parts.append(f"collapse≥{collapse}c")
+    parts.append(show_mode)
+    sctx.console.print("  ".join(parts))
+    if sctx.entry:
+        profile = profile_for(sctx.entry.name)
+        if profile:
+            sctx.console.print(
+                f"[dim]model profile : {sctx.entry.name} → "
+                f"default_level={profile.default_level}, "
+                f"range=[{profile.min_tokens}, {profile.max_tokens}][/dim]"
+            )
+        else:
+            sctx.console.print(
+                f"[dim]model profile : {sctx.entry.name} → no profile (不支持 thinking)[/dim]"
+            )
+    return True
+
+
+def _model(sctx: SlashContext, *, args: list[str]) -> CommandResult:
+    """``/model [name]`` show or switch the active model mid-session.
+
+    When switching, syncs ``thinking_state`` to the new model's profile
+    (level + budget reset to the model's default). The session history
+    is preserved — only the model identity changes; multi-turn reasoning
+    invariants for Kimi-thinking / MiMo / DeepSeek-reasoner are kept.
+    """
+    from .thinking import profile_for
+
+    if not args:
+        cur = sctx.model_name
+        sctx.console.print(f"active model: [bold cyan]{cur}[/bold cyan]")
+        if sctx.entry:
+            profile = profile_for(sctx.entry.name)
+            if profile:
+                sctx.console.print(
+                    f"[dim]thinking profile: level={profile.default_level}, "
+                    f"range=[{profile.min_tokens}, {profile.max_tokens}][/dim]"
+                )
+            else:
+                sctx.console.print(f"[dim]no thinking profile (不支持 thinking)[/dim]")
+        return CommandResult()
+
+    new_name = args[0].strip()
+    if new_name == sctx.model_name:
+        sctx.console.print(f"[dim]已经是 {new_name} — 无变化[/dim]")
+        return CommandResult()
+
+    if sctx.on_model_change is None:
+        sctx.console.print(
+            "[red]/model 切模型未启用（无 on_model_change 回调）。[/red]"
+        )
+        return CommandResult()
+
+    try:
+        sctx.on_model_change(new_name)
+    except Exception as e:  # noqa: BLE001 — caller surfaces
+        sctx.console.print(f"[red]切模型失败: {e}[/red]")
+        return CommandResult()
+
+    sctx.console.print(
+        f"[green]✓[/green] switched [bold]{sctx.model_name}[/bold] → [bold cyan]{new_name}[/bold cyan]"
+    )
+    profile = profile_for(new_name)
+    if profile:
+        sctx.console.print(
+            f"[dim]thinking 已同步: level={profile.default_level}, "
+            f"budget≈{profile.budget_for_level(profile.default_level)}[/dim]"
         )
     return CommandResult()
 
@@ -655,6 +808,7 @@ _COMMANDS: dict[str, CommandFn] = {
     "quit": _exit,
     "q":    _exit,
     "auto": _auto_mode,
+    "model": _model,
     "clear": _clear,
     "cls":   _clear,
     "context": _context,
@@ -682,10 +836,14 @@ _COMMANDS: dict[str, CommandFn] = {
 _HELP_ROWS: list[tuple[str, str]] = [
     ("/help, /?",          "显示此菜单"),
     ("/auto [off]",        "开启 AI 自动判断安全模式 (关: /auto off)"),
+    ("/model [name]",      "查看 / 切换当前模型 (REPL 实时切换, 自动同步 thinking)"),
     ("/context, /ctx",     "显示会话历史摘要 + 最近 6 条预览"),
     ("/tokens, /t",        "显示当前 token 使用 / 上下文窗口剩余"),
-    ("/think on [N]",      "开启 thinking 模式 (N 为可选 thinking_budget)"),
-    ("/think off",         "关闭 thinking 模式"),
+    ("/think on [lvl]",      "开启 thinking 模式 (lvl: 1-10 或 low/med/high/xhigh)"),
+    ("/think off",           "关闭 thinking 模式"),
+    ("/think level <N>",     "调整 thinking 强度 (1-10 / named)"),
+    ("/think auto",          "重置为当前模型默认强度"),
+    ("/think collapse <N>",  "设折叠阈值 (字符; 0=永不折叠)"),
     ("/init [--force]",    "为当前项目生成 AGENT.md (调用模型；--force 覆盖已有)"),
     ("/rules",             "显示当前已加载的规则文件 (AGENT.md / CLAUDE.md / ...)"),
     ("/prompt",            "显示 PromptBuilder 组装结果与 prefix_hash"),

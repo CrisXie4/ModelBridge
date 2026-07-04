@@ -26,9 +26,15 @@ def home(tmp_path, monkeypatch):
 
 
 def test_version():
+    """`mbridge version` was PHYSICALLY REMOVED in v1.2; use `mbridge --version` flag instead."""
     r = runner.invoke(app, ["version"])
-    assert r.exit_code == 0
-    assert "mbridge" in r.output.lower()
+    assert r.exit_code == 2, f"exit_code={r.exit_code}\n{r.output}"
+    assert "no such command" in r.output.lower(), r.output
+
+    # Canonical replacement: --version flag on the root CLI.
+    r2 = runner.invoke(app, ["--version"])
+    assert r2.exit_code == 0, f"exit_code={r2.exit_code}\n{r2.output}"
+    assert "mbridge" in r2.output.lower()
 
 
 def test_root_help():
@@ -37,7 +43,7 @@ def test_root_help():
     assert "init" in r.output and "route" in r.output
 
 
-@pytest.mark.parametrize("sub", ["ask", "chat", "route", "model", "doctor", "config", "run"])
+@pytest.mark.parametrize("sub", ["ask", "route", "model", "doctor", "config", "run"])
 def test_subcommand_help(sub):
     r = runner.invoke(app, [sub, "--help"])
     assert r.exit_code == 0

@@ -153,24 +153,3 @@ def cmd_add(
 # ---------------------------------------------------------------------------
 
 
-@skill_app.command("remove")
-def cmd_remove(
-    name: str = typer.Argument(..., help="要删除的 Skill 名称 (全局 skills 目录中的文件夹名)。"),
-) -> None:
-    """从全局 skills 目录中删除指定 Skill。"""
-    skills_dir = _global_skills_dir()
-    target = skills_dir / name
-
-    if not target.is_dir():
-        err_console.print(
-            f"[red]找不到全局 skill '{name}'。运行 `mbridge skill list` 查看已安装列表。[/red]"
-        )
-        raise typer.Exit(code=1)
-
-    try:
-        shutil.rmtree(target)
-    except OSError as e:
-        err_console.print(f"[red]删除失败：{e}[/red]")
-        raise typer.Exit(code=1) from e
-
-    console.print(f"[green]✓ Skill '[bold]{name}[/bold]' 已删除。[/green]")

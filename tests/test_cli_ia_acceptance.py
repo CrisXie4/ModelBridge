@@ -72,10 +72,10 @@ def home(tmp_path, monkeypatch):
 
 EXPECTED_VISIBLE = {
     "ask", "edit", "run", "route", "doctor", "usage", "config", "model",
-    "prompt", "project", "mcp", "bridge", "init", "update", "version",
+    "prompt", "project", "mcp", "bridge", "init", "update",
 }
 
-EXPECTED_HIDDEN = {"chat", "cost", "budget", "cache", "profile", "patch"}
+EXPECTED_HIDDEN = {"chat", "cost", "cache", "profile", "patch"}
 
 
 def test_top_level_help_visible_commands():
@@ -103,68 +103,64 @@ def test_top_level_help_hides_old_commands():
 
 
 # ---------------------------------------------------------------------------
-# Part 2: deprecated aliases RESOLVE and warn
+# Part 2: deprecated aliases
+#   - the only v1.1 soft-deprecated alias still alive: ``project init``
+#     (its rename target ``project rules init`` exists; the old path still
+#     resolves with a deprecation notice — see README's R3a-soft note).
+#   - everything else (chat / cost / cache stats / cache reset / cache clean /
+#     profile list / model test / bridge control) was PHYSICALLY REMOVED in
+#     v1.2 and now returns "No such command" (see ``test_cli_ia_r2a.py``).
 # ---------------------------------------------------------------------------
 
-# --- 2a. RESOLVE checks (not "No such command") ---
+def test_project_init_alias_resolves():
+    """`mbridge project init --help` still resolves (R3a soft-deprecated, alive)."""
+    r = runner.invoke(app, ["project", "init", "--help"])
+    assert r.exit_code != 2, (
+        f"`mbridge project init --help` returned exit_code 2 (unknown command).\n"
+        f"Output:\n{r.output}"
+    )
+
 
 @pytest.mark.parametrize("args", [
-    ["chat", "--help"],
-    ["cost", "estimate", "--help"],
-    ["budget", "show", "--help"],
-    ["cache", "stats", "--help"],
-    ["profile", "list", "--help"],
-    ["model", "test", "--help"],
-    ["project", "init", "--help"],
+    ["chat", "--help"],                  # was: deprecated alias for `ask`
+    ["cost", "estimate", "--help"],      # was: deprecated alias for `usage cost`
+    ["cache", "stats", "--help"],        # was: deprecated alias for `usage cache stats`
+    ["profile", "list", "--help"],       # was: deprecated alias for `config profile list`
+    ["model", "test", "--help"],         # was: deprecated alias for `doctor model`
 ])
-def test_deprecated_alias_resolves(args):
-    """Deprecated aliases must RESOLVE (exit_code != 2)."""
+def test_v12_removed_aliases_return_no_such_command(args):
+    """IA v1.2 cleanup: physically-removed aliases return exit_code=2 + 'No such command'.
+
+    These five aliases used to print a "移至 v1.2" warning and forward to the
+    canonical command. After v1.2 cleanup, they return exit_code=2 with a
+    "No such command" error — no soft-deprecation fallback. Guard lives here
+    in addition to ``test_cli_ia_r2a`` so the acceptance suite catches the
+    case independently.
+    """
     r = runner.invoke(app, args)
-    assert r.exit_code != 2, (
-        f"`mbridge {' '.join(args)}` returned exit_code 2 (unknown command).\n"
-        f"Output:\n{r.output}"
+    assert r.exit_code == 2, (
+        f"`mbridge {' '.join(args)}` should be unknown (exit_code=2) after v1.2 cleanup, "
+        f"got exit_code={r.exit_code}.\nOutput:\n{r.output}"
+    )
+    assert "no such command" in r.output.lower(), (
+        f"Expected 'No such command' error after v1.2 cleanup, got:\n{r.output}"
     )
 
 
-def test_deprecated_bridge_control_on_resolves(home):
-    """mbridge bridge control on must RESOLVE (exit_code != 2)."""
+def test_v12_removed_bridge_control_on(home):
+    """`mbridge bridge control on` was physically REMOVED in v1.2 (see test_cli_ia_r2a).
+
+    Guards against accidental re-introduction of the hidden `bridge control`
+    sub-app. If someone re-adds `bridge control on` as a soft-deprecated alias,
+    this catches it.
+    """
     r = runner.invoke(app, ["bridge", "control", "on"])
-    assert r.exit_code != 2, (
-        f"`mbridge bridge control on` returned exit_code 2 (unknown command).\n"
-        f"Output:\n{r.output}"
+    assert r.exit_code == 2, (
+        f"`mbridge bridge control on` should be unknown (exit_code=2) after v1.2 cleanup, "
+        f"got exit_code={r.exit_code}.\nOutput:\n{r.output}"
     )
-
-
-# --- 2b. Deprecation WARNING checks ---
-# Pick aliases that are safe to run hermetically with a seeded MBRIDGE_HOME.
-
-def test_chat_alias_warns(home):
-    """mbridge chat ... must emit a deprecation warning."""
-    # Invoke with --help so it doesn't need a model. --help on the alias
-    # won't fire the wrapper; invoke without --help using a safe no-network path.
-    # 'mbridge chat --route' without a prompt causes a usage error (exit 2);
-    # We use the option that terminates immediately without network: --show-prompt
-    # combined with a dummy prompt.  If the alias fires, the warning appears.
-    r = runner.invoke(app, ["chat", "hi", "--show-prompt"], env={"MBRIDGE_HOME": str(home)})
-    # exit code may be non-zero if no model is registered; what matters is the warning text.
-    assert "移至" in r.output or "v1.2" in r.output, (
-        f"Expected deprecation notice in `mbridge chat` output:\n{r.output}"
-    )
-
-
-def test_cost_estimate_alias_warns(home):
-    """mbridge cost estimate ... must emit a deprecation warning."""
-    r = runner.invoke(app, ["cost", "estimate", "test prompt"], env={"MBRIDGE_HOME": str(home)})
-    assert "移至" in r.output or "v1.2" in r.output, (
-        f"Expected deprecation notice in `mbridge cost estimate` output:\n{r.output}"
-    )
-
-
-def test_profile_list_alias_warns(home):
-    """mbridge profile list must emit a deprecation warning."""
-    r = runner.invoke(app, ["profile", "list"], env={"MBRIDGE_HOME": str(home)})
-    assert "移至" in r.output or "v1.2" in r.output, (
-        f"Expected deprecation notice in `mbridge profile list` output:\n{r.output}"
+    assert "no such command" in r.output.lower(), (
+        f"Expected 'No such command' error after v1.2 cleanup, got:\n{r.output}"
     )
 
 
@@ -176,7 +172,6 @@ def test_profile_list_alias_warns(home):
     ["ask", "--help"],
     ["usage", "--help"],
     ["usage", "cost", "--help"],
-    ["usage", "budget", "--help"],
     ["usage", "cache", "--help"],
     ["config", "--help"],
     ["config", "profile", "--help"],
@@ -220,3 +215,37 @@ def test_patch_rollback_still_works():
         f"`mbridge patch rollback --help` returned exit_code={r.exit_code}.\n"
         f"Output:\n{r.output}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Part 5: UX guards — help text must include usage examples for top actions
+# ---------------------------------------------------------------------------
+
+def test_run_help_includes_examples():
+    """`mbridge run --help` must show common usage examples.
+
+    Guards the example block added to ``cli.cmd_run`` so a future rewrite
+    doesn't drop the new-user guidance.
+    """
+    r = runner.invoke(app, ["run", "--help"])
+    assert r.exit_code == 0, r.output
+    out = _ANSI_RE.sub("", r.output)
+    for snippet in ("pytest -x", "npm test", "--dry-run"):
+        assert snippet in out, (
+            f"Expected `{snippet}` in `mbridge run --help` example block, got:\n{r.output}"
+        )
+
+
+def test_mcp_help_includes_examples():
+    """`mbridge mcp --help` must show common usage examples.
+
+    Guards the example block added to ``mcp.cli.mcp_app`` so a future rewrite
+    doesn't drop the new-user guidance.
+    """
+    r = runner.invoke(app, ["mcp", "--help"])
+    assert r.exit_code == 0, r.output
+    out = _ANSI_RE.sub("", r.output)
+    for snippet in ("mcp list", "mcp tools", "mcp serve", "filesystem__list_dir"):
+        assert snippet in out, (
+            f"Expected `{snippet}` in `mbridge mcp --help` example block, got:\n{r.output}"
+        )

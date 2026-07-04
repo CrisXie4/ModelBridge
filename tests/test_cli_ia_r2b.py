@@ -79,27 +79,31 @@ def test_config_help_lists_profile():
 
 
 # ---------------------------------------------------------------------------
-# 2. Old path deprecated+hidden
+# 2. R2b's profile soft-deprecated path was PHYSICALLY REMOVED in v1.2.
+#    The canonical `config profile ...` is the only way in (see section 1).
 # ---------------------------------------------------------------------------
 
-def test_profile_list_old_path_still_works(home):
-    """mbridge profile list still exits 0 (deprecated but functional)."""
-    r = runner.invoke(app, ["profile", "list"])
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "no such command" not in r.output.lower(), r.output
-
-
-def test_profile_list_old_path_emits_deprecation(home):
-    """mbridge profile list emits a deprecation notice (移至 or v1.2)."""
-    r = runner.invoke(app, ["profile", "list"])
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v1.2" in r.output, (
-        f"Expected deprecation notice in output, got:\n{r.output}"
+@pytest.mark.parametrize("args", [
+    ["profile", "list"],
+    ["profile", "add", "x"],
+    ["profile", "use", "x"],
+    ["profile", "show", "x"],
+    ["profile", "remove", "x"],
+])
+def test_profile_old_path_no_such_command(args):
+    """v1.2 cleanup: `mbridge profile ...` returns exit_code=2 + 'No such command'."""
+    r = runner.invoke(app, args)
+    assert r.exit_code == 2, (
+        f"`mbridge {' '.join(args)}` should be unknown (exit_code=2) after v1.2, "
+        f"got exit_code={r.exit_code}\n{r.output}"
+    )
+    assert "no such command" in r.output.lower(), (
+        f"Expected 'No such command' after v1.2 cleanup, got:\n{r.output}"
     )
 
 
 def test_root_help_hides_profile_group():
-    """mbridge --help must NOT list profile as a top-level group."""
+    """mbridge --help must NOT list profile as a top-level group (canonical moved under config)."""
     r = runner.invoke(app, ["--help"])
     assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
     listed = _listed_commands(r.output)
@@ -110,32 +114,27 @@ def test_root_help_hides_profile_group():
 
 
 # ---------------------------------------------------------------------------
-# 3. model test deprecated to doctor model
+# 3. model test was PHYSICALLY REMOVED in v1.2 (canonical: `doctor model <name>`).
 # ---------------------------------------------------------------------------
 
-def test_model_test_help_still_works():
-    """mbridge model test --help must exit 0 (alias still resolves)."""
-    r = runner.invoke(app, ["model", "test", "--help"])
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-
-
-def test_model_test_emits_deprecation_notice(home):
-    """Invoking model test with a non-existent name still prints deprecation notice."""
-    # We pass a dummy name — it will exit 2 (not found) but the deprecation
-    # banner from deprecated_alias fires BEFORE the impl runs.
-    r = runner.invoke(app, ["model", "test", "__nonexistent_model__"])
-    # exit_code 2 = model not found; that's from the doctor-model impl, which is fine
-    assert r.exit_code in (0, 1, 2, 3), f"Unexpected exit_code {r.exit_code}\n{r.output}"
-    assert "移至" in r.output or "v1.2" in r.output, (
-        f"Expected deprecation notice in output, got:\n{r.output}"
+@pytest.mark.parametrize("args", [
+    ["model", "test", "--help"],
+    ["model", "test", "some-name"],
+])
+def test_model_test_no_such_command(args):
+    """v1.2 cleanup: `mbridge model test` returns exit_code=2 + 'No such command'."""
+    r = runner.invoke(app, args)
+    assert r.exit_code == 2, (
+        f"`mbridge {' '.join(args)}` should be unknown (exit_code=2) after v1.2, "
+        f"got exit_code={r.exit_code}\n{r.output}"
     )
-    assert "doctor model" in r.output, (
-        f"Expected 'doctor model' mentioned in deprecation notice, got:\n{r.output}"
+    assert "no such command" in r.output.lower(), (
+        f"Expected 'No such command' after v1.2 cleanup, got:\n{r.output}"
     )
 
 
 def test_model_help_hides_test():
-    """mbridge model --help must NOT list test in the Commands table."""
+    """mbridge model --help must NOT list test (alias removed in v1.2)."""
     r = runner.invoke(app, ["model", "--help"])
     assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
     listed = _listed_commands(r.output)
