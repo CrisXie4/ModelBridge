@@ -123,10 +123,7 @@ from .utils import (
     mask_secret,
 )
 from .prompt import (
-    DEFAULT_RULES_MD,
-    DEFAULT_SYSTEM_MD,
     PREFIX_SECTIONS,
-    SECTION_ORDER,
     PromptBuilder,
     PromptBuildResult,
     discover_rule_files,
@@ -137,7 +134,6 @@ from .project import (
     SelectionResult,
     generate_agent_md,
     read_files,
-    scan_project,
     scan_project_cached,
     select_files,
     write_agent_md,
@@ -348,7 +344,7 @@ def _run_repl(
     # ``model_name`` is kept as a local alias for the initial value, but
     # any code that needs the *current* name should call ``_active_model()``
     # or read ``model_holder[0]``.
-    model_holder: list[str] = [model or cfg.default_model]
+    model_holder: list[str] = [model or cfg.default_model or ""]
     model_name = model_holder[0]
 
     def _active_model() -> str:
@@ -895,7 +891,7 @@ def _run_repl(
     # Mutable state shared with the slash-command dispatcher.
     # Initialize from the active model's thinking profile so /think
     # has a sensible default on the first turn (no manual `on` needed).
-    thinking_state: dict[str, object] = {
+    thinking_state: dict[str, Any] = {
         "enabled": False,
         "level": None,
         "budget": None,

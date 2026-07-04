@@ -220,7 +220,7 @@ def _think(sctx: SlashContext, *, args: list[str]) -> CommandResult:
       auto                 reset to current model's default level
       collapse <N>         set collapse threshold (chars; 0 = never collapse)
     """
-    from .thinking import NAMED_LEVELS, budget_for, parse_level, profile_for
+    from .thinking import NAMED_LEVELS, parse_level, profile_for
 
     if not args:
         return CommandResult(handled=_print_think_status(sctx))
@@ -366,7 +366,7 @@ def _model(sctx: SlashContext, *, args: list[str]) -> CommandResult:
                     f"range=[{profile.min_tokens}, {profile.max_tokens}][/dim]"
                 )
             else:
-                sctx.console.print(f"[dim]no thinking profile (不支持 thinking)[/dim]")
+                sctx.console.print("[dim]no thinking profile (不支持 thinking)[/dim]")
         return CommandResult()
 
     new_name = args[0].strip()
