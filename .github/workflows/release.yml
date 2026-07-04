@@ -175,6 +175,12 @@ jobs:
     needs: [release]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    # Publishing is non-blocking: a 403 from npm (2FA / token scope) must
+    # not fail the whole release. The binaries above are the real
+    # deliverable; npm is a convenience wrapper. Fix the token on the
+    # npm side and re-run this job, or publish manually with
+    # `npm publish` from a machine whose token satisfies 2FA bypass.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
