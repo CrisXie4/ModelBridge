@@ -159,7 +159,7 @@ if (-not (Test-Path "dist\mbridge\mbridge.exe")) {
 }
 
 Write-Host "Quick smoke test:" -ForegroundColor Cyan
-& "dist\mbridge\mbridge.exe" version
+& "dist\mbridge\mbridge.exe" --version
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Frozen mbridge.exe failed its smoke test."
     exit 1

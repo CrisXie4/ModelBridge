@@ -30,7 +30,7 @@ if [ ! -x "dist/mbridge/mbridge" ]; then
 fi
 
 echo "Quick smoke test:"
-./dist/mbridge/mbridge version
+./dist/mbridge/mbridge --version
 
 echo "=== [2/2] Packaging as tar.gz ==="
 TAR_NAME="mbridge-${VERSION}-linux-${ARCH}.tar.gz"

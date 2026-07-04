@@ -84,8 +84,8 @@ Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 
 [Run]
 ; Post-install action: show the user the CLI works.
-Filename: "{app}\{#MyAppExeName}"; Parameters: "version"; \
-    Description: "Verify install (runs ``mbridge version``)"; \
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--version"; \
+    Description: "Verify install (runs ``mbridge --version``)"; \
     Flags: postinstall nowait skipifsilent runascurrentuser
 
 [UninstallRun]

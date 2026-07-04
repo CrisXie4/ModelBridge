@@ -34,7 +34,7 @@ if [ ! -x "dist/mbridge/mbridge" ]; then
 fi
 
 echo "Quick smoke test:"
-./dist/mbridge/mbridge version
+./dist/mbridge/mbridge --version
 
 echo "=== [2/2] Packaging as tar.gz ==="
 TAR_NAME="mbridge-${VERSION}-macos-${ARCH}.tar.gz"
@@ -45,4 +45,4 @@ echo
 echo "=== Done ==="
 echo "Tarball: ${OUT_DIR}/${TAR_NAME}"
 echo "Smoke-test it elsewhere with:"
-echo "  tar xzf ${TAR_NAME} && ./mbridge/mbridge version"
+echo "  tar xzf ${TAR_NAME} && ./mbridge/mbridge --version"

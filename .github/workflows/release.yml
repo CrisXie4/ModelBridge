@@ -44,7 +44,7 @@ jobs:
 
       - name: Smoke-test the frozen exe
         shell: pwsh
-        run: dist/mbridge/mbridge.exe version
+        run: dist/mbridge/mbridge.exe --version
 
       # Raw onedir tarball for the npm wrapper (and portable use). The Inno
       # installer below can't be exec'd directly; npm needs the bare binary.
