@@ -68,6 +68,12 @@ class HttpTransport(Transport):
         self._client = httpx.Client(
             timeout=httpx.Timeout(timeout, connect=min(timeout, self._connect_timeout)),
             follow_redirects=True,
+            # Bypass Windows system proxy / HTTP_PROXY env-vars — they capture
+            # loopback addresses too on Windows and return 502 for in-process
+            # test servers. We talk MCP server-side only; users running through
+            # a corporate proxy need to set the upstream URL with the proxy path
+            # baked in (e.g. ``http://proxy.local:3128/mcp``) themselves.
+            trust_env=False,
         )
         log_lifecycle(self.server_id, "http_open", self._url)
 
