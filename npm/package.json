@@ -1,6 +1,6 @@
 {
   "name": "@crisxie/mbridge",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "ModelBridge (mbridge) — 国产模型优先的 AI Coding Agent + CLI. Installs a self-contained binary (no Python required).",
   "bin": {
     "mbridge": "bin/cli.js"
