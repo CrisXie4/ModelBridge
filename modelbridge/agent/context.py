@@ -49,13 +49,13 @@ class BrowserBridge(Protocol):
     def call(self, name: str, args: dict, *, timeout: float | None = None) -> dict: ...
 
 
-def auto_yes(*, tool: str, summary: str, detail: str = "",  # noqa: ARG001
+def auto_yes(*, tool: str, summary: str, detail: str = "",
               save_pattern: str | None = None, auto: bool = False) -> ApprovalDecision:
     """Approval callback that says yes to everything (`--yes`)."""
     return ApprovalDecision.YES
 
 
-def auto_no(*, tool: str, summary: str, detail: str = "",  # noqa: ARG001
+def auto_no(*, tool: str, summary: str, detail: str = "",
             save_pattern: str | None = None, auto: bool = False) -> ApprovalDecision:
     return ApprovalDecision.NO
 

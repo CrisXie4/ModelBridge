@@ -12,7 +12,10 @@ Commands:
 * ``mbridge mcp call``      — invoke one tool with JSON args (manual test)
 * ``mbridge mcp read``      — read a resource by uri
 * ``mbridge mcp ping``      — heartbeat every ready server (M5)
-* ``mbridge mcp serve``     — run ModelBridge itself as an MCP server (M7)
+
+Note: running ModelBridge *itself* as an MCP server (M7) is done via
+``python -m modelbridge.mcp.server`` — there is intentionally no
+``mbridge mcp serve`` subcommand.
 """
 
 from __future__ import annotations
@@ -33,16 +36,16 @@ err_console = Console(stderr=True)
 mcp_app = typer.Typer(
     name="mcp",
     help=(
-        "MCP 客户端 + 服务端：连接外部 MCP server (list / tools / resources / "
-        "prompts / call / read / ping)，或用 serve 把 ModelBridge 暴露为 MCP server。\n\n"
+        "MCP 客户端：连接外部 MCP server (list / tools / resources / "
+        "prompts / call / read / ping)。\n\n"
         "常用示例:\n"
         "    mbridge mcp list                                  # 看 server 连接状态\n"
         "    mbridge mcp tools                                 # 列所有工具 (限定名)\n"
         "    mbridge mcp ping                                  # 心跳 / 延迟检查\n"
         "    mbridge mcp call filesystem__list_dir -a '{\"path\":\".\"}'\n"
-        "                                                     # 手动调一个工具\n"
-        "    mbridge mcp serve                                 # 把 ModelBridge 自己\n"
-        "                                                     # 暴露为 MCP server"
+        "                                                     # 手动调一个工具\n\n"
+        "把 ModelBridge 自己作为 MCP server 暴露：\n"
+        "    python -m modelbridge.mcp.server"
     ),
     invoke_without_command=True,
 )

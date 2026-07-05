@@ -43,7 +43,7 @@ class AtFileCompleter(Completer):
             return
         try:
             index = self._provider()
-        except Exception:  # noqa: BLE001 — completion must never crash the prompt
+        except Exception:
             return
         if index is None:
             return

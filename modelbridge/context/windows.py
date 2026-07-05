@@ -32,27 +32,32 @@ from ..schemas import ChatMessage, text_of
 #
 # DeepSeek (V4 era; V3 + chat/reasoner EOL'd 2026-07-24, removed)
 #   - V4 family: 1M
+# 腾讯混元
+#   - Hy3 preview: 256K
 # Qwen / 阿里云百炼
 #   - qwen-plus / 3.6-plus: 1M
-#   - qwen-max / qwen3-max: 256K
+#   - qwen-max / qwen3-max / qwen3.7-max: 256K  (3.7-Max advertises 1M; see comment)
 #   - qwen3-coder-* : 1M
 #   - qwen-turbo: 1M
+#   - qwen-long: 10M (long-context variant)
 # Kimi / Moonshot (K2.x era; K2 base EOL'd 2026-05-25, removed)
-#   - kimi-k2.5 / k2.6 / k2-thinking / k2-thinking-turbo: 256K
-#   - kimi-k2.7-code: 256K (2026-06 release)
+#   - kimi-k2.5 / k2.6 / k2-thinking / k2-thinking-turbo / k2.7-code: 256K
 # MiMo / 小米 (released 2026-03)
-#   - mimo-v2 family: 1M (v2-omni 256K, v2-tts 128K)
+#   - mimo-v2 / v2.5 / v2.5-pro family: 1M (v2-omni 256K, v2-tts 128K)
 # GLM / 智谱 (5.x era; old 4-plus/4-flash/4-flashx/4.5/z1 removed)
 #   - glm-5.2: 1M (2026-Q2 flagship)
-#   - glm-5 / 4.7 / 4.6: 200K
+#   - glm-5.1 / glm-5 / 4.7 / 4.6: 200K
 #   - glm-4-long: 1M
 # MiniMax (M3 era; M2 + abab6.5 + 01 removed)
-#   - minimax-m3: 1M (multimodal, MSA sparse attn, 2026-06 release)
+#   - minimax-m3 / m2.7: 1M
 DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
     # DeepSeek (V4 era)
     "deepseek-v4":             1_000_000,
     "deepseek-v4-pro":         1_000_000,
     "deepseek-v4-flash":       1_000_000,
+
+    # 腾讯混元
+    "hy3-preview":               262_144,    # "Hy3 preview" 256K context
 
     # Qwen / DashScope 百炼
     "qwen-plus":               1_000_000,
@@ -62,10 +67,12 @@ DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
     "qwen-max":                  262_144,
     "qwen-max-latest":           262_144,
     "qwen3-max":                 262_144,
+    "qwen3.7-max":             1_000_000,    # vendor sheet advertises 1M
     "qwen-turbo":              1_000_000,
     "qwen-turbo-latest":       1_000_000,
     "qwen3-coder-plus":        1_000_000,
     "qwen3-coder-flash":       1_000_000,
+    "qwen-long":              10_000_000,    # 10M long-context variant
 
     # Kimi / Moonshot (K2.x era)
     "kimi-k2.5":                 262_144,
@@ -77,13 +84,14 @@ DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
     # MiMo / 小米
     "mimo-v2":                 1_000_000,
     "mimo-v2-pro":             1_000_000,
-    "mimo-v2.5-pro":           1_000_000,
+    "mimo-v2.5-pro":           1_000_000,    # vendor sheet: 1M (flat-rate billing)
     "mimo-v2.5":               1_000_000,
     "mimo-v2-omni":              262_144,
     "mimo-v2-tts":               131_072,
 
     # GLM / 智谱
     "glm-5.2":                 1_000_000,    # 2026-Q2 release; "Solid 1M Context" per ModelScope README
+    "glm-5.1":                   200_000,    # vendor sheet: 200K
     "glm-5":                     200_000,
     "glm-4.7":                   200_000,
     "glm-4.6":                   200_000,
@@ -91,6 +99,7 @@ DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
 
     # MiniMax (M3 era)
     "minimax-m3":              1_000_000,    # 2026-06 release; "native multimodal with 1M context" per ModelScope
+    "minimax-m2.7":            1_000_000,
 }
 
 DEFAULT_LOCAL_WINDOW = 8_192        # most quantized local models

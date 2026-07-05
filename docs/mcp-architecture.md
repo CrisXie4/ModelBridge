@@ -2,7 +2,7 @@
 
 > 状态：**M0–M7 已全部实现**（见 §6）。ModelBridge 作为 **MCP Client（宿主）** 连接多个
 > MCP Server，把远端的 Tool / Resource / Prompt 统一接入现有 agent loop；同时可通过
-> `mbridge mcp serve` 反向作为 **MCP Server** 暴露自身能力。
+> `python -m modelbridge.mcp.server` 反向作为 **MCP Server** 暴露自身能力。
 >
 > 设计目标：MCP 工具能无缝挂进现有 `ToolRegistry`，agent loop 一行不用改。
 

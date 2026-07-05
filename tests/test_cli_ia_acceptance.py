@@ -104,20 +104,22 @@ def test_top_level_help_hides_old_commands():
 
 # ---------------------------------------------------------------------------
 # Part 2: deprecated aliases
-#   - the only v1.1 soft-deprecated alias still alive: ``project init``
-#     (its rename target ``project rules init`` exists; the old path still
-#     resolves with a deprecation notice — see README's R3a-soft note).
-#   - everything else (chat / cost / cache stats / cache reset / cache clean /
-#     profile list / model test / bridge control) was PHYSICALLY REMOVED in
-#     v1.2 and now returns "No such command" (see ``test_cli_ia_r2a.py``).
+#   - every v1.1 soft-deprecated alias (chat / cost / cache / profile list /
+#     model test / bridge control / project init) was PHYSICALLY REMOVED in
+#     v1.2+ and now returns "No such command" (see ``test_cli_ia_r2a.py``).
+#   - the canonical paths (`ask`, `usage cost`, `usage cache stats`,
+#     `config profile list`, `doctor model`, `project rules init`) exist.
 # ---------------------------------------------------------------------------
 
-def test_project_init_alias_resolves():
-    """`mbridge project init --help` still resolves (R3a soft-deprecated, alive)."""
+def test_project_init_alias_removed():
+    """`mbridge project init` was removed in v1.2+ — must be unknown (exit_code=2)."""
     r = runner.invoke(app, ["project", "init", "--help"])
-    assert r.exit_code != 2, (
-        f"`mbridge project init --help` returned exit_code 2 (unknown command).\n"
-        f"Output:\n{r.output}"
+    assert r.exit_code == 2, (
+        f"`mbridge project init` should be unknown after removal, "
+        f"got exit_code={r.exit_code}\nOutput:\n{r.output}"
+    )
+    assert "no such command" in r.output.lower(), (
+        f"Expected 'No such command' for removed `project init`, got:\n{r.output}"
     )
 
 
@@ -245,7 +247,7 @@ def test_mcp_help_includes_examples():
     r = runner.invoke(app, ["mcp", "--help"])
     assert r.exit_code == 0, r.output
     out = _ANSI_RE.sub("", r.output)
-    for snippet in ("mcp list", "mcp tools", "mcp serve", "filesystem__list_dir"):
+    for snippet in ("mcp list", "mcp tools", "modelbridge.mcp.server", "filesystem__list_dir"):
         assert snippet in out, (
             f"Expected `{snippet}` in `mbridge mcp --help` example block, got:\n{r.output}"
         )

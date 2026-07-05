@@ -76,7 +76,7 @@ class SessionRunner:
             # approval + LLM auto-judge). The bridge round-trip doesn't
             # support either; silently drop them so the protocol stays
             # forward-compatible without changing the bridge payload.
-            _ = (save_pattern, auto)  # noqa: ARG001 — bridge ignores these
+            _ = (save_pattern, auto)
             decision = bridge.request_approval(tool=tool, summary=summary, detail=detail)
             return {
                 "yes": ApprovalDecision.YES,

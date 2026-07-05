@@ -113,5 +113,5 @@ def _json_fallback(o: Any) -> Any:
     # httpx headers, bytes, etc.
     try:
         return str(o)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return repr(o)

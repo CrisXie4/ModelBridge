@@ -27,12 +27,12 @@ from ..client import ChatError, chat_once
 from ..models import ModelLevel
 from ..providers import ProviderError
 from .classifier import (
-    _LEVEL_ORDER,  # noqa: PLC2701 - same-package reuse
+    _LEVEL_ORDER,
     Complexity,
     RiskLevel,
     TaskProfile,
     TaskType,
-    _max_risk,  # noqa: PLC2701
+    _max_risk,
 )
 from .fallback import resolve_with_fallback
 

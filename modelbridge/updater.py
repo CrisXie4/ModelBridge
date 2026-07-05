@@ -110,7 +110,7 @@ def fetch_latest_release(timeout: float = _HTTP_TIMEOUT) -> ReleaseInfo | None:
             )
             r.raise_for_status()
             data = r.json()
-    except Exception:  # noqa: BLE001 — update checks must never crash the CLI
+    except Exception:
         return None
 
     tag = data.get("tag_name") or ""
@@ -144,7 +144,7 @@ def _cache_path() -> Path:
 def _read_cache() -> dict:
     try:
         return json.loads(_cache_path().read_text("utf-8"))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return {}
 
 
@@ -153,7 +153,7 @@ def _write_cache(d: dict) -> None:
         p = _cache_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(d, ensure_ascii=False, indent=2), "utf-8")
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -186,7 +186,7 @@ def check_for_update(
         try:
             checked = datetime.fromisoformat(cache["checked_at"])
             fresh = (now - checked).total_seconds() < ttl_hours * 3600
-        except Exception:  # noqa: BLE001
+        except Exception:
             fresh = False
         if fresh:
             latest = cache.get("latest", "")
@@ -338,7 +338,7 @@ def reveal_in_file_manager(path: Path) -> None:
             subprocess.Popen(["open", "-R", str(path)])
         else:
             subprocess.Popen(["xdg-open", str(path.parent)])
-    except Exception:  # noqa: BLE001 — opening the folder is a convenience, never fatal
+    except Exception:
         pass
 
 

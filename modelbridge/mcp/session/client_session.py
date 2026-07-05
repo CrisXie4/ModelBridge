@@ -24,7 +24,7 @@ from ..errors import (
 )
 from ..logging import log_lifecycle, save_mcp_frame
 from ..protocol.capabilities import HandshakeResult
-from ..protocol.codec import INTERNAL_ERROR, METHOD_NOT_FOUND, encode_line  # noqa: F401
+from ..protocol.codec import INTERNAL_ERROR, METHOD_NOT_FOUND
 from ..protocol.messages import JSONRPC_VERSION, JsonRpcRequest
 from ..protocol.types import (
     CallToolResult,
@@ -158,7 +158,7 @@ class MCPClientSession:
         if req.method == "sampling/createMessage" and self.sampling_handler is not None:
             try:
                 result = self.sampling_handler(req.params or {})
-            except Exception as e:  # noqa: BLE001 — a bad sample must not kill the RPC
+            except Exception as e:
                 log_lifecycle(self.server_id, "sampling_failed", str(e))
                 self._respond(req.id, error={
                     "code": INTERNAL_ERROR, "message": f"sampling 失败: {e}",
@@ -223,7 +223,7 @@ class MCPClientSession:
         with self._rpc_lock:
             try:
                 self.transport.close()
-            except Exception:  # noqa: BLE001 — old channel may be half-dead
+            except Exception:
                 pass
             self._set_state(SessionState.FAILED)
             self.transport = build_transport(self.cfg)

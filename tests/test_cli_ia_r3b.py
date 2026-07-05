@@ -1,5 +1,5 @@
 """R3b CLI IA tests:
-  1. project rules init — canonical AGENT.md generator; project init deprecated.
+  1. project rules init — canonical AGENT.md generator; project init removed.
   2. doctor route — canonical route-self-test; route test deprecated.
   3. edit --undo — rollback without diff generation.
 
@@ -54,7 +54,7 @@ def _listed_commands(output: str) -> set[str]:
 
 
 # ---------------------------------------------------------------------------
-# Part 1: project rules init / project init (deprecated)
+# Part 1: project rules init (canonical); project init removed
 # ---------------------------------------------------------------------------
 
 def test_project_rules_help_exits_ok():
@@ -73,18 +73,14 @@ def test_project_rules_init_help_exits_ok():
     )
 
 
-def test_project_init_deprecated_still_works():
-    """project init (deprecated alias) must exit 0 on --help."""
+def test_project_init_is_removed():
+    """`project init` was physically removed (was a deprecated alias for `project rules init`)."""
     r = runner.invoke(app, ["project", "init", "--help"])
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-
-
-def test_project_init_deprecated_emits_warning(home):
-    """project init ... must print a deprecation notice when used without --help."""
-    # Use a non-existent path so we get exit code 2 quickly without model call
-    r = runner.invoke(app, ["project", "init", "--path", "/nonexistent/path/xyz"])
-    assert "移至" in r.output or "v1.2" in r.output or "deprecated" in r.output.lower(), (
-        f"Expected deprecation notice in output, got:\n{r.output}"
+    assert r.exit_code == 2, (
+        f"`project init` should be unknown after removal, got exit_code={r.exit_code}\n{r.output}"
+    )
+    assert "no such command" in r.output.lower(), (
+        f"Expected 'No such command' for removed `project init`, got:\n{r.output}"
     )
 
 

@@ -151,9 +151,12 @@ class ChatResponse(BaseModel):
 class ModelCapability(BaseModel):
     """Capability matrix for a model.
 
-    This intentionally mirrors :class:`modelbridge.models.Capabilities` but
-    sits in the provider layer where adapters consume it. v0.2 adds
-    ``streaming`` (used by future server / agent stages).
+    This intentionally mirrors :class:`modelbridge.models.Capabilities` (the
+    config-layer flag set persisted in ``models.yaml``) but lives in the
+    provider layer where adapters consume a transport-facing copy. The two are
+    deliberately separate — see the project's known-debt notes; merging them
+    requires re-threading every provider import. v0.2 adds ``streaming``
+    (used by future server / agent stages).
     """
 
     tools: bool = False

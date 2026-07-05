@@ -46,7 +46,6 @@ from .cache import (
     record_prefix_observation,
     reset_cache_stats,
 )
-from .cli_compat import deprecated_alias
 from .cli_console import console, err_console
 from .client import ChatError, chat_once
 from .config import (
@@ -168,6 +167,12 @@ from .executor import (
     parse_output,
     run_command,
 )
+# Sub-CLI modules. Imported after the app-level helpers above but still at module
+# top: each lives in its own package to keep cli.py free of provider/MCP/bridge
+# internals and to avoid import cycles through the CLI entry point.
+from .bridge.cli import bridge_app
+from .mcp.cli import mcp_app
+from .skills.cli import skill_app
 
 
 app = typer.Typer(
@@ -199,9 +204,8 @@ doctor_app = typer.Typer(
 # ---------------------------------------------------------------------------
 # usage group — cost (estimate) + cache (stats/reset/clean).
 # (IA v1.2 cleanup: deprecated top-level `cost` / `cache` / `profile` / `chat`
-# aliases are GONE — no hidden add_typer, no deprecated_alias wrappers. Use
-# the canonical paths: `mbridge usage cost`, `mbridge usage cache stats`,
-# `mbridge config profile ...`.)
+# aliases were physically removed; use the canonical paths:
+# `mbridge usage cost`, `mbridge usage cache stats`, `mbridge config profile ...`.)
 # ---------------------------------------------------------------------------
 usage_app = typer.Typer(
     name="usage",
@@ -249,19 +253,8 @@ patch_app = typer.Typer(
 )
 app.add_typer(patch_app, name="patch", hidden=True)
 
-# MCP client subcommands live in their own module to avoid an import cycle.
-from .mcp.cli import mcp_app  # noqa: E402
-
 app.add_typer(mcp_app, name="mcp")
-
-# Browser side-panel Native Messaging host subcommands.
-from .bridge.cli import bridge_app  # noqa: E402
-
 app.add_typer(bridge_app, name="bridge")
-
-# Skill management subcommands.
-from .skills.cli import skill_app  # noqa: E402
-
 app.add_typer(skill_app, name="skill")
 
 
@@ -488,7 +481,7 @@ def _run_repl(
                               f" · /mcp 管理[/dim]")
             for sid, err in failed.items():
                 err_console.print(f"[yellow]MCP server {sid} 连接失败: {err.message}[/yellow]")
-    except Exception as e:  # noqa: BLE001 — MCP must never block the REPL
+    except Exception as e:
         err_console.print(f"[yellow]MCP 初始化跳过: {e}[/yellow]")
         mcp_manager = None
 
@@ -505,7 +498,7 @@ def _run_repl(
     sys_prompt_text = system or _default_system_prompt(allow_bash=allow_bash)
     try:
         sys_prompt_text = wire_skills(registry, sys_prompt_text, project_path=cwd_resolved)
-    except Exception as e:  # noqa: BLE001 — skills must never block the REPL
+    except Exception as e:
         err_console.print(f"[yellow]跳过 skills 加载: {e}[/yellow]")
     prompt_builder = PromptBuilder().with_system_prompt(sys_prompt_text).with_project(cwd_resolved)
 
@@ -520,7 +513,7 @@ def _run_repl(
             file_tree_hash=summary.file_tree_hash,
         )
         repl_summary_reason = cache_check.reason
-    except Exception:  # noqa: BLE001 — scan should never block the REPL
+    except Exception:
         pass
 
     initial = prompt_builder.build()
@@ -583,7 +576,7 @@ def _run_repl(
     update_state: dict[str, Any] = {"release": None}
     try:
         rel = updater.check_for_update()
-    except Exception:  # noqa: BLE001 — never let an update check block the REPL
+    except Exception:
         rel = None
     if rel is not None:
         update_state["release"] = rel
@@ -607,7 +600,7 @@ def _run_repl(
             try:
                 from .project.file_index import FileIndex
                 _index_state["index"] = FileIndex.build(cwd_resolved)
-            except Exception:  # noqa: BLE001 — 索引失败绝不阻断 REPL
+            except Exception:
                 _index_state["index"] = None
         return _index_state["index"]
 
@@ -646,7 +639,7 @@ def _run_repl(
                 history=InMemoryHistory(),
                 key_bindings=_pt_bindings,
             )
-    except Exception:  # noqa: BLE001 — prompt_toolkit 不可用就回退
+    except Exception:
         _pt_session = None
 
     def _read_raw() -> str:
@@ -659,7 +652,7 @@ def _run_repl(
                 return _pt_session.prompt(HTML("<ansigreen><b>you ❯</b></ansigreen> "))
             except (EOFError, KeyboardInterrupt):
                 raise
-            except Exception as e:  # noqa: BLE001 — 伪 TTY(Git Bash/MSYS) / console
+            except Exception as e:
                 # 运行时才暴露的 console 错误：永久禁用补全，落到 console.input。
                 _pt_session = None
                 console.print(
@@ -674,7 +667,7 @@ def _run_repl(
         try:
             console.file.write("\r\n")
             console.file.flush()
-        except Exception:  # noqa: BLE001 — never let UI hygiene crash input
+        except Exception:
             pass
         return console.input("[bold green]you ❯[/bold green] ")
 
@@ -757,7 +750,7 @@ def _run_repl(
             try:
                 if not _apply_mentions(text):
                     return ""  # vision 门禁拦下本轮：跳过这次输入
-            except Exception:  # noqa: BLE001 — 提及解析绝不阻断输入
+            except Exception:
                 pass
         return text
 
@@ -779,7 +772,7 @@ def _run_repl(
         if turn_state["stream"] is not None:
             try:
                 turn_state["stream"].__exit__(None, None, None)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         s = AssistantStream(
             console,
@@ -808,7 +801,7 @@ def _run_repl(
         if s is not None:
             try:
                 s.__exit__(None, None, None)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             turn_state["stream"] = None
         turn_state["iterations"] += 1
@@ -821,7 +814,7 @@ def _run_repl(
         if entry is not None:
             try:
                 _record_cache_outcome(entry, resp)
-            except Exception:  # noqa: BLE001 — stats never block the REPL
+            except Exception:
                 pass
 
     def on_tool_call(call, result_content: str) -> None:
@@ -846,7 +839,7 @@ def _run_repl(
         if s is not None:
             try:
                 s.__exit__(None, None, None)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             turn_state["stream"] = None
         _print_provider_error(err)
@@ -909,7 +902,7 @@ def _run_repl(
                 thinking_state["budget"] = init_profile.budget_for_level(
                     init_profile.default_level
                 )
-    except Exception:  # noqa: BLE001 — never let init crash the REPL
+    except Exception:
         pass
 
     def _command_handler(text: str):
@@ -1057,7 +1050,7 @@ def _make_approval(*, yes: bool):
             return False, f"(AI 判断失败: {e})"
 
     if yes:
-        def _yes(*, tool: str, summary: str, detail: str = "",  # noqa: ARG001
+        def _yes(*, tool: str, summary: str, detail: str = "",
                   save_pattern: str | None = None, auto: bool = False):
             return ApprovalDecision.YES
         return _yes
@@ -1230,7 +1223,7 @@ def _run_update_flow(rel: "updater.ReleaseInfo") -> None:
     try:
         with console.status("下载中…", spinner="dots"):
             path = updater.download_asset(asset)
-    except Exception as e:  # noqa: BLE001 — fall back to the release page
+    except Exception as e:
         console.print(
             f"[red]下载失败：{e}[/red]\n请手动下载：{rel.html_url}"
         )
@@ -1310,7 +1303,7 @@ def _vision_model_names() -> list[str]:
     try:
         mf = load_models_file()
         return [m.name for m in mf.models if getattr(m.capabilities, "vision", False)]
-    except Exception:  # noqa: BLE001 — 提示用途，失败给空表即可
+    except Exception:
         return []
 
 
@@ -1415,7 +1408,7 @@ def cmd_ask(
                     image_blocks.append(images.resolve_image_arg(arg))
                 except images.ImageError as e:
                     err_console.print(f"[red]{e}[/red]")
-                    raise typer.Exit(code=2)
+                    raise typer.Exit(code=2) from e
         builder = PromptBuilder().with_user_request(prompt, images=image_blocks)
         if system:
             builder = builder.with_system_prompt(system)
@@ -1497,7 +1490,7 @@ def cmd_ask(
                 )
             except images.ImageError as e:
                 err_console.print(f"[red]{e}[/red]")
-                raise typer.Exit(code=2)
+                raise typer.Exit(code=2) from e
         provider = get_provider(entry)
         req = ChatRequest(
             model=entry.model,
@@ -1581,7 +1574,7 @@ def _record_cache_outcome(entry: ModelEntry, resp) -> None:
             if pricing is not None:
                 full = pricing.cost(input_tokens=hit, output_tokens=0)
                 saved_cost = full * 0.75
-        except Exception:  # noqa: BLE001 — pricing not configured is fine
+        except Exception:
             pass
         record_hit(saved_tokens=hit, saved_cost=saved_cost)
     else:
@@ -1743,6 +1736,7 @@ _PROVIDER_DISPLAY_ORDER: list[ProviderType] = [
     ProviderType.MIMO,
     ProviderType.GLM,
     ProviderType.MINIMAX,
+    ProviderType.HUNYUAN,
     ProviderType.OPENAI,
     ProviderType.OLLAMA,
     ProviderType.VLLM,
@@ -1951,7 +1945,7 @@ def _do_model_add() -> None:
         entry = _interactive_add()
     except KeyboardInterrupt:
         console.print("\n[yellow]已取消。[/yellow]")
-        raise typer.Exit(code=130)  # noqa: B904
+        raise typer.Exit(code=130) from None
 
     try:
         replaced = upsert_model(entry)
@@ -2430,7 +2424,7 @@ def cmd_route(
         from .mcp import is_enabled as _mcp_enabled
 
         wants_mcp = _mcp_enabled()
-    except Exception:  # noqa: BLE001 — routing must work without MCP config
+    except Exception:
         wants_mcp = False
 
     try:
@@ -2442,7 +2436,7 @@ def cmd_route(
             "确认 routing.levels.tiny（或 default_model）指向一个可达模型，"
             "并已配置好 API key / 本地服务。[/yellow]"
         )
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     _print_route_result(result, verbose=verbose)
 
     if explain and not verbose:
@@ -2596,7 +2590,7 @@ def cmd_cache_stats(
                     summary.to_markdown(),
                     file_tree_hash=summary.file_tree_hash,
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             current = builder.build()
             drifted: list[str] = []
@@ -2618,7 +2612,7 @@ def cmd_cache_stats(
             else:
                 lines.append("  [yellow]prefix drifted but no PREFIX_SECTIONS changed —[/yellow]")
                 lines.append("  [yellow](possibly empty-vs-nonempty section flip or last data was incomplete)[/yellow]")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             lines.append("")
             lines.append(f"[red]diagnostic failed: {e}[/red]")
 
@@ -3899,23 +3893,6 @@ def cmd_project_rules_init(
 ) -> None:
     """为项目生成 ``AGENT.md`` (会调用模型)。"""
     _do_project_init(path, model, force, yes, timeout)
-
-
-# R3b: `project init` is a deprecated alias for `project rules init`
-def cmd_project_init(
-    path: Path = typer.Option(Path("."), "--path", "-p", help="项目路径。"),
-    model: Optional[str] = typer.Option(
-        None, "--model", "-m", help="生成 AGENT.md 用的模型名 (默认 config.default_model)。",
-    ),
-    force: bool = typer.Option(False, "--force", help="如果 AGENT.md 已存在则覆盖。"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="跳过预览确认。"),
-    timeout: float = typer.Option(120.0, "--timeout", help="模型调用超时秒数。"),
-) -> None:
-    """为项目生成 ``AGENT.md`` (会调用模型)。"""
-    _do_project_init(path, model, force, yes, timeout)
-
-
-deprecated_alias(project_app, "init", "project rules init", cmd_project_init)
 
 
 if __name__ == "__main__":  # pragma: no cover

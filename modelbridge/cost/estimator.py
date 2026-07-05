@@ -59,55 +59,79 @@ class Pricing:
         )
 
 
-# Built-in pricing — CNY per 1 000 000 tokens unless noted otherwise.
+# Built-in pricing — per 1 000 000 tokens, currency as noted.
 # These are *approximate*; let users override in models.yaml.
 #
-# 2026-07 sweep: removed OpenAI (Western) + retired models (deepseek-chat/reasoner,
-# kimi-k2, moonshot-v1-*, glm-4.5/4-plus/4-flash, minimax-m2, abab6.5-chat).
-# Remaining builtin entries may be stale (2026-05 baseline) — verify before
-# relying on `mbridge usage cost` numbers.
+# 2026-07 refresh: aligned to the vendor rate sheet (see project task notes).
+# Conflicts resolved in favour of the vendor sheet:
+#   - glm-5.2:        CNY 8/28        (was OpenRouter USD 0.93/3.00)
+#   - deepseek-v4-flash: USD 0.14/0.28 (was OpenRouter USD 0.09/0.18)
+#   - kimi-k2.7-code: USD 0.95/4.00    (was OpenRouter USD 0.74/3.50)
+#   - minimax-m3:     USD 0.60/2.40    (was OpenRouter USD 0.30/1.20)
+# Cache-hit input rates added where the sheet lists them.
 #
-# Currency note: OpenRouter/LiteLLM-sourced prices are USD (international rate).
-# Users paying via 6哥 API / 国产渠道 typically see different (often lower) CNY
-# rates; override in ~/.modelbridge/pricing.yaml if needed.
+# Currency note: GLM-5.2 is quoted CNY (domestic 智谱), GLM-5.1 USD
+# (international) — mixed currencies are NOT auto-converted, so pick one per
+# model and override in ~/.modelbridge/pricing.yaml if you need comparability.
 #
 # Source legend:
-#   builtin             — 2026-05 baseline (CNY, may be stale)
-#   openrouter-2026-07  — from openrouter.ai/api/v1/models (USD)
-#   litellm-2026-07     — from BerriAI/litellm model_prices_and_context_window.json (USD)
+#   vendor-2026-07     — vendor rate sheet (this refresh; authoritative)
+#   builtin            — 2026-05 baseline (CNY, may be stale; not on this sheet)
+#   openrouter-2026-07 / litellm-2026-07 — cross-source (kept where not
+#     contradicted by the vendor sheet)
 #
-# Cross-source note: V4-Flash has OpenRouter $0.09/$0.18 vs LiteLLM direct
-# DeepSeek $0.14/$0.28. We keep the lower (OpenRouter) as the default; users
-# on 6哥 should override.
-#
-# Coverage: 17/31 active models in DEFAULT_CONTEXT_WINDOWS have built-in
-# 2026-07 prices. Still missing:
-#   - deepseek-v4 (vanilla; no LiteLLM base entry, only v4-pro/v4-flash)
-#   - glm-4-long  (1M-context variant, not enumerated by either source)
+# GLM-5.1 input price was not on the sheet; inferred from the GLM-5 family
+# (USD 1.00) — confirm against 智谱's page before relying on it.
+# qwen-long (10M context) has no published per-token price on the sheet →
+# left out, so it raises PricingNotFound until overridden locally.
 DEFAULT_PRICING: dict[str, Pricing] = {
-    # ---- Qwen / 百炼 (last verified 2026-05; confirm against 2026-07 rate sheet) ----
+    # ---- DeepSeek (V4 era; vendor sheet 2026-07, USD) ----
+    "deepseek-v4-pro":    Pricing("USD", 0.435, 0.87, "vendor-2026-07",
+                                  cache_hit_input_per_1m=0.003625),
+    "deepseek-v4-flash":  Pricing("USD", 0.14,  0.28, "vendor-2026-07",
+                                  cache_hit_input_per_1m=0.0028),
+
+    # ---- 腾讯混元 (vendor sheet 2026-07, CNY) ----
+    "hy3-preview":        Pricing("CNY", 1.2, 4.0, "vendor-2026-07",
+                                  cache_hit_input_per_1m=0.4),
+
+    # ---- 智谱 GLM (vendor sheet 2026-07) ----
+    "glm-5.2":            Pricing("CNY", 8.0,  28.0, "vendor-2026-07"),
+    "glm-5.1":            Pricing("USD", 1.00, 3.20, "vendor-2026-07"),  # input inferred
+
+    # ---- Qwen / 百炼 (vendor sheet 2026-07, USD) ----
+    "qwen3.7-max":        Pricing("USD", 2.5, 7.5, "vendor-2026-07"),
+
+    # ---- Kimi / Moonshot (K2.x era; vendor sheet 2026-07, USD) ----
+    "kimi-k2.7-code":     Pricing("USD", 0.95, 4.00, "vendor-2026-07",
+                                  cache_hit_input_per_1m=0.19),
+    "kimi-k2.6":          Pricing("USD", 0.95, 4.00, "vendor-2026-07",
+                                  cache_hit_input_per_1m=0.16),
+
+    # ---- MiniMax (vendor sheet 2026-07, USD) ----
+    "minimax-m3":         Pricing("USD", 0.60, 2.40, "vendor-2026-07"),
+    "minimax-m2.7":       Pricing("USD", 0.30, 1.20, "vendor-2026-07"),
+
+    # ---- 小米 MiMo (vendor sheet 2026-07, CNY) ----
+    "mimo-v2.5-pro":      Pricing("CNY", 3.0, 6.0, "vendor-2026-07",
+                                  cache_hit_input_per_1m=0.025),
+
+    # ---- Retained from earlier sweep (not on this sheet; still valid models) ----
+    # Qwen / 百炼
     "qwen-plus-latest":   Pricing("CNY", 0.8,  2.0,  "builtin"),
     "qwen-max-latest":    Pricing("CNY", 2.4,  9.6,  "builtin"),
     "qwen3-coder-plus":   Pricing("CNY", 4.0, 16.0, "builtin"),
-    "qwen3-coder-flash":  Pricing("CNY", 1.5,  6.0,  "builtin"),
-    # ---- DeepSeek (V4 era; from OpenRouter 2026-07) ----
-    "deepseek-v4-pro":    Pricing("USD", 0.435, 0.87,  "openrouter-2026-07"),
-    "deepseek-v4-flash":  Pricing("USD", 0.09,  0.18,  "openrouter-2026-07"),
-    # ---- Kimi / Moonshot (K2.x era; from OpenRouter + LiteLLM 2026-07) ----
-    "kimi-k2.5":            Pricing("USD", 0.60,  3.00,  "litellm-2026-07"),  # moonshot/kimi-k2.5
-    "kimi-k2.6":            Pricing("USD", 0.95,  4.00,  "litellm-2026-07"),  # moonshot/kimi-k2.6
-    "kimi-k2-thinking":     Pricing("USD", 0.60,  2.50,  "litellm-2026-07"),  # moonshot/kimi-k2-thinking
-    "kimi-k2-thinking-turbo": Pricing("USD", 1.15, 8.00,  "litellm-2026-07"),  # moonshot/kimi-k2-thinking-turbo
-    "kimi-k2.7-code":       Pricing("USD", 0.74,  3.50,  "openrouter-2026-07"),
-    # ---- MiMo (last verified 2026-05; confirm against 2026-07 rate sheet) ----
-    "mimo-v2":            Pricing("CNY", 4.0, 16.0,  "builtin"),
-    # ---- GLM / 智谱 (from OpenRouter + LiteLLM 2026-07) ----
-    "glm-4.6":            Pricing("USD", 0.60,  2.20,  "litellm-2026-07"),  # zai/glm-4.6
-    "glm-4.7":            Pricing("USD", 0.60,  2.20,  "litellm-2026-07"),  # zai/glm-4.7
-    "glm-5":              Pricing("USD", 1.00,  3.20,  "litellm-2026-07"),  # zai/glm-5
-    "glm-5.2":            Pricing("USD", 0.93,  3.00,  "openrouter-2026-07"),
-    # ---- MiniMax (from OpenRouter 2026-07) ----
-    "minimax-m3":         Pricing("USD", 0.30,  1.20,  "openrouter-2026-07"),
+    "qwen3-coder-flash":  Pricing("CNY", 1.5,  6.0, "builtin"),
+    # Kimi thinking family
+    "kimi-k2.5":              Pricing("USD", 0.60, 3.00, "litellm-2026-07"),
+    "kimi-k2-thinking":       Pricing("USD", 0.60, 2.50, "litellm-2026-07"),
+    "kimi-k2-thinking-turbo": Pricing("USD", 1.15, 8.00, "litellm-2026-07"),
+    # MiMo
+    "mimo-v2":            Pricing("CNY", 4.0, 16.0, "builtin"),
+    # GLM older
+    "glm-4.6":            Pricing("USD", 0.60, 2.20, "litellm-2026-07"),
+    "glm-4.7":            Pricing("USD", 0.60, 2.20, "litellm-2026-07"),
+    "glm-5":              Pricing("USD", 1.00, 3.20, "litellm-2026-07"),
 }
 
 

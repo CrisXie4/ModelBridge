@@ -79,7 +79,7 @@ def _resolve_mode(explicit: str | None) -> RoutingMode:
         m = (cfg.routing.mode or "balanced").lower().strip()
         if m in ("economy", "balanced", "powerful"):
             return m  # type: ignore[return-value]
-    except Exception:  # noqa: BLE001 - tolerate any config error
+    except Exception:
         pass
     return "balanced"
 

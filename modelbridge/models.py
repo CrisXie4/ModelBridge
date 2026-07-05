@@ -1,7 +1,12 @@
-"""Pydantic schemas for ModelBridge configuration.
+"""Pydantic schemas for ModelBridge's *configuration* layer.
 
-These cover both ``models.yaml`` (the model registry) and ``config.yaml``
-(global defaults, routing, security, cache).
+This module is the on-disk shape of ``models.yaml`` (the model registry) and
+``config.yaml`` (global defaults, routing, security, cache). It is distinct
+from :mod:`modelbridge.schemas`, which holds the *chat wire* shapes
+(``ChatRequest`` / ``ChatResponse`` / ``ChatMessage``) consumed by provider
+adapters. The two were split early so config storage and provider transport
+can evolve independently; see the project's known-debt notes before merging
+anything between them.
 
 The design intentionally keeps a ``provider`` discriminator field separate
 from ``type`` so that future provider-specific adapters (DeepSeek reasoning,
@@ -36,6 +41,7 @@ class ProviderType(str, Enum):
     MIMO = "mimo"
     GLM = "glm"
     MINIMAX = "minimax"
+    HUNYUAN = "hunyuan"
     OLLAMA = "ollama"
     VLLM = "vllm"
     LMSTUDIO = "lmstudio"

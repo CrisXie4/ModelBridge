@@ -113,7 +113,7 @@ class Host:
                 return
             self._control = ControlServer(self)
             self._control.start()
-        except Exception as e:  # noqa: BLE001 - control is optional; never block stdio
+        except Exception as e:
             self._log.warning("bridge.control failed to start: %s", e)
             self._control = None
 
@@ -125,7 +125,7 @@ class Host:
 
             models = [m.name for m in load_models_file().models]
             default_model = load_app_config().default_model
-        except Exception as e:  # noqa: BLE001 - never let discovery crash startup
+        except Exception as e:
             self._log.warning("bridge.ready model discovery failed: %s", e)
         return P.ready(version=__version__, models=models, default_model=default_model)
 
@@ -186,7 +186,7 @@ class Host:
                 tool_send=tool_send,
                 approval_send=approval_send,
             )
-        except Exception as e:  # noqa: BLE001 - turn boundary; surface, don't crash host
+        except Exception as e:
             self._log.exception("bridge.turn crashed")
             reply_send(P.error(id=turn_id, message=f"{type(e).__name__}: {e}"))
             reply_send(P.done(id=turn_id, stopped="error"))

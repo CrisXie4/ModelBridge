@@ -118,7 +118,7 @@ class CommandFn(Protocol):
     def __call__(self, sctx: SlashContext, *, args: list[str]) -> CommandResult: ...
 
 
-def _help(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+def _help(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     table = Table(title="Slash 命令", show_header=True, show_lines=False)
     table.add_column("命令", style="bold cyan", no_wrap=True)
     table.add_column("说明", overflow="fold")
@@ -128,7 +128,7 @@ def _help(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG
     return CommandResult()
 
 
-def _exit(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+def _exit(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     sctx.console.print("[dim]bye[/dim]")
     return CommandResult(exit_repl=True)
 
@@ -144,12 +144,12 @@ def _auto_mode(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     return CommandResult()
 
 
-def _clear(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+def _clear(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     sctx.console.print("[dim]history cleared (system prompt kept)[/dim]")
     return CommandResult(clear_history=True)
 
 
-def _context(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+def _context(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     msgs = sctx.session.messages
     n_sys = sum(1 for m in msgs if m.role == "system")
     n_user = sum(1 for m in msgs if m.role == "user")
@@ -186,7 +186,7 @@ def _context(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: 
     return CommandResult()
 
 
-def _tokens(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+def _tokens(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     if sctx.entry is None:
         sctx.console.print("[red]model entry 缺失，无法计算 token[/red]")
         return CommandResult()
@@ -382,7 +382,7 @@ def _model(sctx: SlashContext, *, args: list[str]) -> CommandResult:
 
     try:
         sctx.on_model_change(new_name)
-    except Exception as e:  # noqa: BLE001 — caller surfaces
+    except Exception as e:
         sctx.console.print(f"[red]切模型失败: {e}[/red]")
         return CommandResult()
 
@@ -398,7 +398,7 @@ def _model(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     return CommandResult()
 
 
-def _save(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+def _save(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     path = sctx.session.save(label=f"manual_{sctx.model_name}")
     if path is None:
         sctx.console.print("[red]保存失败 (logs/sessions 目录不可写?)[/red]")
@@ -407,7 +407,7 @@ def _save(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG
     return CommandResult()
 
 
-def _policy(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+def _policy(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     p = sctx.agent_ctx.policy
     rows: list[tuple[str, str]] = []
     rows.append(("cwd", str(sctx.agent_ctx.cwd)))
@@ -423,7 +423,7 @@ def _policy(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: A
     return CommandResult()
 
 
-def _tools(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+def _tools(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     reg = sctx.registry
     table = Table(title=f"可用工具 ({len(reg.names())})", show_lines=False)
     table.add_column("name", style="bold cyan", no_wrap=True)
@@ -453,7 +453,7 @@ def _resolve_project_path(sctx: SlashContext):
     return Path(sctx.agent_ctx.cwd)
 
 
-def _rules(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+def _rules(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     """``/rules`` — show every rule file ModelBridge is loading right now."""
     from ..prompt import discover_rule_files
 
@@ -484,7 +484,7 @@ def _rules(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: AR
     return CommandResult()
 
 
-def _prompt(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+def _prompt(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     """``/prompt`` — show the PromptBuilder section summary + prefix hash."""
     from ..prompt import PromptBuilder
     from ..project import scan_project
@@ -495,7 +495,7 @@ def _prompt(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: A
     try:
         summary = scan_project(project_path)
         builder = builder.with_project_summary(summary.to_markdown())
-    except Exception:  # noqa: BLE001 — scan should never crash UX
+    except Exception:
         pass
     builder = builder.with_user_request("<NEXT_USER_REQUEST>")
     result = builder.build()
@@ -681,7 +681,7 @@ def _mcp(sctx: SlashContext, *, args: list[str]) -> CommandResult:
         uri = rest[0]
         try:
             result = manager.read_resource(uri)
-        except Exception as e:  # noqa: BLE001 — MCPError 树 + 任意工具异常
+        except Exception as e:
             sctx.console.print(f"[red]{e}[/red]")
             return CommandResult()
         text = result.joined_text()
@@ -709,7 +709,7 @@ def _mcp(sctx: SlashContext, *, args: list[str]) -> CommandResult:
                 prompt_args[k] = v
         try:
             result = manager.get_prompt(name, prompt_args or None)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             sctx.console.print(f"[red]{e}[/red]")
             return CommandResult()
         from ..schemas import ChatMessage
@@ -735,7 +735,7 @@ def _mcp(sctx: SlashContext, *, args: list[str]) -> CommandResult:
 # /version /update
 # ---------------------------------------------------------------------------
 
-def _version(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+def _version(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     import platform
 
     from .. import __version__, updater
@@ -750,7 +750,7 @@ def _version(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: 
     return CommandResult()
 
 
-def _update(sctx: SlashContext, *, args: list[str]) -> CommandResult:  # noqa: ARG001
+def _update(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     from .. import __version__, updater
     from ..cli import _run_update_flow
 

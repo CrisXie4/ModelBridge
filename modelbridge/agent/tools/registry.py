@@ -43,7 +43,7 @@ class ToolRegistry:
             )
         try:
             return tool.execute(call.arguments, ctx)
-        except Exception as e:  # noqa: BLE001 — tool boundary
+        except Exception as e:
             # Surface tool errors back to the model so it can react,
             # rather than crashing the loop.
             return ToolResult(

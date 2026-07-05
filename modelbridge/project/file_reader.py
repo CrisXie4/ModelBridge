@@ -220,7 +220,7 @@ def _read_one(
 
     try:
         text = raw.decode("utf-8", errors="replace")
-    except Exception:  # noqa: BLE001
+    except Exception:
         return FileContext(path=rel_path, snippet="", skipped_reason="decode failed")
 
     lines = text.splitlines()

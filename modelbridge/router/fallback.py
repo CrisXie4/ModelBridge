@@ -128,7 +128,7 @@ def _config_fallback_enabled(cfg: Any = None) -> bool:
         if fb is None:
             return True
         return bool(fb.enabled)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return True
 
 
@@ -140,7 +140,7 @@ def _max_upgrade_steps(cfg: Any = None) -> int:
         if fb is None:
             return 2
         return max(0, int(fb.max_upgrade_steps))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return 2
 
 
@@ -160,7 +160,7 @@ def escalate_after_failure(
     # and the level map below (was three separate load_app_config() calls).
     try:
         cfg = load_app_config()
-    except Exception:  # noqa: BLE001 — helpers below fall back to defaults
+    except Exception:
         cfg = None
     enabled = _config_fallback_enabled(cfg)
     max_steps = _max_upgrade_steps(cfg)

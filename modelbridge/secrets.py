@@ -53,7 +53,7 @@ def _keyring_set(name: str, secret: str) -> bool:
 
         keyring.set_password(SERVICE, name, secret)
         return True
-    except Exception as e:  # noqa: BLE001 - any backend error → fall back
+    except Exception as e:
         log.debug("keyring set failed for %s: %s", name, e)
         return False
 
@@ -63,7 +63,7 @@ def _keyring_get(name: str) -> str | None:
         import keyring
 
         return keyring.get_password(SERVICE, name)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log.debug("keyring get failed for %s: %s", name, e)
         return None
 
@@ -135,7 +135,7 @@ def _fernet_decrypt(token: str) -> str | None:
         return None
     try:
         return f.decrypt(token.encode("ascii")).decode("utf-8")
-    except Exception as e:  # noqa: BLE001 - InvalidToken etc.
+    except Exception as e:
         log.debug("fernet decrypt failed: %s", e)
         return None
 

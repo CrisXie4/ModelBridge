@@ -1,9 +1,12 @@
-"""R1 CLI IA tests: deprecation-alias infra, hidden commands, stale root help.
+"""R1 CLI IA tests: hidden commands, stale root help.
 
 These tests validate the zero-behavior-change round-1 refactor:
-  (a) deprecated_alias helper works correctly
-  (b) pure-debug commands are hidden from --help but still invokable
-  (c) root help no longer contains the stale command enumeration
+  (a) pure-debug commands are hidden from --help but still invokable
+  (b) root help no longer contains the stale command enumeration
+
+The ``deprecated_alias`` helper itself was removed once the last alias
+(``project init``) was physically dropped — see
+``test_cli_ia_acceptance.py::test_project_init_alias_removed``.
 
 CliRunner in this Typer version has NO ``mix_stderr`` kwarg — just use
 ``CliRunner()`` and check ``.output``.
@@ -12,7 +15,6 @@ CliRunner in this Typer version has NO ``mix_stderr`` kwarg — just use
 from __future__ import annotations
 
 import re
-import typer
 from typer.testing import CliRunner
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -21,55 +23,7 @@ runner = CliRunner()
 
 
 # ---------------------------------------------------------------------------
-# Task A: deprecated_alias helper
-# ---------------------------------------------------------------------------
-
-def test_deprecated_alias_runs_impl_and_warns():
-    """Invoking the old alias executes the impl and emits a deprecation warning."""
-    from modelbridge.cli_compat import deprecated_alias
-
-    mini_app = typer.Typer()
-    output_collector: list[str] = []
-
-    @mini_app.command("new-cmd")
-    def impl_cmd(name: str = typer.Argument("world")) -> None:
-        """The canonical new command."""
-        typer.echo(f"hello {name}")
-        output_collector.append(f"hello {name}")
-
-    deprecated_alias(mini_app, "old-cmd", "new-cmd", impl_cmd)
-
-    result = runner.invoke(mini_app, ["old-cmd", "there"])
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-    # The impl ran and produced output.
-    assert "hello there" in result.output
-    # The deprecation notice appeared (combined output / stderr via CliRunner).
-    assert "old-cmd" in result.output
-    assert "new-cmd" in result.output
-
-
-def test_deprecated_alias_is_hidden_from_help():
-    """The old alias must NOT appear in the app's --help listing."""
-    from modelbridge.cli_compat import deprecated_alias
-
-    mini_app = typer.Typer()
-
-    @mini_app.command("new-cmd")
-    def impl_cmd() -> None:
-        """Canonical."""
-        typer.echo("ok")
-
-    deprecated_alias(mini_app, "old-cmd", "new-cmd", impl_cmd)
-
-    result = runner.invoke(mini_app, ["--help"])
-    assert result.exit_code == 0
-    assert "old-cmd" not in result.output
-    # The canonical command IS visible.
-    assert "new-cmd" in result.output
-
-
-# ---------------------------------------------------------------------------
-# Task B: hidden commands are absent from help but still invokable
+# Task A: hidden commands are absent from help but still invokable
 # ---------------------------------------------------------------------------
 
 def _listed_commands(output: str) -> set[str]:

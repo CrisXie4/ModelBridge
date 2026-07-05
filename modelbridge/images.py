@@ -83,10 +83,10 @@ def block_from_url(url: str) -> ContentBlock:
 
 def _import_imagegrab():  # pragma: no cover - thin import shim, patched in tests
     try:
-        from PIL import ImageGrab  # type: ignore
+        from PIL import ImageGrab  # type: ignore[import-not-found]
 
         return ImageGrab
-    except Exception:  # noqa: BLE001 — 缺依赖即视为不可用
+    except Exception:
         return None
 
 

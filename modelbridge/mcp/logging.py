@@ -115,14 +115,14 @@ def log_tool_call(
             "mcp.tool_call server=%s tool=%s cid=%s ms=%d error=%s out_chars=%d",
             server_id, tool, correlation_id, elapsed_ms, is_error, result_chars,
         )
-    except Exception:  # noqa: BLE001 — logging must never crash a tool call
+    except Exception:
         pass
 
 
 def log_lifecycle(server_id: str, event: str, detail: str = "") -> None:
     try:
         mcp_logger().info("mcp.lifecycle server=%s event=%s %s", server_id, event, detail)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 

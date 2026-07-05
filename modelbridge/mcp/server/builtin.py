@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ... import __version__
 from .server import MCPServer, ServerTool
 
 
@@ -31,7 +32,7 @@ def _tool_chat(args: dict[str, Any]) -> str:
     return resp.content or ""
 
 
-def _tool_list_models(args: dict[str, Any]) -> str:  # noqa: ARG001
+def _tool_list_models(args: dict[str, Any]) -> str:
     from ...config import load_models_file
 
     mf = load_models_file()
@@ -67,16 +68,9 @@ def _tool_route(args: dict[str, Any]) -> str:
 
 
 def build_modelbridge_server() -> MCPServer:
-    try:
-        from ... import __version__  # type: ignore[attr-defined]
-
-        version = str(__version__)
-    except Exception:  # noqa: BLE001
-        version = "0"
-
     server = MCPServer(
         name="modelbridge",
-        version=version,
+        version=str(__version__),
         instructions=(
             "ModelBridge 网关：chat 用配置好的国产模型补全；"
             "list_models 列出可用模型；route 为任务推荐模型档位。"

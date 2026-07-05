@@ -537,7 +537,7 @@ def _read_head_chars(p: Path, max_chars: int) -> str:
         return ""
     try:
         return chunk.decode("utf-8", errors="replace")[:max_chars]
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ""
 
 

@@ -120,7 +120,7 @@ def load_cached_summary(project_path: Path | str) -> tuple[ProjectSummary | None
 
     try:
         summary = ProjectSummary.from_dict(data["summary"])
-    except Exception as e:  # noqa: BLE001 — bad cache should never break callers
+    except Exception as e:
         current.reason = f"cache deserialise failed: {e}"
         return None, current
 

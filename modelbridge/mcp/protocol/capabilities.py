@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ... import __version__
+
 # The MCP protocol revision we implement against. Servers may speak an older
 # or newer revision; the handshake records what the server returned and we
 # proceed with the intersection of capabilities.
@@ -22,14 +24,7 @@ KNOWN_VERSIONS = {"2024-11-05", "2025-03-26", "2025-06-18"}
 
 
 def client_info() -> dict[str, Any]:
-    # Local import to avoid a hard dependency at module import time.
-    try:
-        from ... import __version__  # type: ignore[attr-defined]
-
-        version = str(__version__)
-    except Exception:  # noqa: BLE001
-        version = "0"
-    return {"name": "modelbridge", "version": version}
+    return {"name": "modelbridge", "version": str(__version__)}
 
 
 def client_capabilities(*, sampling: bool = False) -> dict[str, Any]:

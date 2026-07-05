@@ -96,3 +96,8 @@ bash packaging/build_linux.sh
 - 成本估算依赖本地 `pricing.yaml` 或内置价格表，供应商价格变动时需手动同步。
 - `modelbridge doctor` 的诊断可能因网络或 API 变更而失败，增加容错处理是合理的优化方向。
 - 打包为独立可执行文件时，确保 `prompt/` 等非代码资源被包含在 PyInstaller 分析的依赖中。
+
+## Known Tech Debt
+- **腾讯混元无专用适配器**：`ProviderType.HUNYUAN` + `PROFILES` 条目已建（`mbridge model init` 可选），但 `providers/registry.py` 未注册，运行时回退到 `OpenAICompatibleProvider`。混元是国内 SSE 协议 + TC3-HMAC-SHA256 鉴权，非纯 OpenAI 兼容，回退后大概率不通。真正接入需新建 `providers/hunyuan.py`（SSE 解析 + 签名）并在 registry 注册，参考 `mcp/transport/http.py` 的 SSE 处理。
+- **`models.py` vs `schemas.py` 双 Schema 模块**：`models.py` 是配置层（`models.yaml` / `config.yaml`）的 Pydantic 模型，`schemas.py` 是 provider 传输层（`ChatRequest` / `ChatResponse`）的模型。两者概念重叠（`Capabilities` vs `ModelCapability`，且都有 `json` 字段触发 `type: ignore[assignment]`）。各有 24/26 处 import，合并需重排所有 provider 与 cli 的导入路径，暂未做。改动任一侧前先确认另一侧是否受影响。
+- **`cli.py` 仍 ~3900 行**：单文件承载所有子命令实现（model / doctor / route / usage / profile / config / edit / patch / project / prompt）。可按命令组拆分到 `cli/` 子包（如 `cli/model.py`、`cli/patch.py`），参照已拆出的 `mcp/cli.py`、`bridge/cli.py`、`skills/cli.py` 模式。

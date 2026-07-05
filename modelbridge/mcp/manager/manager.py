@@ -112,7 +112,7 @@ class MCPManager:
             log_lifecycle(cfg.server_id, "connect_failed", e.message)
             try:
                 session.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     def _rebuild_server_catalog(self, session: MCPClientSession) -> None:
@@ -169,7 +169,7 @@ class MCPManager:
         if self.on_catalog_changed is not None:
             try:
                 self.on_catalog_changed()
-            except Exception:  # noqa: BLE001 — host callback must not break dispatch
+            except Exception:
                 pass
 
     def start_heartbeat(self, interval: float | None = None) -> None:
@@ -344,7 +344,7 @@ class MCPManager:
         for s in self.sessions.values():
             try:
                 s.close()
-            except Exception:  # noqa: BLE001 — shutdown must not raise
+            except Exception:
                 pass
 
     def __enter__(self) -> "MCPManager":

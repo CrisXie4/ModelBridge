@@ -118,7 +118,7 @@ def _user_block_patterns() -> tuple[str, ...]:
     try:
         cfg = load_app_config()
         return tuple(cfg.security.block_sensitive_files or [])
-    except Exception:  # noqa: BLE001 - tolerate any config error
+    except Exception:
         return ()
 
 
@@ -258,7 +258,7 @@ def guard_project_root(project_root: Path | str) -> SafetyVerdict:
     try:
         cfg = load_app_config()
         allowed = list(cfg.security.allowed_project_dirs or [])
-    except Exception:  # noqa: BLE001
+    except Exception:
         allowed = []
 
     if not allowed:

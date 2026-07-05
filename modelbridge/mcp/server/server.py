@@ -76,7 +76,7 @@ class MCPServer:
                 return _result(msg_id, self._tools_call(obj.get("params") or {}))
         except _InvalidParams as e:
             return _error(msg_id, INVALID_PARAMS, str(e))
-        except Exception as e:  # noqa: BLE001 — protocol boundary
+        except Exception as e:
             return _error(msg_id, INTERNAL_ERROR, f"{type(e).__name__}: {e}")
         return _error(msg_id, METHOD_NOT_FOUND, f"method not found: {method}")
 
@@ -113,7 +113,7 @@ class MCPServer:
             raise _InvalidParams("arguments 必须是对象")
         try:
             text = tool.fn(arguments)
-        except Exception as e:  # noqa: BLE001 — tool errors go back as isError
+        except Exception as e:
             return {
                 "content": [{"type": "text", "text": f"{type(e).__name__}: {e}"}],
                 "isError": True,

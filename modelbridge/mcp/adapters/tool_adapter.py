@@ -87,7 +87,7 @@ class MCPToolAdapter(Tool):
             return Tool.err(e.message, hint=e.hint)
         except MCPError as e:
             return Tool.err(e.display())
-        except Exception as e:  # noqa: BLE001 — tool boundary, never crash the loop
+        except Exception as e:
             return Tool.err(f"MCP tool {self.name} 抛出 {type(e).__name__}: {e}")
 
         elapsed_ms = int((time.monotonic() - started) * 1000)

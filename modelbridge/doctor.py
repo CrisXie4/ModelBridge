@@ -105,7 +105,7 @@ def run_global_doctor() -> list[CheckResult]:
         results.append(
             CheckResult("config.yaml parses", True, f"default_model={cfg.default_model!r}")
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         results.append(CheckResult("config.yaml parses", False, str(e)))
 
     mf = None
@@ -114,7 +114,7 @@ def run_global_doctor() -> list[CheckResult]:
         results.append(
             CheckResult("models.yaml parses", True, f"{len(mf.models)} model(s)")
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         results.append(CheckResult("models.yaml parses", False, str(e)))
 
     if mf is not None:
@@ -157,7 +157,7 @@ def _check_mcp_config() -> CheckResult:
         from .mcp import load_mcp_settings
 
         settings = load_mcp_settings()
-    except Exception as e:  # noqa: BLE001 — surface config errors, don't crash doctor
+    except Exception as e:
         return CheckResult(
             "mcp config", False, str(e),
             hint="检查 config.yaml 的 mcp 块；运行 `mbridge mcp list` 看详细连接状态。",

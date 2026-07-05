@@ -192,7 +192,7 @@ def merge_rules(
         try:
             cfg = load_app_config()
             max_chars = int(getattr(cfg.prompt, "max_rules_chars", 20000) or 20000)
-        except Exception:  # noqa: BLE001 — config errors don't break loading
+        except Exception:
             max_chars = 20000
 
     blocks: list[str] = []

@@ -8,7 +8,7 @@
 >
 > 直接运行 `mbridge` 进入**持续会话** (像 Claude Code) — AI 可以读 / 写 / 编辑项目文件，需要时也能跑 shell。管理类操作 (添加模型、自检、路由、成本、缓存) 走子命令。
 >
-> 支持 DeepSeek / Qwen / Kimi / MiMo / GLM / MiniMax / Ollama / vLLM / LM Studio。Provider Adapter 层吸收国产模型字段差异 (`reasoning_content`、`thinking`、`tool_calls`)。
+> 支持 DeepSeek / Qwen / Kimi / MiMo / GLM / MiniMax / 腾讯混元 / Ollama / vLLM / LM Studio。Provider Adapter 层吸收国产模型字段差异 (`reasoning_content`、`thinking`、`tool_calls`)。
 
 ---
 
@@ -54,7 +54,7 @@ mbridge usage cache                缓存命中统计
 mbridge prompt list / show / edit / set-system / reset   提示词与规则文件
 mbridge project scan / rules / rules init                项目扫描 / 规则 / 生成 AGENT.md
 mbridge mcp list / tools / resources / prompts           MCP 客户端
-mbridge mcp serve                  把 ModelBridge 自己作为 MCP server
+python -m modelbridge.mcp.server                         把 ModelBridge 自己作为 MCP server
 mbridge bridge install / status / on / off               浏览器侧边栏宿主 (装扩展见下方章节)
 mbridge skill list / show / add / remove                 用户自定义 skill（Claude Code 兼容）
 
@@ -63,8 +63,7 @@ mbridge --version / -V             同上 (任意位置)
 mbridge update [--yes]             检查并下载新版本
 ```
 
-> R2a 已物理删除的别名（v1.2 起 `No such command`）：`bridge control`（→ `bridge on/off/status`）、`bridge` 之外的 `bridge control` 嵌套层。  
-> 仍在 R3a 软弃用态（仍 resolve，会打 deprecation 通知，下一阶段再删）：`chat`、`cost estimate`、`cache stats/reset/clean`、`profile add/list/use/show/remove`、`model test`。  
+> 已物理删除的别名（`No such command`）：`chat`（→ `ask`）、`cost estimate`（→ `usage cost`）、`cache stats/reset/clean`（→ `usage cache ...`）、`profile add/list/use/show/remove`（→ `config profile ...`）、`model test`（→ `doctor model`）、`bridge control`（→ `bridge on/off/status`）、`project init`（→ `project rules init`）、`mcp serve`（→ `python -m modelbridge.mcp.server`）。  
 > **预算功能（`mbridge usage budget`）已在 2026-07 移除。**
 
 > **版本与自动更新**：REPL 启动时会显示当前版本，并在每天检查一次 GitHub
@@ -670,11 +669,11 @@ ModelBridge **优先遵守项目规则文件**。项目规则文件越清楚，A
 
 如果你的项目已经为 Claude Code / Cursor / Windsurf 写过规则文件，ModelBridge 直接复用，**不要求你再写一份**。优先级顺序保证项目级规则在最前面，AI 读到时最先看到。
 
-### 用 `/init` / `mbridge project init` 自动生成 AGENT.md
+### 用 `/init` / `mbridge project rules init` 自动生成 AGENT.md
 
 ```bash
 # CLI 模式
-mbridge project init --path . --model deepseek-chat
+mbridge project rules init --path . --model deepseek-chat
 
 # REPL 模式 (mbridge 进 REPL 后)
 > /init           # AI 扫描项目并生成 AGENT.md，写前给预览

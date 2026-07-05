@@ -75,7 +75,7 @@ def render_user_bubble(console: Console, text: str) -> None:
         h = console.size.height
         sys.stdout.write(f"\x1b[{h};1H")
         sys.stdout.flush()
-    except Exception:  # noqa: BLE001 — cursor escape is best-effort
+    except Exception:
         pass
 
 
@@ -206,7 +206,7 @@ class AssistantStream:
                 vertical_overflow="crop",        # **critical**: never exceed viewport
             )
             self._live.__enter__()
-        except Exception:  # noqa: BLE001 — Live setup failure shouldn't kill the turn
+        except Exception:
             self._live = None
         self._opened = True
         return self
@@ -222,7 +222,7 @@ class AssistantStream:
         if self._live is not None:
             try:
                 self._live.__exit__(exc_type, exc, tb)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._live = None
         # Deposit the FULL (uncropped) panel into scrollback. This is what
@@ -230,14 +230,14 @@ class AssistantStream:
         # so a Markdown parse glitch on the last token can't crash the REPL.
         try:
             self.console.print(self._render(final=True))
-        except Exception:  # noqa: BLE001
+        except Exception:
             # Last-resort fallback so the user at least sees text content.
             try:
                 self.console.print(f"[bold cyan]● {self.model_name}[/bold cyan]")
                 if self._reasoning_parts and self.show_reasoning_inline:
                     self.console.print(Text(self.reasoning, style="dim italic"))
                 self.console.print(self.content or "[dim](no content)[/dim]")
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         self._opened = False
 
@@ -252,7 +252,7 @@ class AssistantStream:
         if self._live is not None:
             try:
                 self._live.update(self._render())
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # If Live falls over mid-stream, drop to raw passthrough
                 # for the rest of this turn so the user still sees tokens.
                 self._live = None
@@ -264,7 +264,7 @@ class AssistantStream:
         if self._live is not None and self.show_reasoning_inline:
             try:
                 self._live.update(self._render())
-            except Exception:  # noqa: BLE001
+            except Exception:
                 self._live = None
 
     @property
@@ -300,7 +300,7 @@ class AssistantStream:
             # height to absorb wide-char wrapping Rich can't see.
             try:
                 screen_h = self.console.size.height
-            except Exception:  # noqa: BLE001
+            except Exception:
                 screen_h = 24
             budget = max(6, screen_h - 8)
             if content_text:
@@ -346,7 +346,7 @@ class AssistantStream:
         if content_text:
             try:
                 items.append(Markdown(content_text, code_theme="monokai"))
-            except Exception:  # noqa: BLE001 — partial markdown edge cases
+            except Exception:
                 items.append(Text(content_text))
         elif not reasoning_text:
             items.append(Text("…", style="dim"))
