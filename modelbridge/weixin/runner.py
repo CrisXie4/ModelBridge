@@ -504,7 +504,9 @@ class WeixinGateway:
                     session=sess.session,
                     ctx=ctx,
                     registry=registry,
-                    model_name=self.model_name,
+                    # run() 启动时已把 self.model_name resolve 成真实模型名；
+                    # `or` 分支只为满足类型检查（self.model_name 声明为 str | None）。
+                    model_name=self.model_name or resolve_model_name(None),
                     timeout=600.0,
                     max_iters=self.max_iters,
                     stream=True,
