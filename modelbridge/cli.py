@@ -257,6 +257,92 @@ app.add_typer(mcp_app, name="mcp")
 app.add_typer(bridge_app, name="bridge")
 app.add_typer(skill_app, name="skill")
 
+# 微信 iLink Bot 通道：login/status/logout/test
+from .weixin.cli import weixin_app as _weixin_app  # noqa: E402
+app.add_typer(_weixin_app, name="weixin")
+
+
+# ---------------------------------------------------------------------------
+# 顶层 gateway 命令 —— 启动微信网关（or --channel bridge 跑浏览器侧边栏宿主）
+# ---------------------------------------------------------------------------
+
+@app.command(
+    "gateway",
+    help="启动 ModelBridge 网关通道。默认微信通道（需先 `mbridge weixin login`）；"
+         "用 ``--channel bridge`` 跑浏览器侧边栏 Native Messaging 宿主。",
+)
+def cmd_gateway(
+    channel: str = typer.Option(
+        "weixin", "--channel", "-c",
+        help="通道：weixin（默认）或 bridge（浏览器侧边栏）。",
+    ),
+    model: str = typer.Option(
+        None, "--model", "-m",
+        help="覆盖 config.yaml 的 default_model（仅 weixin 通道）。",
+    ),
+    allow_bash: bool = typer.Option(
+        True, "--allow-bash/--no-allow-bash",
+        help="（weixin 通道）放行 bash 工具。微信通道默认开启——和 CLI 能力等价。",
+    ),
+    approval: str = typer.Option(
+        "auto", "--approval",
+        help="（weixin 通道）审批模式：auto (默认，LLM 安全判断) / yes "
+             "(全部放行) / reject-unsafe (高危直接拒)。",
+    ),
+    max_iters: int = typer.Option(
+        20, "--max-iters",
+        help="（weixin 通道）单轮 agent 最大工具调用次数。",
+    ),
+) -> None:
+    """启动网关：长轮询微信消息 → 喂给 agent → 回复发回微信。
+
+    工具集与 ``mbridge`` REPL 等价：read/write/str_replace/run_bash + 浏览器
+    侧边栏 + 电脑控制 + subagent + skills + MCP。
+    """
+    if channel == "bridge":
+        # 跑浏览器 Native Messaging 宿主
+        from .bridge.host import main as _bridge_main
+        _bridge_main()
+        return
+
+    if channel != "weixin":
+        err_console.print(f"[red]未知通道 '{channel}'：可选 weixin / bridge[/red]")
+        raise typer.Exit(code=2)
+
+    from pathlib import Path
+    from .weixin.runner import WeixinGateway
+
+    if approval not in ("auto", "yes", "reject-unsafe"):
+        err_console.print(f"[red]未知 --approval={approval}：可选 auto / yes / reject-unsafe[/red]")
+        raise typer.Exit(code=2)
+
+    gw = WeixinGateway(
+        model_name=model,
+        allow_bash=allow_bash,
+        approval_mode=approval,
+        cwd=Path.cwd(),
+        max_iters=max_iters,
+    )
+
+    # Ctrl+C 优雅退出
+    import signal
+    def _on_sigint(_sig, _frame):
+        console.print("[yellow]收到中断信号，正在停止网关…[/yellow]")
+        gw.stop()
+    signal.signal(signal.SIGINT, _on_sigint)
+
+    console.print(Panel(
+        f"通道    : 微信 (iLink Bot)\n"
+        f"模型    : {model or '(config.yaml default_model)'}\n"
+        f"工作区  : {Path.cwd()}\n"
+        f"bash    : {'允许' if allow_bash else '禁用'}\n"
+        f"审批    : {approval}\n"
+        f"max_iters: {max_iters}",
+        title="ModelBridge 网关", border_style="cyan",
+    ))
+    code = gw.run()
+    raise typer.Exit(code=code or 0)
+
 
 # ---------------------------------------------------------------------------
 # Root: `mbridge` with no subcommand → interactive agent REPL

@@ -22,6 +22,7 @@ def _build_stdio(cfg: MCPServerConfig) -> Transport:
         command=cfg.command,
         args=cfg.args,
         env=cfg.env,
+        cwd=cfg.cwd,
     )
 
 

@@ -51,3 +51,11 @@ packaging/.modelbridge/
 htmlcov/
 .coverage
 .coverage.*
+
+# Accidental `npm i @crisxie/mbridge` in repo root — the real wrapper lives in npm/
+/node_modules/
+/package.json
+/package-lock.json
+
+# Local scratch launcher (use `mbridge gateway` instead)
+_start_gateway.py

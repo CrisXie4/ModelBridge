@@ -45,6 +45,7 @@ dependencies = [
     "prompt_toolkit>=3.0.0",  # @file 提及的实时补全 (REPL)；无 TTY 时自动回退
     "keyring>=24.0",       # OS credential vault for api_key (preferred)
     "cryptography>=42.0",  # Fernet fallback when no keyring backend
+    "qrcode>=7.0",         # 微信 iLink Bot 登录：终端里画出可扫二维码
 ]
 
 [project.optional-dependencies]

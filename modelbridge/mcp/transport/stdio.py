@@ -81,11 +81,13 @@ class StdioTransport(Transport):
         command: str,
         args: list[str],
         env: dict[str, str] | None = None,
+        cwd: str | None = None,
     ) -> None:
         self.server_id = server_id
         self._command = command
         self._args = list(args)
         self._env_overrides = dict(env or {})
+        self._cwd = cwd or None
         self._proc: subprocess.Popen[str] | None = None
         self._inbox: "queue.Queue[Any]" = queue.Queue()
         self._stderr_tail: list[str] = []
@@ -106,6 +108,8 @@ class StdioTransport(Transport):
             errors="replace",
             bufsize=1,  # line-buffered
         )
+        if self._cwd:
+            popen_kwargs["cwd"] = self._cwd
         if not _IS_WINDOWS:
             # Own process group so a tree-kill hits descendants on POSIX.
             popen_kwargs["start_new_session"] = True

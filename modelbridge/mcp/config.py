@@ -51,6 +51,9 @@ class MCPServerConfig:
     command: str | None = None
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
+    # stdio server 的工作目录。``python -m app`` 这类入口必须在这里指向
+    # 包根目录，否则子进程在错误的 cwd 启动会找不到目标模块。
+    cwd: str | None = None
     url: str | None = None
     headers: dict[str, str] = field(default_factory=dict)  # http only (e.g. Authorization)
     enabled: bool = True
@@ -124,6 +127,7 @@ class MCPServerConfig:
             command=raw.get("command"),
             args=[str(a) for a in args],
             env={str(k): str(v) for k, v in env.items()},
+            cwd=str(raw["cwd"]) if raw.get("cwd") else None,
             url=raw.get("url"),
             headers={str(k): str(v) for k, v in headers.items()},
             enabled=bool(raw.get("enabled", True)),
