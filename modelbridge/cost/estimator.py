@@ -62,33 +62,39 @@ class Pricing:
 # Built-in pricing — per 1 000 000 tokens, currency as noted.
 # These are *approximate*; let users override in models.yaml.
 #
-# 2026-07 refresh: aligned to the vendor rate sheet (see project task notes).
-# Conflicts resolved in favour of the vendor sheet:
-#   - glm-5.2:        CNY 8/28        (was OpenRouter USD 0.93/3.00)
-#   - deepseek-v4-flash: USD 0.14/0.28 (was OpenRouter USD 0.09/0.18)
-#   - kimi-k2.7-code: USD 0.95/4.00    (was OpenRouter USD 0.74/3.50)
-#   - minimax-m3:     USD 0.60/2.40    (was OpenRouter USD 0.30/1.20)
-# Cache-hit input rates added where the sheet lists them.
+# 2026-08 refresh: each entry below now cites the official vendor page it was
+# verified against (URLs in the per-section headers). Source legend:
+#   vendor-2026-08  — re-verified against the live vendor pricing page this sweep
+#   vendor-2026-07  — verified against vendor rate sheet 2026-07 (prior sweep)
+#   builtin / litellm-2026-07 — pre-existing, not re-verified this sweep
+#
+# Vendor-page sources consulted this sweep:
+#   DeepSeek : https://api-docs.deepseek.com/quick_start/pricing
+#   Kimi     : https://platform.kimi.ai/docs/pricing/chat-k3
+#              https://platform.kimi.ai/docs/pricing/chat-k27-code
+#              https://platform.kimi.ai/docs/pricing/chat-k26
+#   MiniMax  : https://platform.minimax.io/docs/guides/pricing-paygo
+#              https://platform.minimax.io/docs/guides/text-generation
+#   Qwen     : https://help.aliyun.com/zh/model-studio/billing-for-model-studio
+#              (华北2 北京原价；OpenRouter 交叉验证 qwen3.8-max = $2/$6 ≈ ¥12/¥36)
+#   MiMo     : https://mimo.mi.com/  (中国站 CNY)
+#              https://mimo.xiaomi.com/mimo-v2-pro (国际站 USD, V2-Pro)
 #
 # Currency note: GLM-5.2 is quoted CNY (domestic 智谱), GLM-5.1 USD
 # (international) — mixed currencies are NOT auto-converted, so pick one per
 # model and override in ~/.modelbridge/pricing.yaml if you need comparability.
 #
-# Source legend:
-#   vendor-2026-07     — vendor rate sheet (this refresh; authoritative)
-#   builtin            — 2026-05 baseline (CNY, may be stale; not on this sheet)
-#   openrouter-2026-07 / litellm-2026-07 — cross-source (kept where not
-#     contradicted by the vendor sheet)
+# MiMo-V2 sunset: 小米公告 "MiMo-V2 系列已于 2026.6.30 下线" → the legacy
+# `mimo-v2` entry was removed and replaced by `mimo-v2.5` (¥1/¥2, 1M ctx).
 #
-# GLM-5.1 input price was not on the sheet; inferred from the GLM-5 family
-# (USD 1.00) — confirm against 智谱's page before relying on it.
-# qwen-long (10M context) has no published per-token price on the sheet →
-# left out, so it raises PricingNotFound until overridden locally.
+# MiniMax M3 promo: official page lists "Permanent 50% off" → we record the
+# current payable price ($0.30/$1.20) as the default; the pre-promo rate is
+# noted in the comment for reference.
 DEFAULT_PRICING: dict[str, Pricing] = {
-    # ---- DeepSeek (V4 era; vendor sheet 2026-07, USD) ----
-    "deepseek-v4-pro":    Pricing("USD", 0.435, 0.87, "vendor-2026-07",
+    # ---- DeepSeek (vendor 2026-08, USD) ----
+    "deepseek-v4-pro":    Pricing("USD", 0.435, 0.87, "vendor-2026-08",
                                   cache_hit_input_per_1m=0.003625),
-    "deepseek-v4-flash":  Pricing("USD", 0.14,  0.28, "vendor-2026-07",
+    "deepseek-v4-flash":  Pricing("USD", 0.14,  0.28, "vendor-2026-08",
                                   cache_hit_input_per_1m=0.0028),
 
     # ---- 腾讯混元 (vendor sheet 2026-07, CNY) ----
@@ -99,25 +105,50 @@ DEFAULT_PRICING: dict[str, Pricing] = {
     "glm-5.2":            Pricing("CNY", 8.0,  28.0, "vendor-2026-07"),
     "glm-5.1":            Pricing("USD", 1.00, 3.20, "vendor-2026-07"),  # input inferred
 
-    # ---- Qwen / 百炼 (vendor sheet 2026-07, USD) ----
-    "qwen3.7-max":        Pricing("USD", 2.5, 7.5, "vendor-2026-07"),
+    # ---- Qwen / 百炼 (vendor 2026-08, CNY; help.aliyun.com/zh/model-studio/billing) ----
+    # 阶梯计价的模型记录 ≤第一档 的价格（最常用区段）。qwen3.7-max 当前限时 5 折，
+    # 这里记录原价；用户若开了促销可在 pricing.yaml 覆盖。
+    "qwen3.8-max":        Pricing("CNY", 12.0, 36.0, "vendor-2026-08"),
+    "qwen3.7-max":        Pricing("CNY", 12.0, 36.0, "vendor-2026-08"),
+    "qwen3.7-plus":       Pricing("CNY", 2.0,  8.0,  "vendor-2026-08"),
 
-    # ---- Kimi / Moonshot (K2.x era; vendor sheet 2026-07, USD) ----
-    "kimi-k2.7-code":     Pricing("USD", 0.95, 4.00, "vendor-2026-07",
+    # ---- Kimi / Moonshot (vendor 2026-08, USD) ----
+    # K3 是新一代旗舰（1M ctx，默认 reasoning），K2.7-code 是编码专用。
+    "kimi-k3":            Pricing("USD", 3.00, 15.00, "vendor-2026-08",
+                                  cache_hit_input_per_1m=0.30),
+    "kimi-k2.7-code":     Pricing("USD", 0.95, 4.00, "vendor-2026-08",
                                   cache_hit_input_per_1m=0.19),
-    "kimi-k2.6":          Pricing("USD", 0.95, 4.00, "vendor-2026-07",
+    "kimi-k2.6":          Pricing("USD", 0.95, 4.00, "vendor-2026-08",
                                   cache_hit_input_per_1m=0.16),
 
-    # ---- MiniMax (vendor sheet 2026-07, USD) ----
-    "minimax-m3":         Pricing("USD", 0.60, 2.40, "vendor-2026-07"),
-    "minimax-m2.7":       Pricing("USD", 0.30, 1.20, "vendor-2026-07"),
+    # ---- MiniMax (vendor 2026-08, USD; 国际站 platform.minimax.io) ----
+    # M3 当前为官方 "Permanent 50% off" 促销价（原价 $0.60/$2.40）；
+    # >512k 区段为 $0.60/$2.40（促销）/ $1.20/$4.80（原），此处只记录 ≤512k。
+    "minimax-m3":         Pricing("USD", 0.30, 1.20, "vendor-2026-08",
+                                  cache_hit_input_per_1m=0.06),
+    "minimax-m2.7":       Pricing("USD", 0.30, 1.20, "vendor-2026-08",
+                                  cache_hit_input_per_1m=0.06),
+    "minimax-m2.5":       Pricing("USD", 0.30, 1.20, "vendor-2026-08",
+                                  cache_hit_input_per_1m=0.03),
+    # 官方 model id 大小写别名（首字母大写含点）
+    "MiniMax-M3":         Pricing("USD", 0.30, 1.20, "vendor-2026-08",
+                                  cache_hit_input_per_1m=0.06),
+    "MiniMax-M2.7":       Pricing("USD", 0.30, 1.20, "vendor-2026-08",
+                                  cache_hit_input_per_1m=0.06),
+    "MiniMax-M2.5":       Pricing("USD", 0.30, 1.20, "vendor-2026-08",
+                                  cache_hit_input_per_1m=0.03),
 
-    # ---- 小米 MiMo (vendor sheet 2026-07, CNY) ----
-    "mimo-v2.5-pro":      Pricing("CNY", 3.0, 6.0, "vendor-2026-07",
+    # ---- 小米 MiMo (vendor 2026-08, CNY; 中国站 mimo.mi.com) ----
+    # V2 系列已于 2026-06-30 下线；v2.5 是原生全模态 + 1M ctx 的入门款。
+    "mimo-v2.5-pro":      Pricing("CNY", 3.0, 6.0, "vendor-2026-08",
                                   cache_hit_input_per_1m=0.025),
+    "mimo-v2.5-pro-ultraspeed": Pricing("CNY", 9.0, 18.0, "vendor-2026-08",
+                                        cache_hit_input_per_1m=0.075),
+    "mimo-v2.5":          Pricing("CNY", 1.0, 2.0, "vendor-2026-08",
+                                  cache_hit_input_per_1m=0.02),
 
     # ---- Retained from earlier sweep (not on this sheet; still valid models) ----
-    # Qwen / 百炼
+    # Qwen / 百炼 — older tiers (prices unchanged, still callable)
     "qwen-plus-latest":   Pricing("CNY", 0.8,  2.0,  "builtin"),
     "qwen-max-latest":    Pricing("CNY", 2.4,  9.6,  "builtin"),
     "qwen3-coder-plus":   Pricing("CNY", 4.0, 16.0, "builtin"),
@@ -126,8 +157,6 @@ DEFAULT_PRICING: dict[str, Pricing] = {
     "kimi-k2.5":              Pricing("USD", 0.60, 3.00, "litellm-2026-07"),
     "kimi-k2-thinking":       Pricing("USD", 0.60, 2.50, "litellm-2026-07"),
     "kimi-k2-thinking-turbo": Pricing("USD", 1.15, 8.00, "litellm-2026-07"),
-    # MiMo
-    "mimo-v2":            Pricing("CNY", 4.0, 16.0, "builtin"),
     # GLM older
     "glm-4.6":            Pricing("USD", 0.60, 2.20, "litellm-2026-07"),
     "glm-4.7":            Pricing("USD", 0.60, 2.20, "litellm-2026-07"),

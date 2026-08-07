@@ -57,6 +57,11 @@ dev = [
 ]
 # 仅 @paste 剪贴板读图用到；其余图像功能（路径/URL）零额外依赖。
 vision = ["Pillow>=10.0"]
+# 本地管理后台 (mbridge web)：FastAPI 服务 + Next.js 静态前端。
+web = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+]
 
 [project.scripts]
 mbridge = "modelbridge.cli:app"

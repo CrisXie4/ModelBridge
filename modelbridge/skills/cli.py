@@ -22,7 +22,6 @@ from ..cli_console import console, err_console
 from ..utils import get_app_dir
 from .discovery import discover_skills, find_skill
 
-
 skill_app = typer.Typer(
     name="skill",
     help="用户 Skill 管理 (list / show / add / remove)。",
@@ -54,7 +53,6 @@ def cmd_list() -> None:
     table.add_column("名称", style="bold")
     table.add_column("作用域")
     table.add_column("描述")
-
     for sk in skills:
         table.add_row(sk.name, sk.scope, sk.description)
 

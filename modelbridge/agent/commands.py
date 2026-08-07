@@ -27,6 +27,7 @@ from ..context.windows import (
     context_window_for,
     estimate_reasoning_tokens,
     estimate_session_tokens,
+    estimate_tokens_by_role,
 )
 from ..models import ModelEntry
 from .context import AgentContext
@@ -195,6 +196,15 @@ def _tokens(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     reasoning = estimate_reasoning_tokens(sctx.session.messages)
     free = max(0, window - used)
     pct = (used / window * 100) if window else 0.0
+    # Per-role breakdown — same buckets the always-on context panel shows.
+    try:
+        rb = estimate_tokens_by_role(sctx.session.messages)
+        role_line = (
+            f"前缀 {rb['prefix']:,} · 推理 {rb['reasoning']:,} · "
+            f"工具 {rb['tool']:,} · 对话 {rb['conversation']:,}"
+        )
+    except Exception:
+        role_line = "(role 拆分不可用)"
     body = (
         f"[dim]model[/dim]              {sctx.model_name}\n"
         f"[dim]model id[/dim]           {sctx.entry.model}\n"
@@ -202,6 +212,7 @@ def _tokens(sctx: SlashContext, *, args: list[str]) -> CommandResult:
         f"[dim]used (estimate)[/dim]    {used:,}  ({pct:.2f}%)\n"
         f"[dim]free[/dim]               {free:,}\n"
         f"[dim]reasoning_content[/dim]  ~{reasoning:,} t  (已保留)\n"
+        f"[dim]role 拆分[/dim]          {role_line}\n"
         f"\n"
         f"[dim](token 估算：CJK ≈ 1 token/字符, ASCII ≈ 1 token / 4 字符)[/dim]"
     )
@@ -859,9 +870,30 @@ _HELP_ROWS: list[tuple[str, str]] = [
 ]
 
 
+def slash_command_help() -> dict[str, str]:
+    """Map each command alias (no leading ``/``) to a human description.
+
+    Built from :data:`_HELP_ROWS` by splitting each row's first cell on
+    ``, `` and stripping the leading ``/``. Aliases that share a row get
+    the same description. Commands in :data:`_COMMANDS` but absent from
+    :data:`_HELP_ROWS` fall back to an empty string so the completer still
+    offers them.
+    """
+    out: dict[str, str] = {}
+    for names_cell, desc in _HELP_ROWS:
+        for raw in names_cell.split(","):
+            name = raw.strip().lstrip("/")
+            if name:
+                out[name] = desc
+    for name in _COMMANDS:
+        out.setdefault(name, "")
+    return out
+
+
 __all__ = [
     "CommandResult",
     "SlashContext",
     "is_slash",
     "handle_slash",
+    "slash_command_help",
 ]

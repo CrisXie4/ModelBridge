@@ -58,7 +58,9 @@ class UseSkillTool(Tool):
                 hint="请用 `mbridge skill list` 查看可用 skill，或检查 SKILL.md 是否存在且格式正确。",
             )
 
-        if not ctx.confirm(
+        # Built-in skills ship with the package and are trusted — no need
+        # to pester the user for confirmation on every invocation.
+        if skill.scope != "builtin" and not ctx.confirm(
             tool=self.name,
             summary=f"加载 skill「{skill_name}」",
             detail=f"描述: {skill.description}\n来源: {skill.path}",

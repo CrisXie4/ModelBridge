@@ -103,11 +103,12 @@ from .agent import (
     run_interactive,
 )
 from .agent.commands import SlashContext, handle_slash
-from .agent.tools import build_default_registry
+from .agent.tools import TodoTool, build_default_registry
 from .skills.wiring import wire_skills
 from .agent.ui import (
     AssistantStream,
     compute_turn_stats,
+    render_context_panel,
     render_reasoning_meter,
     render_tool_bubble,
     render_user_bubble,
@@ -140,6 +141,9 @@ from .project import (
 from .context import (
     DEFAULT_MAX_CONTEXT_CHARS,
     ContextPlan,
+    context_window_for,
+    estimate_session_tokens,
+    estimate_tokens_by_role,
     plan as plan_context,
 )
 from .editor import (
@@ -260,6 +264,41 @@ app.add_typer(skill_app, name="skill")
 # 微信 iLink Bot 通道：login/status/logout/test
 from .weixin.cli import weixin_app as _weixin_app  # noqa: E402
 app.add_typer(_weixin_app, name="weixin")
+
+# 联网搜索通道：login/status/logout/test
+from .search.cli import search_app as _search_app  # noqa: E402
+app.add_typer(_search_app, name="search")
+
+
+# ---------------------------------------------------------------------------
+# 本地管理后台：mbridge web [--host 127.0.0.1] [--port 8765]
+# 启动 FastAPI 服务，读写 ~/.modelbridge/ 配置；前端在 webui/ (Next.js)。
+# ---------------------------------------------------------------------------
+
+@app.command(
+    "web",
+    help="启动本地管理后台 (FastAPI)。浏览器访问 http://127.0.0.1:8765 管理"
+         "模型/路由/skill/提示词/自检。需先 `pip install 'modelbridge[web]'`。",
+)
+def cmd_web(
+    host: str = typer.Option("127.0.0.1", "--host", help="监听地址。"),
+    port: int = typer.Option(8765, "--port", "-p", help="监听端口。"),
+    reload: bool = typer.Option(False, "--reload", help="开发模式热重载。"),
+) -> None:
+    try:
+        import uvicorn  # noqa: F401
+    except ImportError:
+        err_console.print(
+            "[red]未安装 web 依赖。请运行：[/red] "
+            "[bold]pip install 'modelbridge[web]'[/bold]"
+        )
+        raise typer.Exit(code=1)
+
+    from .web import create_app
+
+    console.print(f"[bold cyan]ModelBridge 管理后台[/bold cyan] → http://{host}:{port}")
+    console.print("[dim]Ctrl+C 退出。[/dim]")
+    uvicorn.run(create_app(), host=host, port=port, reload=reload)
 
 
 # ---------------------------------------------------------------------------
@@ -532,6 +571,17 @@ def _run_repl(
     from .agent.tools.subagent_tool import SpawnSubagentTool
     registry.register(SpawnSubagentTool())
 
+    # Live state — publishes {model, topic, context usage, todos} to
+    # ~/.modelbridge/live.json so the web UI's "Agent 活动" page shows the
+    # running REPL in real time. The TodoStore backs the AI-facing `todo`
+    # tool (planning / progress tracking). The writer needs the Session,
+    # so it is constructed after `session` exists below; the store + tool
+    # have no such dependency and register here.
+    from .agent.live_state import LiveStateWriter, TodoStore, clear_live_state
+
+    todo_store = TodoStore()
+    registry.register(TodoTool(todo_store))
+
     # Computer control tools: mouse, keyboard, screenshot, and inject_js.
     from .agent.tools.computer_control_tools import build_computer_registry
     for tool in build_computer_registry().tools.values():
@@ -581,11 +631,30 @@ def _run_repl(
     # hits); it lives in ``session.metadata`` for diagnostics only.
     session = Session(model_name=model_name)
 
+    # Wire the live-state writer now that the Session exists. Every todo
+    # mutation republishes live.json immediately; on_user_echo / on_turn_done
+    # (defined below) update topic + status.
+    live_writer = LiveStateWriter(
+        session=session,
+        todo_store=todo_store,
+        model_resolver=_active_model,
+        entry_lookup=find_model,
+        cwd=str(cwd_resolved),
+    )
+    todo_store._on_change = live_writer.flush
+
     sys_prompt_text = system or _default_system_prompt(allow_bash=allow_bash)
     try:
         sys_prompt_text = wire_skills(registry, sys_prompt_text, project_path=cwd_resolved)
     except Exception as e:
         err_console.print(f"[yellow]跳过 skills 加载: {e}[/yellow]")
+    # 联网搜索：已登录才注册 web_search 并追加提示词（未登录则什么都不做）。
+    try:
+        from .search.wiring import wire_search
+
+        sys_prompt_text = wire_search(registry, sys_prompt_text)
+    except Exception as e:
+        err_console.print(f"[yellow]跳过联网搜索加载: {e}[/yellow]")
     prompt_builder = PromptBuilder().with_system_prompt(sys_prompt_text).with_project(cwd_resolved)
 
     repl_prefix_hash = ""
@@ -636,6 +705,33 @@ def _run_repl(
 
     # 4. Banner
     cache_line = f"summary   : {repl_summary_reason or '(none)'}"
+    # Prefix token budget — show how much of the context window the static
+    # prompt prefix (system + rules + project summary + files) consumes at
+    # startup, so the user sees their headroom before the first turn.
+    def _fmt_tokens_cli(n: int) -> str:
+        if n >= 1_000_000:
+            return f"{n / 1_000_000:.1f}M"
+        if n >= 1_000:
+            return f"{n / 1_000:.1f}k"
+        return str(n)
+    try:
+        prefix_tokens = estimate_session_tokens(session.messages[:1]) if session.messages else 0
+    except Exception:
+        prefix_tokens = 0
+    try:
+        _banner_entry = find_model(model_name)
+        _banner_window = context_window_for(_banner_entry) if _banner_entry else 0
+    except Exception:
+        _banner_window = 0
+    if _banner_window:
+        _banner_pct = (prefix_tokens / _banner_window) * 100 if _banner_window else 0.0
+        budget_line = (
+            f"budget    : 前缀 ~{_fmt_tokens_cli(prefix_tokens)} t / "
+            f"{_fmt_tokens_cli(_banner_window)} 窗口 "
+            f"({_banner_pct:.1f}% 预占) · 详情 /tokens"
+        )
+    else:
+        budget_line = f"budget    : 前缀 ~{_fmt_tokens_cli(prefix_tokens)} t · 详情 /tokens"
     console.print(
         Panel.fit(
             f"[bold]ModelBridge agent REPL[/bold]  [dim]v{__version__}[/dim]\n"
@@ -646,7 +742,8 @@ def _run_repl(
             f"allow_bash: {allow_bash}\n"
             f"policy    : {policy.describe()}\n"
             f"prefix    : {repl_prefix_hash or '(empty)'}\n"
-            f"{cache_line}\n\n"
+            f"{cache_line}\n"
+            f"{budget_line}\n\n"
             f"[yellow]💛 感谢 [bold]6哥API[/bold] 赞助[/yellow]  [cyan]https://6geapi.com[/cyan]\n"
             f"[dim]   AI 大模型中转站 · 一个 Key 调用 GPT / Claude / Gemini / DeepSeek 等海内外模型 · OpenAI 兼容[/dim]\n\n"
             f"[dim]/help 命令 · @文件名 引用文件(实时补全, 内容注入本轮) · "
@@ -696,31 +793,38 @@ def _run_repl(
     try:
         if sys.stdin.isatty() and sys.stdout.isatty():
             from prompt_toolkit import PromptSession
-            from prompt_toolkit.completion import ThreadedCompleter
+            from prompt_toolkit.completion import (
+                ThreadedCompleter,
+                merge_completers,
+            )
             from prompt_toolkit.history import InMemoryHistory
             from prompt_toolkit.key_binding import KeyBindings
 
             from .agent.at_completer import AtFileCompleter
+            from .agent.slash_completer import SlashCommandCompleter
 
             # Ctrl+O toggles thinking display mode (full ↔ collapse).
-            # We capture the binding on thinking_state which is captured
-            # by reference; toggle is visible to the next AssistantStream
-            # created by on_assistant_start.
             _pt_bindings = KeyBindings()
 
             @_pt_bindings.add("c-o")
             def _toggle_thinking_display(event) -> None:
                 thinking_state["show_full"] = not thinking_state.get("show_full", False)
                 mode = "[green]▣ 全显[/green]" if thinking_state["show_full"] else "[dim]▢ 折叠[/dim]"
-                # Print the new state on its own line so the next prompt
-                # redraw leaves a visible breadcrumb in the scrollback.
                 console.print(f"  thinking display: {mode}  [dim](Ctrl+O 切换)[/dim]")
 
-            # ThreadedCompleter runs the (lazy) index build + per-keystroke
-            # scan off the UI thread, so the first '@' (full os.walk) and broad
-            # queries on a big repo don't freeze the prompt.
+            # Slash-command + @file completion merged into one completer.
+            # prompt_toolkit defaults already provide the Claude-Code-style UX:
+            #   - complete_while_typing=True → menu appears as you type / or @
+            #   - Tab accepts the highlighted completion
+            #   - Arrow keys navigate the menu
+            # No custom Tab binding needed (and a bad one killed the whole
+            # session before — see TypeError on filter=lambda in the old code).
+            _completer = merge_completers(
+                [SlashCommandCompleter(), AtFileCompleter(_get_file_index)],
+                deduplicate=True,
+            )
             _pt_session = PromptSession(
-                completer=ThreadedCompleter(AtFileCompleter(_get_file_index)),
+                completer=ThreadedCompleter(_completer),
                 complete_while_typing=True,
                 history=InMemoryHistory(),
                 key_bindings=_pt_bindings,
@@ -852,6 +956,8 @@ def _run_repl(
         # Render the user input as a right-aligned green bubble so the
         # transcript looks like a chat.
         render_user_bubble(console, text)
+        live_writer.set_topic(text)
+        live_writer.flush(status="working")
 
     def on_assistant_start() -> None:
         # Open a new live left-side bubble for this iteration's assistant turn.
@@ -933,14 +1039,12 @@ def _run_repl(
     def on_system(text: str) -> None:
         console.print(f"[dim]{text}[/dim]")
 
-    # Status line is printed inline at the end of each turn (right above the
-    # next `you ❯` prompt). We tried the DECSTBM sticky-footer approach but
-    # it conflicted with the streaming bubble + console.input cursor on
-    # Windows Terminal — the saved/restored cursor positions drifted as the
-    # scroll region scrolled, causing the status text to land on the input
-    # line and panel borders to collide with the assistant header. Inline
-    # print is cross-platform-stable and visually "right above the prompt"
-    # which is functionally what users want.
+    # Multi-line context info panel — printed inline at the end of each turn
+    # (right above the next `you ❯` prompt), replacing the legacy single-line
+    # status bar. Full width, always on, folds to a compact form on narrow
+    # terminals. See render_context_panel for layout. We tried the DECSTBM
+    # sticky-footer approach earlier; it conflicted with the streaming bubble
+    # + console.input cursor on Windows Terminal. Inline print is stable.
     def _print_status_bar() -> None:
         entry = find_model(model_name)
         if entry is None:
@@ -951,21 +1055,36 @@ def _run_repl(
             last_response=turn_state["last_response"],
             iterations=turn_state["iterations"] or 1,
         )
-        # Status bar comes from ``status_bar_text`` which sets ``no_wrap=True``
-        # + ``overflow="ellipsis"`` (needed by StickyFooter). For inline
-        # printing those attrs are actively harmful — when the bar exceeds
-        # the terminal width on a narrow window, the ellipsis path can
-        # leave the cursor mid-line and break the next ``you ❯`` prompt.
-        # Flip both to wrap-friendly here so the bar lays out naturally.
-        bar = status_bar_text(stats, model_name=_active_model())
-        bar.no_wrap = False
-        bar.overflow = "fold"
-        console.print(bar)
+        try:
+            role_breakdown = estimate_tokens_by_role(session.messages)
+        except Exception:
+            role_breakdown = None
+        # Best-effort todo snapshot — never break the panel if the store is
+        # unavailable or empty.
+        try:
+            todo_summary = todo_store.summary()
+            items = todo_store.to_list()
+            in_prog = next(
+                (it["content"] for it in items if it.get("status") == "in_progress"),
+                None,
+            )
+        except Exception:
+            todo_summary = None
+            in_prog = None
+        render_context_panel(
+            console,
+            stats,
+            model_name=_active_model(),
+            role_breakdown=role_breakdown,
+            todo_summary=todo_summary,
+            current_todo=in_prog,
+        )
 
     def on_turn_done() -> None:
         _print_status_bar()
         turn_state["iterations"] = 0
         turn_state["last_response"] = None
+        live_writer.flush(status="idle")
 
     # Mutable state shared with the slash-command dispatcher.
     # Initialize from the active model's thinking profile so /think
@@ -1014,6 +1133,7 @@ def _run_repl(
         return handle_slash(text, sctx)
 
     # 5. Run
+    live_writer.flush(status="idle")  # publish initial state before first turn
     try:
         run_interactive(
             session=session,
@@ -1043,6 +1163,7 @@ def _run_repl(
             mcp_manager.shutdown()
         if browser_bridge is not None:
             browser_bridge.close()
+        clear_live_state()  # mark the REPL offline in the web UI
         if save_session and len(session.messages) > 1:
             path = session.save(label=f"repl_{model_name}")
             if path is not None:

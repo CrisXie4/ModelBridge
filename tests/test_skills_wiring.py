@@ -18,13 +18,16 @@ def _write_skill(root: Path, name: str, description: str, body: str = "做事的
 
 
 def test_wire_skills_no_skills_returns_unchanged(tmp_path):
-    """When no skills are found, the system prompt is returned unchanged and
-    no new tool is registered on the registry."""
+    """Built-in skills are always present, so wire_skills always registers
+    UseSkillTool and appends an index. Verify the builtins show up."""
     registry = ToolRegistry()
     original = "You are a helpful assistant."
     result = wire_skills(registry, original, project_path=tmp_path)
-    assert result == original
-    assert "use_skill" not in registry.names()
+    # Tool must be registered (builtins are always discovered)
+    assert "use_skill" in registry.names()
+    # Original prompt preserved + builtin index appended
+    assert original in result
+    assert "systematic-debugging" in result or "tdd" in result
 
 
 def test_wire_skills_with_skills_registers_tool_and_appends_index(tmp_path):

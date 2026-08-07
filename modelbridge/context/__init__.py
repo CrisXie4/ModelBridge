@@ -19,6 +19,7 @@ from .windows import (
     context_window_for,
     estimate_reasoning_tokens,
     estimate_session_tokens,
+    estimate_tokens_by_role,
 )
 
 __all__ = [
@@ -29,4 +30,5 @@ __all__ = [
     "context_window_for",
     "estimate_reasoning_tokens",
     "estimate_session_tokens",
+    "estimate_tokens_by_role",
 ]

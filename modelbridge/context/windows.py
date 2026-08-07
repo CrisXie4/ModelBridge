@@ -35,21 +35,24 @@ from ..schemas import ChatMessage, text_of
 # 腾讯混元
 #   - Hy3 preview: 256K
 # Qwen / 阿里云百炼
-#   - qwen-plus / 3.6-plus: 1M
-#   - qwen-max / qwen3-max / qwen3.7-max: 256K  (3.7-Max advertises 1M; see comment)
-#   - qwen3-coder-* : 1M
+#   - qwen3.8-max / qwen3.7-max / qwen3.7-plus: 1M (2026 旗舰/通用)
+#   - qwen-plus / qwen3-coder-*: 1M
+#   - qwen-max / qwen3-max: 256K
 #   - qwen-turbo: 1M
 #   - qwen-long: 10M (long-context variant)
 # Kimi / Moonshot (K2.x era; K2 base EOL'd 2026-05-25, removed)
+#   - kimi-k3: 1M (2026 flagship, default reasoning)
 #   - kimi-k2.5 / k2.6 / k2-thinking / k2-thinking-turbo / k2.7-code: 256K
-# MiMo / 小米 (released 2026-03)
-#   - mimo-v2 / v2.5 / v2.5-pro family: 1M (v2-omni 256K, v2-tts 128K)
+# MiMo / 小米 (released 2026-03; V2 系列已于 2026-06-30 下线)
+#   - mimo-v2.5-pro / mimo-v2.5: 1M (v2.5 原生全模态 + 1M 上下文)
+#   - mimo-v2-omni: 256K, mimo-v2-tts: 128K (V2 系列，已下线，保留兼容旧配置)
 # GLM / 智谱 (5.x era; old 4-plus/4-flash/4-flashx/4.5/z1 removed)
 #   - glm-5.2: 1M (2026-Q2 flagship)
 #   - glm-5.1 / glm-5 / 4.7 / 4.6: 200K
 #   - glm-4-long: 1M
 # MiniMax (M3 era; M2 + abab6.5 + 01 removed)
-#   - minimax-m3 / m2.7: 1M
+#   - minimax-m3: 1M (2026-06, native multimodal)
+#   - minimax-m2.7 / m2.5: 200K (官方 text-generation 页)
 DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
     # DeepSeek (V4 era)
     "deepseek-v4":             1_000_000,
@@ -60,6 +63,9 @@ DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
     "hy3-preview":               262_144,    # "Hy3 preview" 256K context
 
     # Qwen / DashScope 百炼
+    "qwen3.8-max":             1_000_000,    # 2026-08 GA 旗舰; vendor sheet 1M
+    "qwen3.7-max":             1_000_000,    # vendor sheet: 0<Token≤1M 阶梯
+    "qwen3.7-plus":            1_000_000,    # vendor sheet: 0<Token≤256K / 256K-1M 两档
     "qwen-plus":               1_000_000,
     "qwen-plus-latest":        1_000_000,
     "qwen3-plus":              1_000_000,
@@ -67,27 +73,26 @@ DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
     "qwen-max":                  262_144,
     "qwen-max-latest":           262_144,
     "qwen3-max":                 262_144,
-    "qwen3.7-max":             1_000_000,    # vendor sheet advertises 1M
+    "qwen3.7-max-preview":     1_000_000,
     "qwen-turbo":              1_000_000,
     "qwen-turbo-latest":       1_000_000,
     "qwen3-coder-plus":        1_000_000,
     "qwen3-coder-flash":       1_000_000,
     "qwen-long":              10_000_000,    # 10M long-context variant
 
-    # Kimi / Moonshot (K2.x era)
+    # Kimi / Moonshot (K2.x era + K3)
+    "kimi-k3":                   1_000_000,    # 2026 flagship, 1M context
     "kimi-k2.5":                 262_144,
     "kimi-k2.6":                 262_144,
     "kimi-k2-thinking":          262_144,
     "kimi-k2-thinking-turbo":    262_144,
     "kimi-k2.7-code":            262_144,    # 2026-06 release; "256K context" per ModelScope README
 
-    # MiMo / 小米
-    "mimo-v2":                 1_000_000,
-    "mimo-v2-pro":             1_000_000,
-    "mimo-v2.5-pro":           1_000_000,    # vendor sheet: 1M (flat-rate billing)
-    "mimo-v2.5":               1_000_000,
-    "mimo-v2-omni":              262_144,
-    "mimo-v2-tts":               131_072,
+    # MiMo / 小米 (V2.5 era; V2 系列已于 2026-06-30 下线)
+    "mimo-v2.5-pro":           1_000_000,    # 1M context, 42B 激活
+    "mimo-v2.5":               1_000_000,    # 原生全模态 + 1M 上下文
+    "mimo-v2-omni":              262_144,    # V2 系列，已下线（保留兼容旧配置）
+    "mimo-v2-tts":               131_072,    # V2 系列，已下线（保留兼容旧配置）
 
     # GLM / 智谱
     "glm-5.2":                 1_000_000,    # 2026-Q2 release; "Solid 1M Context" per ModelScope README
@@ -97,9 +102,14 @@ DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
     "glm-4.6":                   200_000,
     "glm-4-long":              1_000_000,
 
-    # MiniMax (M3 era)
-    "minimax-m3":              1_000_000,    # 2026-06 release; "native multimodal with 1M context" per ModelScope
-    "minimax-m2.7":            1_000_000,
+    # MiniMax (M3 era; 官方 platform.minimax.io text-generation 页)
+    "minimax-m3":              1_000_000,    # 1M context
+    "minimax-m2.7":              204_800,    # 200K context
+    "minimax-m2.5":              204_800,    # 200K context
+    # 官方 model id 大小写（首字母大写含点），同样支持
+    "MiniMax-M3":              1_000_000,
+    "MiniMax-M2.7":              204_800,
+    "MiniMax-M2.5":              204_800,
 }
 
 DEFAULT_LOCAL_WINDOW = 8_192        # most quantized local models
@@ -181,3 +191,53 @@ def estimate_reasoning_tokens(messages: Iterable[ChatMessage]) -> int:
         for m in messages
         if m.reasoning_content
     )
+
+
+def estimate_tokens_by_role(messages: Iterable[ChatMessage]) -> dict[str, int]:
+    """Break session tokens down by purpose.
+
+    Returns ``{"prefix": ..., "reasoning": ..., "tool": ..., "conversation": ...}``.
+
+    Classification (mutually exclusive, sum ≤ ``estimate_session_tokens``):
+
+    * ``prefix``        — the system message (system prompt + rules + project
+                          summary + files concatenated by PromptBuilder).
+    * ``reasoning``     — ``reasoning_content`` on any message (thinking-model
+                          traces; counted separately from visible content).
+    * ``tool``          — ``role == "tool"`` message bodies (tool results) and
+                          ``tool_calls`` JSON on assistant messages.
+    * ``conversation``  — visible ``content`` of non-system, non-tool messages
+                          (user + assistant turns the user actually sees).
+
+    Per-message overhead (4 t) is folded into ``conversation`` (or ``prefix``
+    when the message is the system message) so the four buckets still sum to
+    ≤ the full-session estimate.
+    """
+    buckets = {"prefix": 0, "reasoning": 0, "tool": 0, "conversation": 0}
+    for m in messages:
+        try:
+            if m.role == "system":
+                if m.content:
+                    buckets["prefix"] += estimate_tokens(text_of(m.content)) + _PER_MESSAGE_OVERHEAD
+                continue
+            if m.reasoning_content:
+                buckets["reasoning"] += estimate_tokens(m.reasoning_content)
+            tool_payload = 0
+            if m.role == "tool":
+                if m.content:
+                    tool_payload += estimate_tokens(text_of(m.content))
+            if m.tool_calls:
+                try:
+                    tool_payload += estimate_tokens(json.dumps(m.tool_calls, ensure_ascii=False))
+                except (TypeError, ValueError):
+                    pass
+            if tool_payload:
+                buckets["tool"] += tool_payload + _PER_MESSAGE_OVERHEAD
+                continue
+            # Pure conversation message (user or assistant without tool calls).
+            if m.content:
+                buckets["conversation"] += estimate_tokens(text_of(m.content)) + _PER_MESSAGE_OVERHEAD
+        except (TypeError, ValueError, AttributeError):
+            # Never let a single malformed message break the panel.
+            continue
+    return buckets

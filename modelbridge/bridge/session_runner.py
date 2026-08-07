@@ -45,7 +45,8 @@ _SYSTEM_PROMPT = (
     "需要页面信息时主动调用工具，不要凭空猜测页面内容。回答要直接、可执行。\n"
     "页面正在加载时，工具会自动等到加载完成后再执行；navigate / click 触发跳转后"
     "也会等新页面加载完再返回。所以遇到加载慢的页面，继续调用工具完成任务即可，"
-    "不要中途放弃、不要让用户自己去刷新或查看页面。"
+    "不要中途放弃、不要让用户自己去刷新或查看页面。\n"
+    "若已登录联网搜索，遇到需要最新信息或网络资料时调用 web_search 工具。"
 )
 
 
@@ -97,8 +98,19 @@ class SessionRunner:
         )
 
     def build_registry(self):
-        """Browser tools (read tools always; write tools added in Stage 3)."""
-        return build_browser_registry(include_write=True)
+        """Browser tools (read tools always; write tools added in Stage 3).
+
+        联网搜索：已登录则把 web_search 也注册进来（经本地 CLI 凭据调用服务端
+        /v1/search，结果融入 AI 回复，扩展端无需改动）。
+        """
+        registry = build_browser_registry(include_write=True)
+        try:
+            from ..search.wiring import maybe_register_web_search
+
+            maybe_register_web_search(registry)
+        except Exception as e:  # noqa: BLE001
+            self._log.warning("web_search 工具加载失败: %s", e)
+        return registry
 
     def run(
         self,

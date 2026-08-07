@@ -67,8 +67,25 @@ def _skills_dirs(project_path: Path | str | None) -> list[tuple[Path, str]]:
 
 
 def discover_skills(project_path: Path | str | None = None) -> list[Skill]:
-    """Return all valid skills (project overrides global by name)."""
+    """Return all valid skills.
+
+    Precedence (highest wins on name clash):
+      project > global > builtin
+
+    Built-ins are seeded first so any user/project skill of the same name
+    silently overrides them.
+    """
     found: dict[str, Skill] = {}
+
+    # Built-ins (lowest precedence) — seeded first so later scopes overwrite.
+    try:
+        from .builtin import builtin_skills
+
+        for sk in builtin_skills():
+            found[sk.name] = sk
+    except Exception:  # noqa: BLE001 — defensive: never break skill discovery
+        get_logger().debug("skills: 内置 skill 加载失败，跳过", exc_info=True)
+
     for d, scope in _skills_dirs(project_path):
         try:
             subdirs = sorted(d.iterdir())
@@ -107,11 +124,14 @@ def build_skills_index(skills: list[Skill]) -> str:
     lines = [
         "# 可用 Skills",
         "",
-        "以下是用户提供的 skill。判断与当前任务相关时，调用 "
-        '`use_skill("<name>")` 加载其完整指令（会请求用户确认）。'
-        "不要凭名字猜测 skill 的内容。",
+        (
+            "以下是可用的 skill。判断与当前任务相关时，调用 "
+            '`use_skill("<name>")` 加载其完整指令。'
+            "不要凭名字猜测 skill 的内容。"
+        ),
         "",
     ]
     for s in skills:
-        lines.append(f"- {s.name}: {s.description}")
+        tag = " [内置·免确认]" if s.scope == "builtin" else ""
+        lines.append(f"- {s.name}: {s.description}{tag}")
     return "\n".join(lines) + "\n"

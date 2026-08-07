@@ -61,6 +61,9 @@ def build_default_registry(*, include_bash: bool = False) -> ToolRegistry:
     Image reading is handled by ``read_file`` itself (it returns an image
     block when the file is an image and the model is vision-capable), so there
     is no separate image tool to register.
+
+    The ``todo`` tool needs a backing store to share state with the web UI,
+    so it is registered separately by the CLI after the store is created.
     """
     reg = ToolRegistry()
     reg.register(ReadFileTool())

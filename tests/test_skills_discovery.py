@@ -43,7 +43,12 @@ def test_discover_project_skills(tmp_path):
     _write_skill(tmp_path, "review", "审查")
     skills = discover_skills(project_path=tmp_path)
     names = {s.name for s in skills}
-    assert names == {"deploy", "review"}
+    # Built-in skills are always present (lowest precedence); user/project
+    # skills are merged on top.
+    from modelbridge.skills.builtin import builtin_skill_names
+
+    assert builtin_skill_names().issubset(names)
+    assert {"deploy", "review"}.issubset(names)
 
 
 def test_project_overrides_global(tmp_path, monkeypatch):

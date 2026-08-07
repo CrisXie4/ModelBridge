@@ -25,8 +25,7 @@ from rich.align import Align
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.rule import Rule
+from rich.padding import Padding
 from rich.text import Text
 
 from ..context.windows import (
@@ -43,40 +42,52 @@ from ..schemas import ChatMessage, ChatResponse
 # Layout knobs
 # ---------------------------------------------------------------------------
 
-#: Bubble takes up ~60% of console width, leaving 40% margin on the opposite side.
-_BUBBLE_WIDTH_RATIO = 0.62
+#: Bubble takes up most of the console width on wide terminals (full-screen
+#: friendly — leaves ~6% total margin, capped at 200 cols), but stays narrow
+#: on tiny windows so text doesn't wrap per-word.
+_BUBBLE_WIDTH_RATIO_NARROW = 0.62
+_BUBBLE_WIDTH_RATIO_WIDE = 0.94
 _BUBBLE_WIDTH_MIN = 40
-_BUBBLE_WIDTH_MAX = 110
+_BUBBLE_WIDTH_MAX_NARROW = 110
+_BUBBLE_WIDTH_MAX_WIDE = 200
+_NARROW_THRESHOLD = 60
 
 
 def _bubble_width(console: Console) -> int:
-    w = int(console.width * _BUBBLE_WIDTH_RATIO)
-    return max(_BUBBLE_WIDTH_MIN, min(_BUBBLE_WIDTH_MAX, w))
+    w = console.width
+    if w < _NARROW_THRESHOLD:
+        ratio = _BUBBLE_WIDTH_RATIO_NARROW
+        cap = _BUBBLE_WIDTH_MAX_NARROW
+    else:
+        ratio = _BUBBLE_WIDTH_RATIO_WIDE
+        cap = _BUBBLE_WIDTH_MAX_WIDE
+    return max(_BUBBLE_WIDTH_MIN, min(cap, int(w * ratio)))
 
 
 # ---------------------------------------------------------------------------
-# Static bubbles
+# Static bubbles — minimal color-bar style (no full border).
+#
+# Layout for each turn:
+#
+#     <label>                       ← dim, e.g. "● deepseek-v4-pro"
+#     ▎ message body                ← thin colored bar on the left, no border
+#
+# User messages are right-aligned; assistant/tool are left-aligned. The color
+# of the bar + label distinguishes who is talking (green=user, cyan=assistant,
+# magenta=tool) — same color convention as the old bordered panels, so muscle
+# memory transfers.
 # ---------------------------------------------------------------------------
+
+#: The left color bar glyph. A thin vertical bar reads cleaner than a full
+#: box border at full terminal width and avoids the CJK width-miscount issues
+#: that plagued the bordered Panel.
+_BAR = "▎"
+
 
 def render_user_bubble(console: Console, text: str) -> None:
-    """Print the user's message as a right-aligned green panel."""
-    panel = Panel(
-        Text(text, no_wrap=False),
-        title="[bold green]you[/bold green]",
-        title_align="right",
-        border_style="green",
-        width=_bubble_width(console),
-        padding=(0, 1),
-    )
-    console.print(Align(panel, align="right"))
-    # After printing, the cursor is on a new line inside the scroll region.
-    # Move it to row H so the sticky footer (Prompt.ask input row) stays clean.
-    try:
-        h = console.size.height
-        sys.stdout.write(f"\x1b[{h};1H")
-        sys.stdout.flush()
-    except Exception:
-        pass
+    """Print the user's message — right-aligned, green color bar, no border."""
+    body = Text.assemble((_BAR, "green"), (" " + text, ""))
+    console.print(Align(body, align="right"))
 
 
 def render_tool_bubble(
@@ -86,20 +97,18 @@ def render_tool_bubble(
     args_preview: str,
     body: str,
 ) -> None:
-    """Print a tool call/result on the left, magenta border."""
-    title = f"[bold magenta]tool · {tool_name}[/bold magenta]"
-    if args_preview:
-        title += f"  [dim]({args_preview})[/dim]"
-    capped = body if len(body) <= 1200 else body[:1200] + "\n…"
-    panel = Panel(
-        Text(capped, no_wrap=False),
-        title=title,
-        title_align="left",
-        border_style="magenta",
-        width=_bubble_width(console),
-        padding=(0, 1),
+    """Print a tool call/result — left-aligned, magenta color bar, no border."""
+    # Label line: tool name + dimmed args.
+    label = Text.assemble(
+        ("▸ ", "magenta"),
+        (tool_name, "bold magenta"),
     )
-    console.print(Align(panel, align="left"))
+    if args_preview:
+        label.append(f"  {args_preview}", style="dim")
+    capped = body if len(body) <= 1200 else body[:1200] + "\n…"
+    content = Text.assemble((_BAR, "magenta"), (" " + capped, ""))
+    console.print(label)
+    console.print(content)
 
 
 # ---------------------------------------------------------------------------
@@ -280,16 +289,24 @@ class AssistantStream:
     # ------------------------------------------------------------------
 
     def _render(self, *, final: bool = False):
-        """Build the Panel renderable.
+        """Build the renderable — minimal color-bar style, no full border.
 
         ``final=False`` (streaming) renders a **tail view**: the body is
         trimmed to the last N source lines so the live region stays well under
-        the terminal height. This is the v4 fix for stacked panel headers —
-        ambiguous-width chars (¥ … ：) render wider on Windows Terminal than
-        Rich measures, so a full-height ``crop`` frame can still wrap past the
-        screen and break Live's cursor-up redraw. A tail view leaves enough
-        margin to absorb the mis-measure. ``final=True`` renders everything
-        (the canonical post-exit panel in scrollback).
+        the terminal height. ``final=True`` renders everything (the canonical
+        post-exit record in scrollback).
+
+        Layout::
+
+            ● deepseek-v4-pro            ← cyan label (no border)
+            ▎ // thinking                ← dim italic, under the bar
+            ▎ <reasoning tail>
+            ▎ ────                       ← separator
+            ▎ <markdown content>
+
+        Replacing the bordered Panel with a color bar fixes the long-standing
+        CJK width-miscount issue: there's no full-height frame for
+        wide-char wrap to overflow, so Live's cursor-up redraw stays stable.
         """
         live_view = not final
         reasoning_text = self.reasoning
@@ -312,12 +329,14 @@ class AssistantStream:
 
         items: list = []
 
-        # --- Thinking block (dim italic) ---------------------------------
+        # --- Label line (cyan, replaces the old panel title) -------------
+        items.append(Text(f"● {self.model_name}", style="bold cyan"))
+
+        # --- Thinking block (dim italic, indented under the bar) ---------
         if self.show_reasoning_inline and reasoning_text:
-            items.append(Text("// thinking", style="bold dim"))
             # Post-exit view: collapse long reasoning unless Ctrl+O is on.
             # Live view already uses tail_lines so the threshold is a no-op
-            # during streaming — only the final panel feels the difference.
+            # during streaming — only the final render feels the difference.
             if (
                 live_view is False
                 and not self.show_full
@@ -328,37 +347,40 @@ class AssistantStream:
                 preview = reasoning_text[:preview_chars].rstrip()
                 if len(preview) < len(reasoning_text):
                     preview = preview.rstrip() + "…"
-                items.append(Text(preview, style="dim italic"))
+                items.append(Text(f"{_BAR} // thinking", style="bold dim"))
+                items.append(Text(f"{_BAR} {preview}", style="dim italic"))
                 hidden = len(reasoning_text) - len(preview)
                 items.append(Text(
-                    f"… 折叠了 {hidden} 字符 [dim](Ctrl+O 全显 — 当前阈值 {self.collapse_threshold} 字符)[/dim]",
+                    f"{_BAR} … 折叠了 {hidden} 字符 (Ctrl+O 全显 — 当前阈值 {self.collapse_threshold} 字符)",
                     style="dim italic",
                 ))
             else:
                 # Plain dim italic Text — NOT Markdown. Thinking traces from
                 # reasoning models often contain stray ``*`` / ``_`` that
                 # would accidentally bold-toggle if parsed.
-                items.append(Text(reasoning_text, style="dim italic"))
+                items.append(Text(f"{_BAR} // thinking", style="bold dim"))
+                for rline in reasoning_text.splitlines() or [""]:
+                    items.append(Text(f"{_BAR} {rline}", style="dim italic"))
             if content_text:
-                items.append(Rule(style="dim"))
+                items.append(Text(f"{_BAR} ────", style="dim"))
 
-        # --- Content block (Markdown) ------------------------------------
+        # --- Content block (Markdown, indented to sit under the bar) ------
+        # The bar is 1 cell + 1 space = 2 cells. We can't prefix inside
+        # Markdown (it would break code fences / lists), so we indent the
+        # whole Markdown block by 2 via Padding. This keeps the visual bar
+        # metaphor consistent with the thinking block above.
         if content_text:
             try:
-                items.append(Markdown(content_text, code_theme="monokai"))
+                md = Markdown(content_text, code_theme="monokai")
+                items.append(Padding(md, (0, 0, 0, 2)))
             except Exception:
-                items.append(Text(content_text))
+                # Fallback: plain text with bar prefix per line.
+                for cline in content_text.splitlines() or [""]:
+                    items.append(Text(f"{_BAR} {cline}"))
         elif not reasoning_text:
-            items.append(Text("…", style="dim"))
+            items.append(Text(f"{_BAR} …", style="dim"))
 
-        body = Group(*items) if len(items) > 1 else (items[0] if items else Text(""))
-        return Panel(
-            body,
-            title=f"[bold cyan]● {self.model_name}[/bold cyan]",
-            title_align="left",
-            border_style="cyan",
-            padding=(0, 1),
-        )
+        return Group(*items)
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +464,146 @@ def status_bar_text(stats: TurnStats, *, model_name: str) -> Text:
         t.append("   turn ", style="dim")
         t.append(f"{stats.last_response_ms} ms · {stats.iterations} iter")
     return t
+
+
+# ---------------------------------------------------------------------------
+# Multi-line context panel (full width, always on)
+# ---------------------------------------------------------------------------
+
+#: Width (in cells) at or below which the panel collapses to the compact form.
+_PANEL_NARROW_THRESHOLD = 70
+
+
+def _progress_bar(pct: float, width: int = 20) -> tuple[str, str]:
+    """Return ``(filled_bar, color)`` for an ASCII progress bar.
+
+    ``filled`` is a string of ``width`` cells: ``█`` for filled, ``░`` for empty.
+    ``color`` follows the green/yellow/red convention used elsewhere.
+    """
+    width = max(8, width)
+    filled = max(0, min(width, round(width * pct / 100)))
+    bar = "█" * filled + "░" * (width - filled)
+    color = "green" if pct < 60 else ("yellow" if pct < 85 else "red")
+    return bar, color
+
+
+def render_context_panel(
+    console: Console,
+    stats: TurnStats,
+    *,
+    model_name: str,
+    role_breakdown: dict[str, int] | None = None,
+    todo_summary: dict[str, int] | None = None,
+    current_todo: str | None = None,
+) -> None:
+    """Print the multi-line context info panel after each turn.
+
+    Full width, always on. Collapses to a compact two-segment form on narrow
+    terminals (< 70 cols). Falls back to the legacy single-line
+    :func:`status_bar_text` on any rendering error so the REPL never breaks.
+
+    Layout (wide, ≥ 70 cols)::
+
+        ─ context ──── <hline to console.width> ────
+          [██░░░░░░░░░░░░░░░░░░] 12%  12.3k / 1.0M  剩余 987.7k
+          前缀 3.1k · 推理 2.1k · 工具 4.8k · 对话 2.3k
+          计划 ▸ 2/5  进行中:优化气泡宽度   耗时 3420ms · 1 轮
+    """
+    try:
+        width = console.width
+        compact = width < _PANEL_NARROW_THRESHOLD
+        pct = stats.used_pct
+
+        # --- line 1: title separator across the full width -----------------
+        title = " ctx " if compact else " context "
+        title_cell_w = len(title)  # ASCII-only title, cell count == char count
+        remaining = max(0, width - title_cell_w)
+        # Split the dashes so the title sits roughly 1/4 from the left edge,
+        # matching the spec mockup ("─ context ───────…").
+        left_dash = min(remaining, 2)
+        right_dash = remaining - left_dash
+        console.print(
+            Text("─" * left_dash + title + "─" * right_dash, style="dim")
+        )
+
+        # --- line 2: progress bar + totals ---------------------------------
+        bar_cells = 12 if compact else 20
+        bar, color = _progress_bar(pct, width=bar_cells)
+        line2 = Text(no_wrap=True, overflow="ellipsis")
+        line2.append("[", style="dim")
+        line2.append(bar, style=color)
+        line2.append("] ", style="dim")
+        line2.append(f"{pct:.0f}% ", style=color)
+        line2.append(
+            f"{_fmt_tokens(stats.used_tokens)}/{_fmt_tokens(stats.context_window)}",
+        )
+        if not compact:
+            line2.append(f"  剩余 {_fmt_tokens(stats.free_tokens)}", style="dim")
+        console.print(line2)
+
+        # --- line 3: role breakdown ----------------------------------------
+        rb = role_breakdown or {"prefix": 0, "reasoning": 0, "tool": 0, "conversation": 0}
+        line3 = Text(no_wrap=True, overflow="ellipsis")
+        if compact:
+            line3.append(
+                f"前缀{_fmt_tokens(rb.get('prefix', 0))} "
+                f"推理{_fmt_tokens(rb.get('reasoning', 0))} "
+                f"工具{_fmt_tokens(rb.get('tool', 0))} "
+                f"对话{_fmt_tokens(rb.get('conversation', 0))}",
+                style="dim",
+            )
+        else:
+            line3.append("前缀 ", style="dim")
+            line3.append(_fmt_tokens(rb.get("prefix", 0)))
+            line3.append(" · 推理 ", style="dim")
+            line3.append(_fmt_tokens(rb.get("reasoning", 0)))
+            line3.append(" · 工具 ", style="dim")
+            line3.append(_fmt_tokens(rb.get("tool", 0)))
+            line3.append(" · 对话 ", style="dim")
+            line3.append(_fmt_tokens(rb.get("conversation", 0)))
+        console.print(line3)
+
+        # --- line 4 (optional): todo progress + timing ---------------------
+        # Spacing convention: Chinese label + space + value, sections joined
+        # by " · ". This keeps CJK/ASCII mixing visually balanced.
+        has_todo = bool(todo_summary and todo_summary.get("total", 0) > 0)
+        if has_todo or stats.last_response_ms:
+            line4 = Text(no_wrap=True, overflow="ellipsis")
+            sections: list[Text] = []
+            if has_todo:
+                done = todo_summary.get("done", 0)  # type: ignore[union-attr]
+                total = todo_summary.get("total", 0)  # type: ignore[union-attr]
+                in_prog = todo_summary.get("in_progress", 0)  # type: ignore[union-attr]
+                todo_txt = Text()
+                todo_txt.append("计划 ", style="dim")
+                todo_txt.append(f"{done}/{total}", style="bold cyan")
+                if current_todo:
+                    label = current_todo
+                    if len(label) > 20:
+                        label = label[:20] + "…"
+                    todo_txt.append("  ▸ ", style="cyan")
+                    todo_txt.append(label, style="cyan")
+                elif in_prog:
+                    todo_txt.append(f"  ({in_prog} 进行中)", style="dim cyan")
+                sections.append(todo_txt)
+            if stats.last_response_ms:
+                time_txt = Text()
+                time_txt.append(f"{stats.last_response_ms}ms", style="dim")
+                if not compact:
+                    time_txt.append(f" · {stats.iterations} 轮", style="dim")
+                sections.append(time_txt)
+            # Join sections with " · " separator.
+            for i, sec in enumerate(sections):
+                if i > 0:
+                    line4.append(" · ", style="dim")
+                line4.append_text(sec)
+            console.print(line4)
+    except Exception:
+        # Fallback: never let the info panel break the REPL.
+        try:
+            console.print(status_bar_text(stats, model_name=model_name))
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -607,5 +769,6 @@ __all__ = [
     "render_tool_bubble",
     "render_status_bar",
     "status_bar_text",
+    "render_context_panel",
     "render_reasoning_meter",
 ]

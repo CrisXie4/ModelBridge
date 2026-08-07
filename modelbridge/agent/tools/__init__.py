@@ -17,12 +17,14 @@ from .registry import (
     build_default_registry,
     parse_tool_calls,
 )
+from .todo_tool import TodoTool
 
 __all__ = [
+    "TodoTool",
     "Tool",
     "ToolCall",
-    "ToolResult",
     "ToolRegistry",
+    "ToolResult",
     "build_default_registry",
     "parse_tool_calls",
 ]

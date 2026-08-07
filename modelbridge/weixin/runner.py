@@ -295,6 +295,14 @@ class WeixinGateway:
         except Exception as e:
             self._log.warning("spawn_subagent 工具加载失败: %s", e)
 
+        # 联网搜索（已登录才注册 web_search）
+        try:
+            from ..search.wiring import maybe_register_web_search
+
+            maybe_register_web_search(registry)
+        except Exception as e:
+            self._log.warning("web_search 工具加载失败: %s", e)
+
         # MCP — 一次性连接，挂工具进 registry
         try:
             from ..mcp.manager import MCPManager
