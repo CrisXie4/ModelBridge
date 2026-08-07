@@ -112,7 +112,6 @@ from .agent.ui import (
     render_reasoning_meter,
     render_tool_bubble,
     render_user_bubble,
-    status_bar_text,
 )
 from .utils import (
     get_app_dir,

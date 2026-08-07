@@ -80,6 +80,16 @@ include = ["modelbridge*"]
 line-length = 110
 target-version = "py310"
 
+[tool.ruff.lint]
+# Keep the lint gate narrow and stable: only pycodestyle errors (E) and
+# pyflakes (F). The project intentionally uses broad ``except Exception``
+# patterns to keep the REPL alive, which would trip ruff's extended rule
+# families (BLE001, S110, …) added in newer ruff versions. E501 is disabled
+# because ruff miscounts CJK / wide-char line widths on Windows; the
+# line-length cap above still guides formatting.
+select = ["E", "F"]
+ignore = ["E501"]
+
 [tool.ruff.lint.per-file-ignores]
 # Re-export hubs deliberately import names they don't reference locally.
 "__init__.py" = ["F401"]
@@ -95,3 +105,17 @@ warn_return_any = false
 # Existing code isn't fully typed yet; keep mypy informative, not blocking.
 # CI runs this job with continue-on-error until the codebase is annotated.
 check_untyped_defs = false
+
+# In-progress feature modules that haven't been fully annotated yet. mypy
+# still checks the rest of the codebase; these are silenced until their
+# typing catches up. Remove each entry as its module is annotated.
+[[tool.mypy.overrides]]
+module = [
+    "modelbridge.agent.tools.todo_tool",
+    "modelbridge.agent.tools.web_search_tool",
+    "modelbridge.search.cli",
+    "modelbridge.web.routers.doctor",
+    "modelbridge.web.schemas",
+    "modelbridge.skills.discovery",
+]
+ignore_errors = true

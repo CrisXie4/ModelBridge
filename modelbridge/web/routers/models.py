@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from ...config import find_model, load_models_file, remove_model, upsert_model
-from ...context.windows import DEFAULT_CONTEXT_WINDOWS, context_window_for
+from ...context.windows import context_window_for
 from ...cost.estimator import DEFAULT_PRICING
 from ...models import Capabilities, ModelEntry, ModelLevel, ProviderType, TransportType
 from ...provider_profiles import PROFILES, get_profile
