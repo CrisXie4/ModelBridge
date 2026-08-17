@@ -1,6 +1,6 @@
 """R3b CLI IA tests:
   1. project rules init — canonical AGENT.md generator; project init removed.
-  2. doctor route / route test — removed in the v1.3 IA trim (test-only).
+  2. doctor route / route test — removed in the v1.2.5 IA trim (test-only).
   3. edit --undo — rollback without diff generation.
 
 CliRunner in this Typer version has NO ``mix_stderr`` kwarg — use CliRunner() plain.
@@ -105,7 +105,7 @@ def test_project_rules_lists_init_subcommand():
 
 
 # ---------------------------------------------------------------------------
-# Part 2: doctor route / route test — removed in v1.3 IA trim
+# Part 2: doctor route / route test — removed in v1.2.5 IA trim
 # (test-only commands; use `mbridge route "prompt"` to inspect one prompt)
 # ---------------------------------------------------------------------------
 
@@ -113,7 +113,7 @@ def test_doctor_route_is_gone():
     """`doctor route` was a test-suite runner; it must now be unknown."""
     r = runner.invoke(app, ["doctor", "route", "--help"])
     assert r.exit_code == 2, (
-        f"`mbridge doctor route` should be unknown (exit_code=2) after v1.3 trim, "
+        f"`mbridge doctor route` should be unknown (exit_code=2) after v1.2.5 trim, "
         f"got exit_code={r.exit_code}.\nOutput:\n{r.output}"
     )
 

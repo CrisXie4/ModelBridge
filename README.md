@@ -62,7 +62,7 @@ mbridge --version / -V             显示版本号 (任意位置)
 mbridge update [--yes]             检查并下载新版本
 ```
 
-> 已物理删除的别名（`No such command`）：`chat`（→ `ask`）、`cost estimate`（→ `usage cost`）、`cache stats/reset/clean`（→ `usage cache ...`）、`profile add/list/use/show/remove`（→ `config profile ...`）、`model test`（→ `doctor model`）、`model add`（→ `model init`）、`bridge control`（→ `bridge on/off/status`）、`project init`（→ `project rules init`）、`mcp serve`（→ `python -m modelbridge.mcp.server`）、`doctor route` / `route test`（路由验证套件，已随 v1.3 精简移除）、`weixin test`（→ `weixin status`）、`mcp ping`（→ `mcp list`）。  
+> 已物理删除的别名（`No such command`）：`chat`（→ `ask`）、`cost estimate`（→ `usage cost`）、`cache stats/reset/clean`（→ `usage cache ...`）、`profile add/list/use/show/remove`（→ `config profile ...`）、`model test`（→ `doctor model`）、`model add`（→ `model init`）、`bridge control`（→ `bridge on/off/status`）、`project init`（→ `project rules init`）、`mcp serve`（→ `python -m modelbridge.mcp.server`）、`doctor route` / `route test`（路由验证套件，已随 v1.2.5 精简移除）、`weixin test`（→ `weixin status`）、`mcp ping`（→ `mcp list`）。  
 > **预算功能（`mbridge usage budget`）已在 2026-07 移除。**
 
 > **版本与自动更新**：REPL 启动时会显示当前版本，并在每天检查一次 GitHub
