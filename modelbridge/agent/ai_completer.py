@@ -31,6 +31,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from threading import Lock
+from typing import Any
 
 from prompt_toolkit.auto_suggest import AutoSuggest, Suggestion
 from prompt_toolkit.buffer import Buffer
@@ -87,7 +88,7 @@ class AIAutoSuggest(AutoSuggest):
         history_provider: Callable[[], list[ChatMessage]],
         enabled_provider: Callable[[], bool],
         debounce_ms: int = 450,
-        chat_fn: Callable[..., object] | None = None,
+        chat_fn: Callable[..., tuple[Any, Any]] | None = None,
     ) -> None:
         self._model_name_provider = model_name_provider
         self._history_provider = history_provider

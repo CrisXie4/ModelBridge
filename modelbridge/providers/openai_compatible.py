@@ -8,7 +8,7 @@ provides the fallback adapter when no provider-specific class is registered.
 
 from __future__ import annotations
 
-from ..models import ModelEntry, ProviderType
+from ..models import ProviderType
 from .base import HTTPProvider
 
 
