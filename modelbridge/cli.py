@@ -835,8 +835,8 @@ def _run_repl(
                 "c-i",
                 filter=Condition(
                     lambda: (
-                        get_app().current_buffer.suggestion is not None
-                        and len(get_app().current_buffer.suggestion.text) > 0
+                        (sug := get_app().current_buffer.suggestion) is not None
+                        and len(sug.text) > 0
                         and get_app().current_buffer.document.is_cursor_at_the_end
                         and get_app().current_buffer.complete_state is None
                     )
