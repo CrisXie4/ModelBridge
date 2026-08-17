@@ -32,10 +32,12 @@ class ApprovalFn(Protocol):
         tool: str,
         summary: str,
         detail: str = "",
+        reason: str = "",
         save_pattern: str | None = None,
         auto: bool = False,
     ) -> ApprovalDecision: ...
-    """``save_pattern`` persists an "always" decision. ``auto`` enables LLM safety judgement."""
+    """``reason`` is the LLM's justification for the action (shown to the user).
+    ``save_pattern`` persists an "always" decision. ``auto`` enables LLM safety judgement."""
 
 
 class BrowserBridge(Protocol):
@@ -49,13 +51,13 @@ class BrowserBridge(Protocol):
     def call(self, name: str, args: dict, *, timeout: float | None = None) -> dict: ...
 
 
-def auto_yes(*, tool: str, summary: str, detail: str = "",
+def auto_yes(*, tool: str, summary: str, detail: str = "", reason: str = "",
               save_pattern: str | None = None, auto: bool = False) -> ApprovalDecision:
     """Approval callback that says yes to everything (`--yes`)."""
     return ApprovalDecision.YES
 
 
-def auto_no(*, tool: str, summary: str, detail: str = "",
+def auto_no(*, tool: str, summary: str, detail: str = "", reason: str = "",
             save_pattern: str | None = None, auto: bool = False) -> ApprovalDecision:
     return ApprovalDecision.NO
 
@@ -86,12 +88,16 @@ class AgentContext:
         tool: str,
         summary: str,
         detail: str = "",
+        reason: str = "",
         group: str | None = None,
         allow_always: bool = True,
         pattern_key: str | None = None,
         auto: bool = False,
     ) -> bool:
         """Run the approval callback; return True if the action may proceed.
+
+        ``reason`` is the LLM's justification ("why I'm clicking this") — shown
+        on the approval card and fed to the LLM safety judge.
 
         ``group`` lets several related tools share one "always" decision: pass
         the same group (e.g. ``"browser_write"``) on ``click`` / ``fill`` /
@@ -115,7 +121,7 @@ class AgentContext:
         # /auto mode forces auto-judge on for every confirmation
         effective_auto = auto or self._auto_mode
         decision = self.approve(
-            tool=tool, summary=summary, detail=detail,
+            tool=tool, summary=summary, detail=detail, reason=reason,
             save_pattern=pattern_key, auto=effective_auto,
         )
         if decision == ApprovalDecision.ALWAYS:

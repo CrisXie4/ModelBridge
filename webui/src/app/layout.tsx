@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import "@annondeveloper/ui-kit/css/theme.css";
-import "@annondeveloper/ui-kit/css/all.css";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 import { Sidebar } from "@/components/Sidebar";
 
@@ -15,7 +15,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="zh-CN">
+    <html lang="zh-CN" className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <body>
         <div className="app-shell">
           <Sidebar />

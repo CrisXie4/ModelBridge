@@ -104,6 +104,13 @@ def test_prompts_get(client, home):
 
 
 def test_cache_stats(client, home):
+    from modelbridge.cache import record_hit
+
+    record_hit(saved_tokens=10, saved_cost=0.001, model="ds-flash")
     r = client.get("/api/usage/cache")
     assert r.status_code == 200
-    assert "hits" in r.json()
+    body = r.json()
+    assert "hits" in body
+    # Per-model cache-domain table (each provider+model is its own domain).
+    assert body["per_model"]["ds-flash"]["hits"] == 1
+    assert body["per_model"]["ds-flash"]["hit_rate"] == 1.0

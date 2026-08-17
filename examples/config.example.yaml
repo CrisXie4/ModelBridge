@@ -4,7 +4,7 @@
 # 你可以照着这里的字段把 routing / security / cache 配满。
 
 # 默认使用的模型 (来自 models.yaml 中的 name)
-default_model: deepseek-chat
+default_model: deepseek-flash
 
 # 多模型路由：根据任务复杂度 / 类型分配不同等级
 # v0.1 仅保存配置，未生效；v0.3 开始正式启用。
@@ -12,10 +12,10 @@ routing:
   mode: balanced            # balanced | cheap-first | quality-first | local-first
   levels:
     tiny: local-qwen
-    cheap: deepseek-chat
+    cheap: deepseek-flash
     coder: qwen-coder
     agent: minimax-agent
-    expert: kimi-k2
+    expert: kimi-k3
 
 # 安全：限制 agent 能访问的目录 / 阻断敏感文件
 security:
@@ -45,25 +45,25 @@ executor:
 # ---------------------------------------------------------------------------
 #
 # models:
-#   - name: deepseek-chat
+#   - name: deepseek-flash
 #     provider: deepseek
 #     type: openai-compatible
 #     base_url: https://api.deepseek.com
 #     api_key_env: DEEPSEEK_API_KEY
 #     api_key: ""
-#     model: deepseek-chat
+#     model: deepseek-v4-flash
 #     level: cheap
 #     capabilities:
 #       tools: true
 #       json: true
 #       vision: false
-#       reasoning: false
-#       reasoning_content_back: false
+#       reasoning: true            # V4 默认思考，返回 reasoning_content
+#       reasoning_content_back: true  # 带 tool_calls 的历史轮必须回传
 #       cache: true
 #       local: false
 #     extra:
 #       temperature: 0.3
-#       max_tokens: 4096
+#       max_tokens: 8192
 #
 #   - name: qwen-coder
 #     provider: qwen
@@ -88,30 +88,30 @@ executor:
 #       extra_body:
 #         enable_thinking: false
 #
-#   - name: kimi-k2
+#   - name: kimi-k3
 #     provider: kimi
 #     type: openai-compatible
-#     base_url: https://api.moonshot.cn/v1
+#     base_url: https://api.moonshot.ai/v1
 #     api_key_env: MOONSHOT_API_KEY
 #     api_key: ""
-#     model: kimi-k2
+#     model: kimi-k3
 #     level: expert
 #     capabilities:
 #       tools: true
 #       json: true
 #       vision: false
-#       reasoning: true
+#       reasoning: true            # K3 默认 reasoning
 #       reasoning_content_back: true
 #       cache: true
 #       local: false
 #
-#   - name: mimo-v2
+#   - name: mimo-v2.5
 #     provider: mimo
 #     type: openai-compatible
-#     base_url: https://api.platform.xiaomimimo.com/v1
+#     base_url: https://api.xiaomimimo.com
 #     api_key_env: MIMO_API_KEY
 #     api_key: ""
-#     model: mimo-v2
+#     model: mimo-v2.5
 #     level: agent
 #     capabilities:
 #       tools: true
@@ -120,6 +120,23 @@ executor:
 #       reasoning: true
 #       reasoning_content_back: true   # MiMo: tool_calls 必须回传 reasoning_content
 #       cache: false
+#       local: false
+#
+#   - name: doubao
+#     provider: doubao               # 字节火山方舟 (豆包)
+#     type: openai-compatible
+#     base_url: https://ark.cn-beijing.volces.com/api/v3
+#     api_key_env: ARK_API_KEY
+#     api_key: ""
+#     model: doubao-seed-1.8          # 也可以填推理接入点 ep-xxxx
+#     level: agent
+#     capabilities:
+#       tools: true
+#       json: true
+#       vision: false
+#       reasoning: true               # seed 系列默认深度思考
+#       reasoning_content_back: false
+#       cache: true
 #       local: false
 #
 #   - name: local-qwen

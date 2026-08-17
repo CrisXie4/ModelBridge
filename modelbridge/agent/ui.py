@@ -3,12 +3,8 @@
 * :func:`render_user_bubble`     — user input in a right-aligned panel.
 * :func:`render_tool_bubble`     — tool call/result on the left.
 * :func:`status_bar_text`        — build the status-line as a Text object.
-* :func:`render_status_bar`      — print the status line normally.
 * :class:`AssistantStream`       — context manager that prints a left
   panel and refreshes it live as content/reasoning deltas arrive.
-* :class:`StickyFooter`          — context manager that pins one
-  rich-rendered line to the **bottom of the terminal** via the
-  ANSI scroll region (DECSTBM). Normal output scrolls above it.
 
 Everything here is rich-only — no I/O or model calls. Easy to unit-test
 and easy to swap for a future web UI.
@@ -16,9 +12,7 @@ and easy to swap for a future web UI.
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
-from io import StringIO
 from typing import Iterable
 
 from rich.align import Align
@@ -435,16 +429,11 @@ def _fmt_tokens(n: int) -> str:
     return str(n)
 
 
-def render_status_bar(console: Console, stats: TurnStats, *, model_name: str) -> None:
-    """Single-line status footer printed after each assistant turn."""
-    console.print(status_bar_text(stats, model_name=model_name))
-
-
 def status_bar_text(stats: TurnStats, *, model_name: str) -> Text:
     """Build the status-bar single-line as a Rich :class:`Text` object.
 
-    Useful for :class:`StickyFooter`, which can't accept multi-line input
-    and needs to control width / truncation itself.
+    Single-line with width control / truncation so it can be printed
+    under streaming bubbles without breaking the layout.
     """
     pct = stats.used_pct
     bar_color = "green" if pct < 60 else ("yellow" if pct < 85 else "red")
@@ -606,143 +595,6 @@ def render_context_panel(
             pass
 
 
-# ---------------------------------------------------------------------------
-# Sticky bottom footer (DECSTBM scroll region)
-# ---------------------------------------------------------------------------
-
-# Cursor / region escapes. We use the older DECSC / DECRC (ESC 7 / ESC 8)
-# pair because the CSI save/restore (CSI s / CSI u) is not implemented by
-# every terminal. Windows Terminal handles both fine.
-_ESC_SAVE = "\x1b7"
-_ESC_RESTORE = "\x1b8"
-_ESC_CLEAR_LINE = "\x1b[2K"
-
-
-def _set_scroll_region(top: int, bottom: int) -> str:
-    return f"\x1b[{top};{bottom}r"
-
-
-def _reset_scroll_region() -> str:
-    return "\x1b[r"
-
-
-def _move_cursor(row: int, col: int = 1) -> str:
-    return f"\x1b[{row};{col}H"
-
-
-class StickyFooter:
-    """Pin a single Rich-rendered line to the bottom of the terminal.
-
-    Implementation: set the terminal's DECSTBM scroll region to rows
-    ``1..H-1`` while we're active, then write the footer line to row ``H``
-    using save/restore cursor so the main scroll region's content stays
-    untouched.
-
-    Falls back to a no-op (regular ``console.print`` on each update) when:
-
-    * stdout is not a TTY (e.g. piped to ``head``), OR
-    * the terminal is too short to spare a row, OR
-    * writing the escape sequence fails.
-
-    Usage::
-
-        with StickyFooter(console) as footer:
-            footer.update(some_text)
-            console.print("normal output scrolls above")
-            footer.update(other_text)
-    """
-
-    def __init__(self, console: Console) -> None:
-        self.console = console
-        self._active = False
-        self._height = 0
-        self._width = 0
-
-    # ------------------------------------------------------------------
-
-    def __enter__(self) -> "StickyFooter":
-        if not self._supports_tty():
-            return self
-        self._height = self.console.size.height
-        self._width = self.console.size.width
-        if self._height < 4:
-            return self
-        try:
-            sys.stdout.write(_set_scroll_region(1, self._height - 1))
-            # Place cursor on the last row of the scroll region so the
-            # next print starts there instead of jumping back to top.
-            sys.stdout.write(_move_cursor(self._height - 1, 1))
-            sys.stdout.flush()
-        except (OSError, ValueError):
-            return self
-        self._active = True
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        if not self._active:
-            return
-        try:
-            sys.stdout.write(
-                _ESC_SAVE
-                + _move_cursor(self._height, 1)
-                + _ESC_CLEAR_LINE
-                + _ESC_RESTORE
-                + _reset_scroll_region()
-            )
-            sys.stdout.flush()
-        except (OSError, ValueError):
-            pass
-        self._active = False
-
-    # ------------------------------------------------------------------
-
-    def update(self, renderable) -> None:
-        """Render ``renderable`` (str / Text / etc.) onto the bottom row."""
-        if not self._active:
-            # Fallback path — print as a regular line.
-            self.console.print(renderable)
-            return
-
-        # Render the line to ANSI in a side buffer at the current width,
-        # truncated to a single line. This avoids the line wrapping and
-        # pushing the scroll region content up by mistake.
-        buf = StringIO()
-        tmp = Console(
-            file=buf,
-            color_system=self.console.color_system or "truecolor",  # type: ignore[arg-type]
-            width=max(20, self._width),
-            force_terminal=True,
-            soft_wrap=False,
-            highlight=False,
-            legacy_windows=False,
-        )
-        tmp.print(renderable, end="", crop=True, no_wrap=True, overflow="ellipsis")
-        line = buf.getvalue().rstrip("\r\n")
-
-        try:
-            sys.stdout.write(
-                _ESC_SAVE
-                + _move_cursor(self._height, 1)
-                + _ESC_CLEAR_LINE
-                + line
-                + _ESC_RESTORE
-            )
-            sys.stdout.flush()
-        except (OSError, ValueError):
-            # Drop into fallback for the rest of the session.
-            self._active = False
-            self.console.print(renderable)
-
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _supports_tty() -> bool:
-        try:
-            return bool(sys.stdout.isatty())
-        except (AttributeError, OSError):
-            return False
-
-
 def render_reasoning_meter(
     console: Console,
     *,
@@ -762,12 +614,10 @@ def render_reasoning_meter(
 
 __all__ = [
     "AssistantStream",
-    "StickyFooter",
     "TurnStats",
     "compute_turn_stats",
     "render_user_bubble",
     "render_tool_bubble",
-    "render_status_bar",
     "status_bar_text",
     "render_context_panel",
     "render_reasoning_meter",

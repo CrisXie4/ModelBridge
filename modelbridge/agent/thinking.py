@@ -76,6 +76,7 @@ class ThinkingProfile:
 # bug — it tells the REPL "this model doesn't think".
 MODEL_THINKING_PROFILES: dict[str, ThinkingProfile] = {
     # ---- Kimi / Moonshot — thinking is a core feature ----
+    "kimi-k3":                ThinkingProfile(min_tokens=512, max_tokens=32768, default_level=7),
     "kimi-k2-thinking":       ThinkingProfile(min_tokens=512, max_tokens=32768, default_level=7),
     "kimi-k2-thinking-turbo": ThinkingProfile(min_tokens=512, max_tokens=32768, default_level=9),
     "kimi-k2.7-code":         ThinkingProfile(min_tokens=512, max_tokens=32768, default_level=7),
@@ -85,11 +86,18 @@ MODEL_THINKING_PROFILES: dict[str, ThinkingProfile] = {
     "qwen3-max":              ThinkingProfile(min_tokens=512, max_tokens=32768, default_level=6),
     "qwen3.6-plus":           ThinkingProfile(min_tokens=512, max_tokens=32768, default_level=6),
     "qwen-max-latest":        ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
-    # ---- DeepSeek — V3/V4 family has reasoning_content ----
-    "deepseek-v3.1":          ThinkingProfile(min_tokens=512, max_tokens=8192,  default_level=4),
-    "deepseek-v4-pro":        ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
+    # ---- DeepSeek — V4 family: thinking + reasoning_content; the wire only
+    # accepts reasoning_effort high/max (level 10 / budget=max → 'max',
+    # everything else → 'high') ----
+    "deepseek-v4":          ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
+    "deepseek-v4-pro":      ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
+    "deepseek-v4-flash":    ThinkingProfile(min_tokens=512, max_tokens=8192,  default_level=4),
+    # ---- 字节豆包 — seed 系列默认深度思考 (thinking 开关) ----
+    "doubao-seed":          ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
+    # ---- 百度文心 — x1 推理系列 ----
+    "ernie-x1":             ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
     # ---- MiMo / 小米 — thinking + tool_calls ----
-    "mimo-v2":                ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
+    "mimo-v2.5":              ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
     "mimo-v2.5-pro":          ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=6),
     # ---- GLM / 智谱 — 5.x series supports thinking ----
     "glm-5.2":                ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),

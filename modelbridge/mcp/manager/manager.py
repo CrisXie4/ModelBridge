@@ -89,11 +89,86 @@ class MCPManager:
 
     # ------------------------------------------------------------------
     def connect_all(self) -> Catalog:
-        """Connect every enabled server, isolating per-server failures."""
-        for cfg in self.settings.enabled_servers():
-            self._connect_one(cfg)
+        """Connect every enabled server, isolating per-server failures.
+
+        The connect/handshake phase runs in parallel (each server's
+        subprocess spawn or HTTP round-trip is independent; a slow server
+        no longer delays every later one at REPL startup). Catalog
+        registration stays serial — it mutates shared state.
+        """
+        configs = list(self.settings.enabled_servers())
+        if not configs:
+            log_lifecycle("*", "connect_all", str(self.catalog.counts()))
+            return self.catalog
+
+        if len(configs) == 1:
+            self._connect_one(configs[0])
+            log_lifecycle("*", "connect_all", str(self.catalog.counts()))
+            return self.catalog
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        results: dict[str, tuple[MCPClientSession | None, MCPError | None]] = {}
+        with ThreadPoolExecutor(
+            max_workers=min(8, len(configs)),
+            thread_name_prefix="mbridge-mcp-connect",
+        ) as pool:
+            futures = {
+                cfg.server_id: pool.submit(self._connect_session, cfg)
+                for cfg in configs
+            }
+            for sid, fut in futures.items():
+                try:
+                    results[sid] = fut.result()
+                except BaseException as e:  # noqa: BLE001 - isolate per server
+                    results[sid] = (
+                        None,
+                        MCPTransportError(f"unexpected connect failure: {e}"),
+                    )
+
+        for cfg in configs:
+            session, err = results[cfg.server_id]
+            self.policies[cfg.server_id] = cfg.tool_policy
+            if err is not None:
+                self.connect_errors[cfg.server_id] = err
+                log_lifecycle(cfg.server_id, "connect_failed", err.message)
+                if session is not None:
+                    try:
+                        session.close()
+                    except Exception:
+                        pass
+                continue
+            assert session is not None
+            self.sessions[cfg.server_id] = session
+            try:
+                self._rebuild_server_catalog(session)
+            except MCPError as e:
+                self.connect_errors[cfg.server_id] = e
+                log_lifecycle(cfg.server_id, "connect_failed", e.message)
+
         log_lifecycle("*", "connect_all", str(self.catalog.counts()))
         return self.catalog
+
+    def _connect_session(
+        self, cfg: MCPServerConfig
+    ) -> tuple[MCPClientSession | None, MCPError | None]:
+        """Connect ONE server in isolation (thread worker — touches no
+        shared manager state; registration happens back on the caller)."""
+        handler = (
+            self.sampling_service.handler_for(cfg.server_id)
+            if self.sampling_service is not None
+            else None
+        )
+        session = MCPClientSession(cfg, verbose=self.verbose, sampling_handler=handler)
+        try:
+            session.connect()
+            return session, None
+        except MCPError as e:
+            try:
+                session.close()
+            except Exception:
+                pass
+            return None, e
 
     def _connect_one(self, cfg: MCPServerConfig) -> None:
         self.policies[cfg.server_id] = cfg.tool_policy

@@ -4,7 +4,7 @@ The old ``classify_level`` / :class:`RoutingDecision` API is preserved for
 backwards compatibility (existing router / CLI code keeps working);
 the richer :func:`classify_task` returns a :class:`TaskProfile` with
 ``task_type`` / ``complexity`` / ``risk_level`` / ``recommended_level``
-/ ``reasons`` for ``mbridge route`` and ``mbridge route test``.
+/ ``reasons`` for ``mbridge route``.
 
 Rules are deliberately conservative — we'd rather route up than down
 (silently downgrading to a tiny model can produce garbage), so ties

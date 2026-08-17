@@ -30,6 +30,9 @@ from pathlib import Path
 from ..schemas import ChatMessage
 from .defaults import DEFAULT_SYSTEM_MD
 from .rules_loader import (
+    PROJECT_RULE_FILES,
+    NESTED_DIR_NAME,
+    NESTED_RULE_FILES,
     discover_rule_files,
     load_system_prompt,
     merge_rules,
@@ -112,6 +115,54 @@ class PromptBuildResult:
             head = body.strip().splitlines()[0][:80] if body.strip() else ""
             rows.append((name, len(body), head))
         return rows
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _has_any_user_rules(project_path: Path | None) -> bool:
+    """Return True if any non-empty user rule file exists.
+
+    Checks both project-level rule files (AGENT.md / CLAUDE.md / .cursorrules
+    / .windsurfrules / .modelbridge/{rules,prompt}.md) and the user-global
+    ``~/.modelbridge/rules.md``. A file that exists but is empty/whitespace
+    does NOT count — the point is to let *real* user content take over from
+    the built-in default system prompt.
+
+    This is the "user has rules" predicate used by the core_system section
+    to decide whether to suppress the built-in DEFAULT_SYSTEM_MD.
+    """
+    # Project-level (root + .modelbridge/).
+    if project_path is not None:
+        proj = Path(project_path).expanduser().resolve()
+        if proj.is_dir():
+            for name in PROJECT_RULE_FILES:
+                p = proj / name
+                if p.is_file() and p.read_text(encoding="utf-8", errors="replace").strip():
+                    return True
+            nested = proj / NESTED_DIR_NAME
+            if nested.is_dir():
+                for name in NESTED_RULE_FILES:
+                    p = nested / name
+                    if p.is_file() and p.read_text(encoding="utf-8", errors="replace").strip():
+                        return True
+    # User-global rules.md.
+    found = [f for f in discover_rule_files(None) if f.scope == "user_global"]
+    for f in found:
+        try:
+            if f.path.read_text(encoding="utf-8", errors="replace").strip():
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _is_default_system_md(text: str | None) -> bool:
+    """True if ``text`` is (whitespace-equal to) the shipped default."""
+    if not text:
+        return False
+    return text.strip() == DEFAULT_SYSTEM_MD.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -216,19 +267,36 @@ class PromptBuilder:
             warnings.append(f"history 中过滤掉 {n} 条 system 消息")
 
         # 1) core_system
+        #
+        # 用户规则覆盖规则:
+        #   ① ~/.modelbridge/system.md 存在且内容 ≠ DEFAULT_SYSTEM_MD → 用用户的
+        #   ② 否则若存在任意非空规则(rules.md / AGENT.md / CLAUDE.md / ...) → core_system 置空,
+        #      让用户规则完全接管(不注入内置默认, 节省 token 且语义更清晰)
+        #   ③ 否则(全新安装、啥都没有) → 回退 DEFAULT_SYSTEM_MD
         if self.use_system_prompt:
             if self.system_prompt_override is not None:
                 text = self.system_prompt_override
                 sources["core_system"].append("<caller override>")
             else:
                 loaded = load_system_prompt()
-                if loaded is None:
+                if loaded is not None and not _is_default_system_md(loaded):
+                    # 用户真正改过 system.md — 用用户的。
+                    text = loaded
+                    sources["core_system"].append("~/.modelbridge/system.md (user)")
+                elif _has_any_user_rules(self.project_path):
+                    # 用户写了规则文件 — 让规则完全接管, 不注入内置默认。
+                    text = ""
+                    sources["core_system"].append(
+                        "<suppressed: user rules take over>"
+                    )
+                elif loaded is not None:
+                    # system.md 存在但等于默认(未改过) — 按默认走。
+                    text = loaded
+                    sources["core_system"].append("~/.modelbridge/system.md (default)")
+                else:
                     text = DEFAULT_SYSTEM_MD
                     sources["core_system"].append("<built-in default>")
-                else:
-                    text = loaded
-                    sources["core_system"].append("~/.modelbridge/system.md")
-            sections["core_system"] = text.strip() + "\n"
+            sections["core_system"] = (text.strip() + "\n") if text else ""
 
         # 2) global_rules
         if self.use_global_rules:

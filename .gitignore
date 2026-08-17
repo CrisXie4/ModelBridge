@@ -59,3 +59,6 @@ htmlcov/
 
 # Local scratch launcher (use `mbridge gateway` instead)
 _start_gateway.py
+
+# Mimosa security-scan artifacts
+.mimosa/

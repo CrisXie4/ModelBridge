@@ -20,12 +20,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from fnmatch import fnmatch
 from pathlib import Path
 
 from .scanner import (
     MODELBRIDGE_INTERNAL_SUBDIRS,
-    SENSITIVE_FILE_PATTERNS,
     SKIP_DIRS,
 )
 
@@ -204,7 +202,8 @@ def _is_subsequence(needle: str, hay: str) -> bool:
 
 
 def _is_sensitive(basename: str) -> bool:
-    return any(fnmatch(basename, pat) for pat in SENSITIVE_FILE_PATTERNS)
+    from .scanner import is_sensitive_name
+    return is_sensitive_name(basename)
 
 
 __all__ = ["FileEntry", "FileIndex", "MAX_ENTRIES", "DEFAULT_LIMIT"]

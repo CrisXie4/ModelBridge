@@ -49,6 +49,18 @@ def cost_estimate(req: CostRequest) -> dict:
 @router.get("/cache")
 def cache_stats() -> dict:
     stats = load_cache_stats()
+    per_model = {
+        name: {
+            "hits": int(m.get("hits", 0)),
+            "misses": int(m.get("misses", 0)),
+            "saved_tokens": int(m.get("saved_tokens", 0)),
+            "saved_cost": float(m.get("saved_cost", 0.0)),
+        }
+        for name, m in stats.per_model.items()
+    }
+    for name, m in per_model.items():
+        total = m["hits"] + m["misses"]
+        m["hit_rate"] = (m["hits"] / total) if total else 0.0
     return {
         "strategy": stats.strategy,
         "enabled": stats.enabled,
@@ -62,4 +74,7 @@ def cache_stats() -> dict:
         "prefix_observations": stats.prefix_observations,
         "prefix_drift_count": stats.prefix_drift_count,
         "prefix_stability": stats.prefix_stability,
+        # Prefix caches are per provider+model (switching models enters a
+        # fresh cache domain) — this table shows each model's own hit rate.
+        "per_model": per_model,
     }

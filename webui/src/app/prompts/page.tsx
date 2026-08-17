@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { FloppyDisk, CircleNotch, FileText, Scroll } from "@phosphor-icons/react";
 import { api, PromptFiles } from "@/lib/api";
 
 export default function PromptsPage() {
@@ -41,56 +42,67 @@ export default function PromptsPage() {
     }
   }
 
-  if (!data) return <div className="card">加载中…</div>;
+  if (!data)
+    return (
+      <div className="page">
+        <div className="card skeleton">
+          <div className="sk-line sk-lg" />
+          <div className="sk-track" />
+          <div className="sk-line sk-md" />
+        </div>
+      </div>
+    );
+
+  const lineCount = draft ? draft.split("\n").length : 0;
 
   return (
-    <div>
-      <h1 className="page-title">系统提示词</h1>
-      <p className="page-sub">
-        编辑全局 system.md / rules.md。所有项目共用，项目级规则文件可覆盖。
-      </p>
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <button
-          className={tab === "system" ? "btn" : "btn btn-secondary"}
-          onClick={() => setTab("system")}
-        >
-          system.md
-        </button>
-        <button
-          className={tab === "rules" ? "btn" : "btn btn-secondary"}
-          onClick={() => setTab("rules")}
-        >
-          rules.md
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">系统提示词</h1>
+          <p className="page-sub">
+            编辑全局 system.md / rules.md。所有项目共用，项目级规则文件可覆盖。
+          </p>
+        </div>
+        <button className="btn" onClick={save} disabled={saving}>
+          {saving ? (
+            <>
+              <CircleNotch size={14} className="spin" /> 保存中…
+            </>
+          ) : (
+            <>
+              <FloppyDisk size={14} /> 保存 {tab}.md
+            </>
+          )}
         </button>
       </div>
 
-      <div className="card" style={{ padding: 0 }}>
+      <div className="editor-card">
+        <div className="editor-chrome">
+          <div className="seg">
+            <button
+              className={tab === "system" ? "seg-item active" : "seg-item"}
+              onClick={() => setTab("system")}
+            >
+              <FileText size={13} style={{ verticalAlign: -2 }} /> system.md
+            </button>
+            <button
+              className={tab === "rules" ? "seg-item active" : "seg-item"}
+              onClick={() => setTab("rules")}
+            >
+              <Scroll size={13} style={{ verticalAlign: -2 }} /> rules.md
+            </button>
+          </div>
+          <div className="editor-meta mono">
+            {lineCount} 行 · {draft.length} 字符
+          </div>
+        </div>
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          style={{
-            minHeight: 480,
-            border: "none",
-            borderRadius: 12,
-            background: "var(--mb-panel)",
-            lineHeight: 1.7,
-            padding: 20,
-            resize: "vertical",
-          }}
-          className="mono"
+          className="editor-body mono"
+          spellCheck={false}
         />
-      </div>
-
-      <div style={{ display: "flex", gap: 12, marginTop: 16 }}>
-        <button className="btn" onClick={save} disabled={saving}>
-          {saving ? "保存中…" : `保存 ${tab}.md`}
-        </button>
-        <span
-          style={{ color: "var(--mb-muted)", fontSize: 12, alignSelf: "center" }}
-        >
-          {draft.length} 字符
-        </span>
       </div>
 
       {toast && (

@@ -295,14 +295,6 @@ class WeixinGateway:
         except Exception as e:
             self._log.warning("spawn_subagent 工具加载失败: %s", e)
 
-        # 联网搜索（已登录才注册 web_search）
-        try:
-            from ..search.wiring import maybe_register_web_search
-
-            maybe_register_web_search(registry)
-        except Exception as e:
-            self._log.warning("web_search 工具加载失败: %s", e)
-
         # MCP — 一次性连接，挂工具进 registry
         try:
             from ..mcp.manager import MCPManager
@@ -334,7 +326,7 @@ class WeixinGateway:
         """
         log = self._log
 
-        def approve(*, tool: str, summary: str, detail: str = "",
+        def approve(*, tool: str, summary: str, detail: str = "", reason: str = "",
                     save_pattern: str | None = None, auto: bool = False) -> ApprovalDecision:
             key = tool
             if key in sess._auto_approved:
@@ -352,12 +344,14 @@ class WeixinGateway:
                 if not risky:
                     log.info("[approve] AUTO (rule safe): %s | %s", tool, summary)
                     return ApprovalDecision.YES
-                ok, reason = _llm_safety_judge(tool=tool, summary=summary, detail=detail)
+                ok, judge_reason = _llm_safety_judge(
+                    tool=tool, summary=summary, detail=detail, reason=reason,
+                )
                 if ok:
-                    log.info("[approve] AUTO (llm safe): %s | %s | %s", tool, summary, reason)
+                    log.info("[approve] AUTO (llm safe): %s | %s | %s", tool, summary, judge_reason)
                     sess._auto_approved.add(key)
                     return ApprovalDecision.YES
-                log.warning("[approve] REJECT (llm unsafe): %s | %s | %s", tool, summary, reason)
+                log.warning("[approve] REJECT (llm unsafe): %s | %s | %s", tool, summary, judge_reason)
                 return ApprovalDecision.NO
             return ApprovalDecision.YES
 
@@ -750,40 +744,14 @@ def _is_risky(tool: str, summary: str) -> bool:
     return write_like
 
 
-def _llm_safety_judge(*, tool: str, summary: str, detail: str) -> tuple[bool, str]:
-    """跟 CLI 的 _auto_judge 同款逻辑：调一个轻量模型判断操作安全性。"""
-    try:
-        from ..providers import get_provider
-        from ..config import load_app_config, load_models_file
-        from ..client import find_model
-        from ..schemas import ChatMessage, ChatRequest
+def _llm_safety_judge(
+    *, tool: str, summary: str, detail: str, reason: str = "",
+) -> tuple[bool, str]:
+    """调一个轻量模型判断操作安全性。
 
-        prompt = (
-            f"判断以下操作是否安全。分析后先给出理由，再给出结论「安全」或「不安全」。\n"
-            f"工具: {tool}\n操作: {summary}\n详情: {detail[:300]}"
-        )
-        cfg = load_app_config()
-        models_file = load_models_file()
-        tiny = None
-        for m in models_file.models:
-            if getattr(m, "level", None) in ("tiny", "cheap") or "tiny" in m.name.lower():
-                tiny = m
-                break
-        if tiny is None and cfg.default_model:
-            tiny = find_model(cfg.default_model)
-        if tiny is None:
-            return False, "(未找到可用模型，保守判不安全)"
-        entry = find_model(tiny.name)
-        if entry is None:
-            return False, "(模型解析失败)"
-        provider = get_provider(entry)
-        resp = provider.chat(
-            ChatRequest(model=entry.model, messages=[ChatMessage(role="user", content=prompt)]),
-            timeout=15.0,
-        )
-        content = resp.content or ""
-        is_safe = "安全" in content and "不安全" not in content
-        reason = content.strip() if len(content) <= 200 else content.strip()[:200] + "…"
-        return is_safe, reason
-    except Exception as e:
-        return False, f"(AI 判断失败，保守判不安全: {e})"
+    Thin wrapper over the shared :func:`modelbridge.utils.llm_safety_judge`
+    (same implementation as the CLI REPL and bridge side-panel).
+    """
+    from ..utils import llm_safety_judge
+
+    return llm_safety_judge(tool=tool, summary=summary, detail=detail, reason=reason)

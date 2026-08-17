@@ -11,6 +11,13 @@ package — it has been removed in favour of the 8-section builder at
 intentionally; switch to ``from modelbridge.prompt import PromptBuilder``.
 """
 
+from .affinity import (
+    cache_switch_note,
+    derive_cache_key,
+    sanitize_cache_key,
+    session_cache_key,
+    warmup_after_model_switch,
+)
 from .manager import (
     CacheStats,
     extract_cache_tokens,
@@ -25,12 +32,17 @@ from .manager import (
 
 __all__ = [
     "CacheStats",
+    "cache_switch_note",
+    "derive_cache_key",
     "get_cache_path",
     "load_cache_stats",
+    "sanitize_cache_key",
     "save_cache_stats",
+    "session_cache_key",
     "extract_cache_tokens",
     "record_hit",
     "record_miss",
     "record_prefix_observation",
     "reset_cache_stats",
+    "warmup_after_model_switch",
 ]

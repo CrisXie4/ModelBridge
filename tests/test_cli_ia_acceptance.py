@@ -179,7 +179,6 @@ def test_v12_removed_bridge_control_on(home):
     ["config", "profile", "--help"],
     ["config", "profile", "list", "--help"],
     ["doctor", "--help"],
-    ["doctor", "route", "--help"],
     ["bridge", "--help"],
     ["bridge", "on", "--help"],
     ["project", "--help"],

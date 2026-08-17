@@ -33,7 +33,17 @@ from ..schemas import ChatMessage, text_of
 # DeepSeek (V4 era; V3 + chat/reasoner EOL'd 2026-07-24, removed)
 #   - V4 family: 1M
 # 腾讯混元
-#   - Hy3 preview: 256K
+#   - Hy3 (GA) / Hy3 preview: 256K
+# 字节豆包 (火山方舟)
+#   - doubao-seed 家族 (1.6/1.8/2.0/evolving): 256K
+# 百度文心 (千帆)
+#   - ernie-4.5-turbo-128k / speed-128k: 128K; 4.0-turbo-8k: 8K; x1: 32K
+# 讯飞星火
+#   - X2: 192K; X2-Flash / X2-Agent: 256K (星辰 MaaS)
+# 阶跃星辰
+#   - step-3: 64K; step-2-16k: 16K; step-2-mini: 32K
+# 商汤日日新
+#   - SenseNova-V5 系列: 128K
 # Qwen / 阿里云百炼
 #   - qwen3.8-max / qwen3.7-max / qwen3.7-plus: 1M (2026 旗舰/通用)
 #   - qwen-plus / qwen3-coder-*: 1M
@@ -60,7 +70,31 @@ DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
     "deepseek-v4-flash":       1_000_000,
 
     # 腾讯混元
-    "hy3-preview":               262_144,    # "Hy3 preview" 256K context
+    "hy3":                     262_144,    # GA 正式版 (2026-08)
+    "hy3-preview":             262_144,    # "Hy3 preview" 256K context
+
+    # 字节豆包 / 火山方舟 (seed 系列按家族前缀继承 256K)
+    "doubao-seed":             262_144,    # seed-1.6 / 1.8 / evolving / 2.0 家族
+    "doubao-1.5-pro-256k":     262_144,    # 上一代长上下文款
+
+    # 百度文心 / 千帆 (型号后缀即窗口大小)
+    "ernie-4.5-turbo-128k":    131_072,
+    "ernie-4.0-turbo-8k":        8_192,
+    "ernie-speed-128k":        131_072,
+    "ernie-x1-turbo-32k":       32_768,    # 推理系列
+
+    # 讯飞星火 (星辰 MaaS, X2 系列)
+    "x2":                      196_608,    # X2 192K
+    "x2-flash":                262_144,    # 256K
+    "x2-agent":                262_144,    # 256K
+
+    # 阶跃星辰 StepFun
+    "step-3":                   65_536,    # 全模态旗舰
+    "step-2-16k":               16_384,
+    "step-2-mini":              32_768,    # best-effort；以官方文档为准
+
+    # 商汤日日新 (V5 家族前缀)
+    "sensenova-v5":            131_072,
 
     # Qwen / DashScope 百炼
     "qwen3.8-max":             1_000_000,    # 2026-08 GA 旗舰; vendor sheet 1M

@@ -10,12 +10,15 @@ Storage: ``~/.modelbridge/cache.json`` ::
       "saved_tokens": 0,
       "estimated_savings": 0.0,
       "currency": "CNY",
+      "per_model": {"<model name>": {"hits": 0, "misses": 0, ...}},
       "last_updated": "2026-05-22T14:30:00"
     }
 
-v0.3 only exposes load / record / reset. v0.4 will plug ``record_hit`` /
-``record_miss`` into the request layer when prefix caching becomes
-real.
+``record_hit`` / ``record_miss`` are wired into the REPL + ask + route
+request paths (provider-reported usage), with a per-model breakdown —
+prefix caches are per provider+model, so that table is what makes model
+switches observable. Loads/saves are mtime-cached in memory; the write is
+atomic but not fsynced (it fires several times per agent turn).
 """
 
 from __future__ import annotations
@@ -56,6 +59,11 @@ class CacheStats:
     # prompt whose prefix differs from the last one we saw.
     prefix_observations: int = 0
     prefix_drift_count: int = 0
+    # Per-model hit/miss breakdown. Prefix caches are per provider+model
+    # (each model is its own cache domain — switching models never carries
+    # hits over), so this is the table that shows what a model switch
+    # costs. Keyed by ModelEntry.name.
+    per_model: dict[str, dict[str, float]] = field(default_factory=dict)
 
     @property
     def total(self) -> int:
@@ -90,6 +98,7 @@ class CacheStats:
             "last_prefix_observed_at": self.last_prefix_observed_at,
             "prefix_observations": self.prefix_observations,
             "prefix_drift_count": self.prefix_drift_count,
+            "per_model": {k: dict(v) for k, v in self.per_model.items()},
         }
 
     @classmethod
@@ -108,21 +117,53 @@ class CacheStats:
             last_prefix_observed_at=str(d.get("last_prefix_observed_at", "")),
             prefix_observations=int(d.get("prefix_observations", 0) or 0),
             prefix_drift_count=int(d.get("prefix_drift_count", 0) or 0),
+            per_model=_coerce_per_model(d.get("per_model")),
         )
 
 
-def load_cache_stats() -> CacheStats:
-    """Read stats from disk, seeding from ``config.yaml`` cache settings.
+def _coerce_per_model(raw: Any) -> dict[str, dict[str, float]]:
+    """Tolerantly parse the per-model block (old cache.json lacks it)."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, float]] = {}
+    for name, m in raw.items():
+        if not isinstance(m, dict):
+            continue
+        out[str(name)] = {
+            "hits": int(m.get("hits", 0) or 0),
+            "misses": int(m.get("misses", 0) or 0),
+            "saved_tokens": int(m.get("saved_tokens", 0) or 0),
+            "saved_cost": float(m.get("saved_cost", 0.0) or 0.0),
+        }
+    return out
 
-    If the file doesn't exist yet we still want ``mbridge cache stats``
-    to reflect what's configured in ``config.yaml`` (enabled / strategy).
+
+def load_cache_stats() -> CacheStats:
+    """Read stats, seeded from ``config.yaml`` cache settings.
+
+    Cached in memory keyed by (path, mtime, size): the record path runs
+    once per assistant iteration, and re-reading the JSON each time showed
+    up as REPL stutter. Our own saves refresh the key, so an external
+    writer (another mbridge process) is still picked up.
     """
+    global _STATS_CACHE
     path = get_cache_path()
-    if path.exists():
+    try:
+        st = path.stat()
+        key: tuple[str, int, int] | None = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+
+    if _STATS_CACHE is not None and key is not None and _STATS_CACHE[0] == key:
+        return _STATS_CACHE[1]
+
+    if key is not None and path.exists():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                return CacheStats.from_dict(data)
+                stats = CacheStats.from_dict(data)
+                _STATS_CACHE = (key, stats)
+                return stats
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -130,28 +171,59 @@ def load_cache_stats() -> CacheStats:
     return CacheStats(strategy=cfg.cache.strategy, enabled=cfg.cache.enabled)
 
 
+# In-memory cache of the last loaded/saved stats — see load_cache_stats().
+_STATS_CACHE: tuple[tuple[str, int, int], CacheStats] | None = None
+
+
 def save_cache_stats(stats: CacheStats) -> None:
+    global _STATS_CACHE
     stats.last_updated = now_iso()
     # Atomic write so an interrupted save can't truncate cache.json (which
     # load would then silently discard, losing cumulative hits/savings).
+    # sync=False: this fires on every cache hit/miss (multiple times per
+    # agent turn) and an fsync costs ~10ms on Windows — far too much for
+    # counters where losing the very last increment is acceptable.
     atomic_write_text(
         get_cache_path(),
         json.dumps(stats.to_dict(), ensure_ascii=False, indent=2),
+        sync=False,
     )
+    try:
+        st = get_cache_path().stat()
+        _STATS_CACHE = ((str(get_cache_path()), st.st_mtime_ns, st.st_size), stats)
+    except OSError:
+        _STATS_CACHE = None
 
 
-def record_hit(*, saved_tokens: int = 0, saved_cost: float = 0.0) -> CacheStats:
+def record_hit(
+    *,
+    saved_tokens: int = 0,
+    saved_cost: float = 0.0,
+    model: str | None = None,
+) -> CacheStats:
     s = load_cache_stats()
     s.hits += 1
     s.saved_tokens += max(0, saved_tokens)
     s.estimated_savings += max(0.0, saved_cost)
+    if model:
+        m = s.per_model.setdefault(
+            model, {"hits": 0, "misses": 0, "saved_tokens": 0, "saved_cost": 0.0}
+        )
+        m["hits"] += 1
+        m["saved_tokens"] += max(0, saved_tokens)
+        m["saved_cost"] += max(0.0, saved_cost)
     save_cache_stats(s)
     return s
 
 
-def record_miss() -> CacheStats:
+def record_miss(*, model: str | None = None) -> CacheStats:
     s = load_cache_stats()
     s.misses += 1
+    if model:
+        m = s.per_model.setdefault(
+            model, {"hits": 0, "misses": 0, "saved_tokens": 0, "saved_cost": 0.0}
+        )
+        m["misses"] += 1
     save_cache_stats(s)
     return s
 

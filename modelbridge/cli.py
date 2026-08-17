@@ -5,23 +5,17 @@ Primary command: ``mbridge``. Aliases: ``modelbridge``.
 Subcommands:
 
 * ``mbridge init``                      — create ``~/.modelbridge/``
-* ``mbridge model init|add``            — interactive model registration
-* ``mbridge model list``                — rich table of registered models
-* ``mbridge model test NAME``           — connectivity test (+ --verbose)
-* ``mbridge model remove NAME``         — delete an entry
+* ``mbridge model init|list|remove``    — interactive model registration / listing / deletion
 * ``mbridge ask "..."``                 — one-shot probe / pipeline use
                                           (+ --route / --auto / --mode / --fallback)
 * ``mbridge doctor``                    — environment check
 * ``mbridge doctor model NAME``         — single-model probe (+ --tools, --verbose)
 * ``mbridge doctor all``                — bulk doctor over every model
 * ``mbridge route "..."``               — show which level/model a prompt routes to (+ --mode)
-* ``mbridge route test``                — run built-in 8-prompt suite
-* ``mbridge cost estimate "..."``       — estimate per-model cost for a prompt
-* ``mbridge budget show|set``           — REMOVED in 2026-07 (was: read/set monthly + daily spend budget)
-* ``mbridge cache stats|reset|clean``   — prefix-cache statistics
-* ``mbridge profile add|list|use|show|remove`` — named bundles of default_model + routing.levels
+* ``mbridge usage cost "..."``          — estimate per-model cost for a prompt
+* ``mbridge usage cache stats``         — prefix-cache statistics
+* ``mbridge config profile add|list|use|show|remove`` — named bundles of default_model + routing.levels
 * ``mbridge config show|upgrade``       — view / re-emit ~/.modelbridge/config.yaml
-* ``mbridge version [--check]``         — print version (optionally check for updates)
 * ``mbridge update``                    — check for and download a newer release
 """
 
@@ -39,15 +33,19 @@ from rich.table import Table
 
 from . import __version__, updater
 from .cache import (
+    cache_switch_note,
+    derive_cache_key,
     extract_cache_tokens,
     load_cache_stats,
     record_hit,
     record_miss,
     record_prefix_observation,
     reset_cache_stats,
+    session_cache_key,
+    warmup_after_model_switch,
 )
 from .cli_console import console, err_console
-from .client import ChatError, chat_once
+from .client import ChatError
 from .config import (
     ConfigError,
     activate_profile,
@@ -195,7 +193,7 @@ app = typer.Typer(
 )
 model_app = typer.Typer(
     name="model",
-    help="模型管理 (init / add / list / test / remove)。",
+    help="模型管理 (init / list / remove)。",
     no_args_is_help=True,
 )
 doctor_app = typer.Typer(
@@ -232,12 +230,12 @@ usage_app.add_typer(_usage_cache_app, name="cache")
 
 prompt_app = typer.Typer(
     name="prompt",
-    help="提示词与规则文件管理 (list / show / edit / set-system / reset)。",
+    help="提示词与规则文件管理 (list / show)。",
     no_args_is_help=True,
 )
 project_app = typer.Typer(
     name="project",
-    help="项目扫描与 AGENT.md 生成 (scan / rules / rules init)。",
+    help="项目规则文件查看与生成 (rules / rules init)。",
     no_args_is_help=True,
 )
 project_rules_app = typer.Typer(
@@ -263,11 +261,6 @@ app.add_typer(skill_app, name="skill")
 # 微信 iLink Bot 通道：login/status/logout/test
 from .weixin.cli import weixin_app as _weixin_app  # noqa: E402
 app.add_typer(_weixin_app, name="weixin")
-
-# 联网搜索通道：login/status/logout/test
-from .search.cli import search_app as _search_app  # noqa: E402
-app.add_typer(_search_app, name="search")
-
 
 # ---------------------------------------------------------------------------
 # 本地管理后台：mbridge web [--host 127.0.0.1] [--port 8765]
@@ -347,7 +340,6 @@ def cmd_gateway(
         err_console.print(f"[red]未知通道 '{channel}'：可选 weixin / bridge[/red]")
         raise typer.Exit(code=2)
 
-    from pathlib import Path
     from .weixin.runner import WeixinGateway
 
     if approval not in ("auto", "yes", "reject-unsafe"):
@@ -482,6 +474,8 @@ def _run_repl(
             names = [m.name for m in mf.models]
             hint = f" 可用: {', '.join(names)}" if names else " (models.yaml 是空的)"
             raise ValueError(f"模型 {new_name!r} 不在 models.yaml。{hint}")
+        old_name = model_holder[0]
+        old_entry = find_model(old_name) if old_name else None
         model_holder[0] = new_name
         # Re-sync thinking to the new model's profile. If it doesn't have
         # one, disable thinking (the next /think on will warn accordingly).
@@ -494,6 +488,27 @@ def _run_repl(
             thinking_state["enabled"] = False
             thinking_state["level"] = None
             thinking_state["budget"] = None
+        # Cache-domain visibility: prefix caches are per provider+model, so
+        # the switch itself (not the history — we keep it) resets cache
+        # hits. ``session`` is created later in _run_repl; by the time
+        # /model can fire, the closure resolves it fine.
+        note = cache_switch_note(old_entry, new_entry)
+        if note:
+            console.print(f"[dim]{note}[/dim]")
+        try:
+            _cfg = load_app_config()
+            _warmup = bool(_cfg.cache.enabled and _cfg.cache.warmup_on_switch)
+        except Exception:
+            _warmup = False
+        if _warmup and session.messages:
+            warmup_after_model_switch(
+                new_entry,
+                list(session.messages),
+                session_cache_key(session),
+            )
+            console.print(
+                "[dim]已在后台预热新模型的缓存域 (cache.warmup_on_switch)。[/dim]"
+            )
 
     # Fallback: default_model not set / not in models.yaml. If exactly one
     # model is configured, just use it — and persist that choice so the
@@ -647,13 +662,6 @@ def _run_repl(
         sys_prompt_text = wire_skills(registry, sys_prompt_text, project_path=cwd_resolved)
     except Exception as e:
         err_console.print(f"[yellow]跳过 skills 加载: {e}[/yellow]")
-    # 联网搜索：已登录才注册 web_search 并追加提示词（未登录则什么都不做）。
-    try:
-        from .search.wiring import wire_search
-
-        sys_prompt_text = wire_search(registry, sys_prompt_text)
-    except Exception as e:
-        err_console.print(f"[yellow]跳过联网搜索加载: {e}[/yellow]")
     prompt_builder = PromptBuilder().with_system_prompt(sys_prompt_text).with_project(cwd_resolved)
 
     repl_prefix_hash = ""
@@ -700,6 +708,11 @@ def _run_repl(
         "rules_hash": repl_rules_hash,
         "project_summary_hash": repl_summary_hash,
         "summary_cache": repl_summary_reason,
+        # Per-prefix cache-affinity key — read by run_agent_turn on every
+        # request. Deliberately NOT model-scoped: switching /model keeps the
+        # key, so same-prefix traffic stays affinitive wherever the provider
+        # honors a key at all.
+        "cache_key": derive_cache_key(repl_prefix_hash) if repl_prefix_hash else None,
     }
 
     # 4. Banner
@@ -746,7 +759,7 @@ def _run_repl(
             f"[yellow]💛 感谢 [bold]6哥API[/bold] 赞助[/yellow]  [cyan]https://6geapi.com[/cyan]\n"
             f"[dim]   AI 大模型中转站 · 一个 Key 调用 GPT / Claude / Gemini / DeepSeek 等海内外模型 · OpenAI 兼容[/dim]\n\n"
             f"[dim]/help 命令 · @文件名 引用文件(实时补全, 内容注入本轮) · "
-            f"/exit 退出 · Ctrl-D[/dim]",
+            f"输入停顿后 Tab 接受 AI 续写 · /exit 退出 · Ctrl-D[/dim]",
             title="mbridge",
             border_style="cyan",
         )
@@ -792,14 +805,18 @@ def _run_repl(
     try:
         if sys.stdin.isatty() and sys.stdout.isatty():
             from prompt_toolkit import PromptSession
+            from prompt_toolkit.application import get_app
+            from prompt_toolkit.auto_suggest import ThreadedAutoSuggest
             from prompt_toolkit.completion import (
                 ThreadedCompleter,
                 merge_completers,
             )
+            from prompt_toolkit.filters import Condition
             from prompt_toolkit.history import InMemoryHistory
             from prompt_toolkit.key_binding import KeyBindings
 
             from .agent.at_completer import AtFileCompleter
+            from .agent.ai_completer import AIAutoSuggest
             from .agent.slash_completer import SlashCommandCompleter
 
             # Ctrl+O toggles thinking display mode (full ↔ collapse).
@@ -811,20 +828,82 @@ def _run_repl(
                 mode = "[green]▣ 全显[/green]" if thinking_state["show_full"] else "[dim]▢ 折叠[/dim]"
                 console.print(f"  thinking display: {mode}  [dim](Ctrl+O 切换)[/dim]")
 
+            # Tab: accept AI ghost-text suggestion when (a) a suggestion is
+            # showing and (b) the completion menu is NOT open. Otherwise fall
+            # through to prompt_toolkit's default Tab (accept menu selection).
+            @_pt_bindings.add(
+                "c-i",
+                filter=Condition(
+                    lambda: (
+                        get_app().current_buffer.suggestion is not None
+                        and len(get_app().current_buffer.suggestion.text) > 0
+                        and get_app().current_buffer.document.is_cursor_at_the_end
+                        and get_app().current_buffer.complete_state is None
+                    )
+                ),
+            )
+            def _accept_ai_suggestion(event) -> None:
+                b = event.current_buffer
+                if b.suggestion and b.suggestion.text:
+                    b.insert_text(b.suggestion.text)
+
             # Slash-command + @file completion merged into one completer.
             # prompt_toolkit defaults already provide the Claude-Code-style UX:
             #   - complete_while_typing=True → menu appears as you type / or @
             #   - Tab accepts the highlighted completion
             #   - Arrow keys navigate the menu
-            # No custom Tab binding needed (and a bad one killed the whole
-            # session before — see TypeError on filter=lambda in the old code).
+            def _list_model_names() -> list[str]:
+                try:
+                    from .config import load_models_file
+                    return [m.name for m in load_models_file().models]
+                except Exception:
+                    return []
+
             _completer = merge_completers(
-                [SlashCommandCompleter(), AtFileCompleter(_get_file_index)],
+                [
+                    SlashCommandCompleter(model_names_provider=_list_model_names),
+                    AtFileCompleter(_get_file_index),
+                ],
                 deduplicate=True,
+            )
+
+            # AI inline completion (ghost text). Reads the live model name via
+            # model_holder so /model switches are reflected immediately. The
+            # enabled flag comes from config.prompt.ai_autocomplete (default
+            # True); failing config reads disable safely.
+            try:
+                _ai_debounce_ms = int(getattr(cfg.prompt, "ai_autocomplete_debounce_ms", 450))
+            except Exception:
+                _ai_debounce_ms = 450
+
+            def _ai_model_name() -> str | None:
+                try:
+                    return model_holder[0] or None
+                except Exception:
+                    return None
+
+            def _ai_history():
+                try:
+                    return list(session.messages)
+                except Exception:
+                    return []
+
+            def _ai_enabled() -> bool:
+                try:
+                    return bool(getattr(cfg.prompt, "ai_autocomplete", True))
+                except Exception:
+                    return False
+
+            _ai_suggest = AIAutoSuggest(
+                model_name_provider=_ai_model_name,
+                history_provider=_ai_history,
+                enabled_provider=_ai_enabled,
+                debounce_ms=_ai_debounce_ms,
             )
             _pt_session = PromptSession(
                 completer=ThreadedCompleter(_completer),
                 complete_while_typing=True,
+                auto_suggest=ThreadedAutoSuggest(_ai_suggest),
                 history=InMemoryHistory(),
                 key_bindings=_pt_bindings,
             )
@@ -1001,7 +1080,10 @@ def _run_repl(
         if resp.reasoning_content:
             render_reasoning_meter(console, reasoning_text=resp.reasoning_content)
         # Provider-reported cache hit/miss → ``mbridge cache stats``.
-        entry = find_model(model_name)
+        # Resolve the model FRESH — the closure's `model_name` is the REPL's
+        # startup value and goes stale after /model, which would attribute
+        # hits to (and price savings with) the wrong model.
+        entry = find_model(_active_model())
         if entry is not None:
             try:
                 _record_cache_outcome(entry, resp)
@@ -1208,74 +1290,47 @@ def _make_approval(*, yes: bool):
         except Exception as e:
             console.print(f"[dim]永久批准保存失败: {e}[/dim]")
 
-    def _auto_judge(*, tool: str, summary: str, detail: str) -> tuple[bool, str]:
+    def _auto_judge(*, tool: str, summary: str, detail: str, reason: str = "") -> tuple[bool, str]:
         """Call a tiny model to judge if this action is safe to auto-approve.
 
-        Returns (is_safe, reason).
+        Returns (is_safe, reason). The ``reason`` arg is the LLM's stated
+        justification for the action — fed to the judge so it can distinguish
+        low-intent operations (clearing cache, dismissing a dialog) from
+        high-intent ones (deleting an account, submitting a payment).
+
+        Shared implementation: :func:`modelbridge.utils.llm_safety_judge`
+        (also used by the bridge / weixin channels).
         """
-        from modelbridge.providers import get_provider
-        from modelbridge.config import load_app_config, load_models_file
-        from modelbridge.client import find_model
+        from modelbridge.utils import llm_safety_judge
 
-        prompt = (
-            f"判断以下操作是否安全。分析后先给出理由，再给出结论「安全」或「不安全」。\n"
-            f"工具: {tool}\n操作: {summary}\n详情: {detail[:300]}"
-        )
-        try:
-            cfg = load_app_config()
-            # Try to find a tiny/cheap model for fast safety judgement
-            models_file = load_models_file()
-            tiny_model = None
-            for m in models_file.models:
-                if getattr(m, "level", None) in ("tiny", "cheap") or "tiny" in m.name.lower():
-                    tiny_model = m
-                    break
-            if tiny_model is None and cfg.default_model:
-                tiny_model = find_model(cfg.default_model)
-
-            if tiny_model is None:
-                return False, "(无法找到可用模型)"
-
-            entry = find_model(tiny_model.name)
-            if entry is None:
-                return False, "(无法解析模型配置)"
-
-            provider = get_provider(entry)
-            from modelbridge.schemas import ChatMessage, ChatRequest
-            resp = provider.chat(ChatRequest(model=entry.model, messages=[
-                ChatMessage(role="user", content=prompt)
-            ]), timeout=15.0)
-            content = resp.content or ""
-            is_safe = "安全" in content and "不安全" not in content
-            # Fold long reason for terminal display
-            reason = content.strip() if len(content) <= 200 else (
-                content.strip()[:200] + "…"
-            )
-            return is_safe, reason
-        except Exception as e:
-            return False, f"(AI 判断失败: {e})"
+        return llm_safety_judge(tool=tool, summary=summary, detail=detail, reason=reason)
 
     if yes:
-        def _yes(*, tool: str, summary: str, detail: str = "",
+        def _yes(*, tool: str, summary: str, detail: str = "", reason: str = "",
                   save_pattern: str | None = None, auto: bool = False):
             return ApprovalDecision.YES
         return _yes
 
-    def _ask(*, tool: str, summary: str, detail: str = "",
+    def _ask(*, tool: str, summary: str, detail: str = "", reason: str = "",
              save_pattern: str | None = None, auto: bool = False):
         # ── Auto-judge phase ───────────────────────────────────────────────
         if auto:
             console.print("[dim]AI safety check...[/dim]")
-            is_safe, reason = _auto_judge(tool=tool, summary=summary, detail=detail)
-            console.print(f"[dim]  reason: {reason}[/dim]")
+            is_safe, judge_reason = _auto_judge(
+                tool=tool, summary=summary, detail=detail, reason=reason,
+            )
+            console.print(f"[dim]  reason: {judge_reason}[/dim]")
             if is_safe:
                 console.print("[green]  -> safe, auto-approved[/green]")
                 return ApprovalDecision.YES
             console.print("[yellow]  -> not safe, requires manual confirm[/yellow]")
             # falls through to human prompt
 
+        body = f"[bold]{summary}[/bold]\n\n{detail}"
+        if reason:
+            body += f"\n\n[dim]意图：{reason}[/dim]"
         console.print(Panel(
-            f"[bold]{summary}[/bold]\n\n{detail}",
+            body,
             title=f"批准 · {tool}",
             border_style="yellow",
         ))
@@ -1600,149 +1655,77 @@ def cmd_ask(
         )
         raise typer.Exit(code=2)
 
-    # ----- default path: always build via PromptBuilder ------------------
-    # ``mbridge ask`` always assembles its prompt through the canonical
+    # ----- always build via PromptBuilder (direct AND --route paths) ------
+    # ``mbridge ask`` assembles its prompt through the canonical
     # PromptBuilder so the stable prefix order is the same here as in the
-    # REPL and ``mbridge prompt hash``. Without --project we just skip
-    # the project scan + file selection (no project_rules / summary /
-    # project_files in the result); with --project we add them.
-    if not (use_route or auto):
-        image_blocks: list[dict] = []
-        if image:
-            for arg in image:
-                try:
-                    image_blocks.append(images.resolve_image_arg(arg))
-                except images.ImageError as e:
-                    err_console.print(f"[red]{e}[/red]")
-                    raise typer.Exit(code=2) from e
-        builder = PromptBuilder().with_user_request(prompt, images=image_blocks)
-        if system:
-            builder = builder.with_system_prompt(system)
-        summary: Optional[ProjectSummary] = None
-        selection: Optional[SelectionResult] = None
-        ctx_plan: Optional[ContextPlan] = None
-        file_contexts: list[FileContext] = []
-
-        if project is not None:
-            summary, cache_check = scan_project_cached(project)
-            builder = builder.with_project(project).with_project_summary(
-                summary.to_markdown(),
-                file_tree_hash=summary.file_tree_hash,
-            )
-
-            # Phase 5: pick + read relevant files, then plan within budget.
-            selection = select_files(prompt, summary)
-            file_contexts = read_files(
-                selection.files, project_root=project,
-            )
-            # Estimate overhead from current builder state for budget planning.
-            preview = builder.build()
-            rules_chars = (
-                len(preview.sections.get("global_rules", ""))
-                + len(preview.sections.get("project_rules", ""))
-            )
-            system_chars = len(preview.sections.get("core_system", ""))
-            summary_chars = len(preview.sections.get("project_summary", ""))
-            ctx_plan = plan_context(
-                file_contexts,
-                user_query=prompt,
-                rules_chars=rules_chars,
-                system_chars=system_chars,
-                project_summary_chars=summary_chars,
-                max_chars=max_context,
-            )
-            builder = builder.with_project_files(ctx_plan.kept_files)
-
-        result = builder.build()
-
-        if show_files and selection is not None:
-            _print_selected_files(selection, ctx_plan, file_contexts)
-
-        if show_prompt or dry_run:
-            # ``--show-prompt`` / ``--dry-run`` are inspection-only — do NOT
-            # count them against prefix observations, that would pollute
-            # hit-rate diagnostics.
-            _print_prompt_assembly(result)
-            if dry_run:
-                _print_chat_dry_run(result, model)
-            return
-
-        # We're about to actually hit the provider — log this as a cache
-        # observation so ``mbridge cache stats`` can see prefix stability.
-        record_prefix_observation(
-            prefix_hash=result.stable_prefix_hash,
-            section_hashes=result.section_hashes,
-        )
-
-        # Wire the assembled messages into a chat call.
-        # We bypass chat_once (which builds its own minimal messages) and
-        # talk to the provider directly so the full PromptBuilder output
-        # survives.
-        target_model = model or load_app_config().default_model
-        if not target_model:
-            err_console.print("[red]未指定 model 且没有 default_model。[/red]")
-            raise typer.Exit(code=2)
-        entry = find_model(target_model)
-        if entry is None:
-            err_console.print(f"[red]找不到模型 '{target_model}'。[/red]")
-            raise typer.Exit(code=2)
-        if image_blocks:
+    # REPL and ``mbridge prompt hash`` — INCLUDING under --route/--fallback,
+    # so routed requests can hit the same provider prefix cache as REPL
+    # turns on the same model. Without --project we just skip the project
+    # scan + file selection; with --project they apply to both paths.
+    image_blocks: list[dict] = []
+    if image:
+        for arg in image:
             try:
-                images.ensure_vision(
-                    has_images=True,
-                    model_is_vision=bool(getattr(entry.capabilities, "vision", False)),
-                    model_name=entry.name,
-                    available_vision=_vision_model_names(),
-                )
+                image_blocks.append(images.resolve_image_arg(arg))
             except images.ImageError as e:
                 err_console.print(f"[red]{e}[/red]")
                 raise typer.Exit(code=2) from e
-        provider = get_provider(entry)
-        req = ChatRequest(
-            model=entry.model,
-            messages=result.messages,
-            temperature=(entry.extra or {}).get("temperature"),
-            max_tokens=(entry.extra or {}).get("max_tokens"),
-            thinking=thinking,
-            thinking_budget=thinking_budget,
+    builder = PromptBuilder().with_user_request(prompt, images=image_blocks)
+    if system:
+        builder = builder.with_system_prompt(system)
+    summary: Optional[ProjectSummary] = None
+    selection: Optional[SelectionResult] = None
+    ctx_plan: Optional[ContextPlan] = None
+    file_contexts: list[FileContext] = []
+
+    if project is not None:
+        summary, cache_check = scan_project_cached(project)
+        builder = builder.with_project(project).with_project_summary(
+            summary.to_markdown(),
+            file_tree_hash=summary.file_tree_hash,
         )
-        verbose_label = "chat_project" if project is not None else "chat"
-        try:
-            resp = provider.chat(req, timeout=timeout, save_raw=verbose, verbose_label=verbose_label)
-        except ProviderError as e:
-            _print_provider_error(e)
-            raise typer.Exit(code=3) from e
 
-        title = (
-            f"[bold cyan]{entry.name}[/bold cyan] · {entry.provider.value} · "
-            f"{resp.elapsed_ms}ms · prefix={result.prompt_prefix_hash}"
+        # Phase 5: pick + read relevant files, then plan within budget.
+        selection = select_files(prompt, summary)
+        file_contexts = read_files(
+            selection.files, project_root=project,
         )
-        console.print(Panel(resp.content or "[dim](empty)[/dim]", title=title, border_style="cyan"))
-        _record_cache_outcome(entry, resp)
+        # Estimate overhead from current builder state for budget planning.
+        preview = builder.build()
+        rules_chars = (
+            len(preview.sections.get("global_rules", ""))
+            + len(preview.sections.get("project_rules", ""))
+        )
+        system_chars = len(preview.sections.get("core_system", ""))
+        summary_chars = len(preview.sections.get("project_summary", ""))
+        ctx_plan = plan_context(
+            file_contexts,
+            user_query=prompt,
+            rules_chars=rules_chars,
+            system_chars=system_chars,
+            project_summary_chars=summary_chars,
+            max_chars=max_context,
+        )
+        builder = builder.with_project_files(ctx_plan.kept_files)
 
-        meta_parts = [
-            f"rules sources: {', '.join(sum((v for v in result.sources.values()), [])) or '(none)'}",
-            f"total_chars={result.total_chars}",
-        ]
-        if result.truncated:
-            meta_parts.append("[yellow]rules truncated[/yellow]")
-        if ctx_plan is not None and (ctx_plan.dropped_files or ctx_plan.truncated_files):
-            meta_parts.append("[yellow]context truncated to fit model limits[/yellow]")
-        console.print("[dim]" + "  · ".join(meta_parts) + "[/dim]")
+    result = builder.build()
 
-        if verbose:
-            if selection is not None:
-                _print_selected_files(selection, ctx_plan, file_contexts)
-            _print_verbose(entry, resp)
-        elif resp.reasoning_content:
-            console.print(f"[dim]reasoning_content: {len(resp.reasoning_content)} 字符 (加 -v 查看)[/dim]")
-        logger.info("chat ok model=%s elapsed=%dms prefix=%s", entry.name, resp.elapsed_ms, result.prompt_prefix_hash)
+    if show_files and selection is not None:
+        _print_selected_files(selection, ctx_plan, file_contexts)
+
+    if show_prompt or dry_run:
+        # ``--show-prompt`` / ``--dry-run`` are inspection-only — do NOT
+        # count them against prefix observations, that would pollute
+        # hit-rate diagnostics.
+        _print_prompt_assembly(result)
+        if dry_run:
+            _print_chat_dry_run(result, model)
         return
 
     if use_route or auto:
         _chat_with_routing(
             prompt,
-            system=system,
+            result,
             timeout=timeout,
             thinking=thinking,
             thinking_budget=thinking_budget,
@@ -1752,23 +1735,89 @@ def cmd_ask(
         )
         return
 
-    # The two branches above both ``return``. The original ``chat_once``
-    # fallback (which built minimal [system?, user] messages and bypassed
-    # the stable prefix) is gone — every ``mbridge ask`` invocation now
-    # flows through PromptBuilder so DeepSeek/Qwen prefix caching has a
-    # chance to fire.
+    # Direct path — we bypass chat_once (which builds its own minimal
+    # messages) and talk to the provider directly so the full
+    # PromptBuilder output survives.
+    record_prefix_observation(
+        prefix_hash=result.stable_prefix_hash,
+        section_hashes=result.section_hashes,
+    )
+
+    target_model = model or load_app_config().default_model
+    if not target_model:
+        err_console.print("[red]未指定 model 且没有 default_model。[/red]")
+        raise typer.Exit(code=2)
+    entry = find_model(target_model)
+    if entry is None:
+        err_console.print(f"[red]找不到模型 '{target_model}'。[/red]")
+        raise typer.Exit(code=2)
+    if image_blocks:
+        try:
+            images.ensure_vision(
+                has_images=True,
+                model_is_vision=bool(getattr(entry.capabilities, "vision", False)),
+                model_name=entry.name,
+                available_vision=_vision_model_names(),
+            )
+        except images.ImageError as e:
+            err_console.print(f"[red]{e}[/red]")
+            raise typer.Exit(code=2) from e
+    provider = get_provider(entry)
+    req = ChatRequest(
+        model=entry.model,
+        messages=result.messages,
+        temperature=(entry.extra or {}).get("temperature"),
+        max_tokens=(entry.extra or {}).get("max_tokens"),
+        thinking=thinking,
+        thinking_budget=thinking_budget,
+        cache_key=derive_cache_key(result.stable_prefix_hash),
+    )
+    verbose_label = "chat_project" if project is not None else "chat"
+    try:
+        resp = provider.chat(req, timeout=timeout, save_raw=verbose, verbose_label=verbose_label)
+    except ProviderError as e:
+        _print_provider_error(e)
+        raise typer.Exit(code=3) from e
+
+    title = (
+        f"[bold cyan]{entry.name}[/bold cyan] · {entry.provider.value} · "
+        f"{resp.elapsed_ms}ms · prefix={result.prompt_prefix_hash}"
+    )
+    console.print(Panel(resp.content or "[dim](empty)[/dim]", title=title, border_style="cyan"))
+    _record_cache_outcome(entry, resp)
+
+    meta_parts = [
+        f"rules sources: {', '.join(sum((v for v in result.sources.values()), [])) or '(none)'}",
+        f"total_chars={result.total_chars}",
+    ]
+    if result.truncated:
+        meta_parts.append("[yellow]rules truncated[/yellow]")
+    if ctx_plan is not None and (ctx_plan.dropped_files or ctx_plan.truncated_files):
+        meta_parts.append("[yellow]context truncated to fit model limits[/yellow]")
+    console.print("[dim]" + "  · ".join(meta_parts) + "[/dim]")
+
+    if verbose:
+        if selection is not None:
+            _print_selected_files(selection, ctx_plan, file_contexts)
+        _print_verbose(entry, resp)
+    elif resp.reasoning_content:
+        console.print(f"[dim]reasoning_content: {len(resp.reasoning_content)} 字符 (加 -v 查看)[/dim]")
+    logger.info("chat ok model=%s elapsed=%dms prefix=%s", entry.name, resp.elapsed_ms, result.prompt_prefix_hash)
+    return
 
 
 def _record_cache_outcome(entry: ModelEntry, resp) -> None:
     """Read provider-reported cache hit/miss from ``resp.usage`` and persist.
 
     No-op when the provider doesn't report cache info (older providers,
-    local models, or just no cached prefix this turn). When there IS a
-    hit, the saved cost is estimated from this model's input pricing:
-    DeepSeek / Qwen / Kimi all bill cached tokens at ~25 % of the
-    non-cached rate, so the savings = ``cached_tokens × input_rate × 0.75``.
-    Inaccurate by provider for sure, but useful as a directional figure
-    in ``mbridge cache stats``.
+    local models, or just no cached prefix this turn). Savings use the
+    model's real cache-hit input rate when the pricing table has one
+    (DeepSeek / Hunyuan / Kimi / MiniMax do — ``saved = hit × (input −
+    cache_hit_rate)``); otherwise it falls back to the old heuristic of
+    cached tokens billed at ~25 % of the input rate. Every hit/miss is
+    also attributed per model in ``cache.per_model`` — prefix caches are
+    per provider+model, so that table is what makes model-switch costs
+    visible in ``mbridge usage cache stats``.
     """
     hit, miss = extract_cache_tokens(getattr(resp, "usage", None))
     if hit <= 0 and miss <= 0:
@@ -1778,19 +1827,24 @@ def _record_cache_outcome(entry: ModelEntry, resp) -> None:
         try:
             pricing = get_pricing(entry)
             if pricing is not None:
-                full = pricing.cost(input_tokens=hit, output_tokens=0)
-                saved_cost = full * 0.75
+                if pricing.cache_hit_input_per_1m is not None:
+                    saved_cost = hit / 1_000_000 * (
+                        pricing.input_per_1m - pricing.cache_hit_input_per_1m
+                    )
+                else:
+                    full = pricing.cost(input_tokens=hit, output_tokens=0)
+                    saved_cost = full * 0.75
         except Exception:
             pass
-        record_hit(saved_tokens=hit, saved_cost=saved_cost)
+        record_hit(saved_tokens=hit, saved_cost=saved_cost, model=entry.name)
     else:
-        record_miss()
+        record_miss(model=entry.name)
 
 
 def _chat_with_routing(
     prompt: str,
+    result: PromptBuildResult,
     *,
-    system: Optional[str],
     timeout: float,
     thinking: Optional[bool],
     thinking_budget: Optional[int],
@@ -1798,10 +1852,17 @@ def _chat_with_routing(
     mode: Optional[str],
     fallback: bool,
 ) -> None:
-    """Implements `mbridge ask --route [--fallback]`."""
+    """Implements `mbridge ask --route [--fallback]`.
+
+    Sends the SAME PromptBuilder messages as the direct path (``result``)
+    so routed requests share the stable prefix — and therefore the
+    provider prefix cache — with REPL / plain-ask turns on the same model.
+    The escalation loop swaps only the target model; the messages stay
+    byte-identical across retries.
+    """
     logger = get_logger()
     try:
-        result = route_prompt(prompt, mode=mode, use_llm=True)
+        route_result = route_prompt(prompt, mode=mode, use_llm=True)
     except LLMClassifyError as e:
         err_console.print(
             f"[red]LLM 路由分级失败：[/red]{e}\n"
@@ -1809,55 +1870,47 @@ def _chat_with_routing(
             "确认 routing.levels.tiny（或 default_model）指向一个可达模型。[/yellow]"
         )
         raise typer.Exit(code=2) from e
-    _print_route_result(result, verbose=verbose)
+    _print_route_result(route_result, verbose=verbose)
 
-    if not result.chosen_model:
+    if not route_result.chosen_model:
         err_console.print(
             "[red]路由器未能解析到任何模型。检查 routing.levels / models.yaml。[/red]"
         )
         raise typer.Exit(code=2)
 
-    cur_model = result.chosen_model
-    cur_level = result.chosen_level
+    # Same prefix observation + affinity key as the direct path — routing
+    # must not create a second, cache-invisible prompt shape.
+    record_prefix_observation(
+        prefix_hash=result.stable_prefix_hash,
+        section_hashes=result.section_hashes,
+    )
+    cache_key = derive_cache_key(result.stable_prefix_hash)
+
+    cur_model = route_result.chosen_model
+    cur_level = route_result.chosen_level
     attempts_used = 0
 
     while True:
+        entry = find_model(cur_model)
+        if entry is None:
+            err_console.print(
+                f"[red]路由选中的模型 '{cur_model}' 不在 models.yaml。[/red]"
+            )
+            raise typer.Exit(code=2)
+        provider = get_provider(entry)
+        req = ChatRequest(
+            model=entry.model,
+            messages=result.messages,
+            temperature=(entry.extra or {}).get("temperature"),
+            max_tokens=(entry.extra or {}).get("max_tokens"),
+            thinking=thinking,
+            thinking_budget=thinking_budget,
+            cache_key=cache_key,
+        )
         try:
-            entry, resp = chat_once(
-                prompt,
-                model_name=cur_model,
-                system=system,
-                timeout=timeout,
-                thinking=thinking,
-                thinking_budget=thinking_budget,
-                save_raw=verbose,
-                verbose_label="chat_route",
+            resp = provider.chat(
+                req, timeout=timeout, save_raw=verbose, verbose_label="chat_route"
             )
-        except ChatError as e:
-            if not fallback:
-                err_console.print(f"[red]{e}[/red]")
-                raise typer.Exit(code=2) from e
-            esc = escalate_after_failure(
-                cur_level or ModelLevel.CHEAP,
-                reason=str(e),
-                attempts_used=attempts_used,
-            )
-            if not esc.escalated:
-                err_console.print(f"[red]{e}[/red]")
-                err_console.print(
-                    f"[yellow]fallback 终止: {esc.step.note}[/yellow]"
-                )
-                raise typer.Exit(code=2) from e
-            # esc.escalated is True here → chosen_model / chosen_level are set.
-            assert esc.chosen_model is not None and esc.chosen_level is not None
-            console.print(
-                f"[yellow]{cur_model} 调用失败 ({e})；已自动升级到 "
-                f"[bold]{esc.chosen_model}[/bold] (level={esc.chosen_level.value}). 重试中…[/yellow]"
-            )
-            cur_model = esc.chosen_model
-            cur_level = esc.chosen_level
-            attempts_used += 1
-            continue
         except ProviderError as e:
             if not fallback:
                 _print_provider_error(e)
@@ -1889,6 +1942,7 @@ def _chat_with_routing(
             "chat-route ok model=%s elapsed=%dms attempts=%d",
             entry.name, resp.elapsed_ms, attempts_used + 1,
         )
+        _record_cache_outcome(entry, resp)
         title = (
             f"[bold cyan]{entry.name}[/bold cyan] · {entry.provider.value} · "
             f"{resp.elapsed_ms}ms · routed"
@@ -1935,15 +1989,21 @@ def _print_verbose(entry: ModelEntry, resp) -> None:
 # ---------------------------------------------------------------------------
 
 # Display order: most-used providers first, then locals, then misc.
+# 外国模型 (OpenAI 等) 不再提供预设——本项目只内置国产厂商 + 本地运行时；
+# 需要接 OpenAI 协议端点的用户走「其它 OpenAI-compatible / Custom」。
 _PROVIDER_DISPLAY_ORDER: list[ProviderType] = [
     ProviderType.DEEPSEEK,
     ProviderType.QWEN,
     ProviderType.KIMI,
+    ProviderType.DOUBAO,
     ProviderType.MIMO,
     ProviderType.GLM,
     ProviderType.MINIMAX,
     ProviderType.HUNYUAN,
-    ProviderType.OPENAI,
+    ProviderType.ERNIE,
+    ProviderType.SPARK,
+    ProviderType.STEPFUN,
+    ProviderType.SENSENOVA,
     ProviderType.OLLAMA,
     ProviderType.VLLM,
     ProviderType.LMSTUDIO,
@@ -2133,12 +2193,6 @@ def cmd_model_init() -> None:
     _do_model_add()
 
 
-@model_app.command("add")
-def cmd_model_add() -> None:
-    """交互式添加模型 (`model init` 的别名)。"""
-    _do_model_add()
-
-
 def _do_model_add() -> None:
     if not get_config_path().exists() or not get_models_path().exists():
         if Confirm.ask("尚未执行 `mbridge init`，是否现在初始化?", default=True):
@@ -2193,7 +2247,7 @@ def _do_model_add() -> None:
 
 
 # ---------------------------------------------------------------------------
-# model list / test / remove
+# model list / remove
 # ---------------------------------------------------------------------------
 
 @model_app.command("list")
@@ -2232,8 +2286,8 @@ def cmd_model_list() -> None:
     console.print(table)
 
 
-# IA v1.2 cleanup: `mbridge model test` is GONE (was: deprecated alias for `doctor model`)
-# — use `mbridge doctor model <name>`. See the cleaner explanation at cli.py:2132.
+# IA v1.2 cleanup: `mbridge model test` is GONE (was: deprecated alias for
+# `doctor model`) — use `mbridge doctor model <name>`.
 
 
 @model_app.command("remove")
@@ -2379,18 +2433,6 @@ def cmd_doctor_all(
 # route
 # ---------------------------------------------------------------------------
 
-# NOTE: _run_route_test is defined below (forward ref resolved at call time).
-@doctor_app.command("route")
-def cmd_doctor_route(
-    mode: Optional[str] = typer.Option(
-        None, "--mode",
-        help="路由模式：economy / balanced / powerful (默认读 config.yaml routing.mode)。",
-    ),
-) -> None:
-    """跑内置 8 题路由验证集，确认路由配置正确。"""
-    _run_route_test(mode)
-
-
 def _print_route_trace(result: RouteResult) -> None:
     """Print a verbose step-by-step routing trace."""
     profile = result.profile
@@ -2424,7 +2466,7 @@ def _print_route_trace(result: RouteResult) -> None:
 
     # Step 3: mode shift
     if result.mode_note:
-        steps.append(("③ 模式偏移", result.mode_note.replace("mode=", "mode=")))
+        steps.append(("③ 模式偏移", result.mode_note))
 
     # Step 4: fallback walk
     chain = result.fallback.chain
@@ -2535,74 +2577,16 @@ def _print_route_result(result: RouteResult, verbose: bool = False) -> None:
         _print_route_trace(result)
 
 
-_ROUTE_TEST_PROMPTS: list[str] = [
-    "什么是 Python 的 list？",
-    "解释一下这个报错是什么意思：TypeError unsupported operand",
-    "帮我写一个 FastAPI hello world",
-    "帮我修复这个项目里的登录 bug",
-    "分析整个项目架构并提出重构建议",
-    "检查这个项目有没有安全漏洞",
-    "使用 MCP 工具读取 GitHub issue 并修复",
-    "这个模型为什么 400 了？",
-]
-
-
-def _run_route_test(mode: Optional[str]) -> None:
-    console.print(
-        f"[dim]route test 用最低层 (tiny) 模型对 {len(_ROUTE_TEST_PROMPTS)} 条 prompt "
-        "逐一做实际分类调用（消耗少量 API 额度）。[/dim]"
-    )
-    table = Table(title=f"route test (mode={mode or 'config-default'})", show_lines=False)
-    table.add_column("#", style="dim")
-    table.add_column("question", overflow="fold")
-    table.add_column("task_type")
-    table.add_column("complexity")
-    table.add_column("level")
-    table.add_column("model", style="bold cyan")
-    table.add_column("reasons", overflow="fold")
-
-    any_unresolved = False
-    for i, q in enumerate(_ROUTE_TEST_PROMPTS, start=1):
-        try:
-            result = route_prompt(q, mode=mode, use_llm=True)
-        except LLMClassifyError as e:
-            any_unresolved = True
-            table.add_row(
-                str(i), q, "[red]分级失败[/red]", "-", "-",
-                "[red](error)[/red]", str(e)[:120],
-            )
-            continue
-        model_str = result.chosen_model or "[red](unresolved)[/red]"
-        if not result.chosen_model:
-            any_unresolved = True
-        table.add_row(
-            str(i),
-            q,
-            result.profile.task_type,
-            result.profile.complexity,
-            result.decision.level.value,
-            model_str,
-            ("; ".join(result.profile.reasons))[:120],
-        )
-    console.print(table)
-    if any_unresolved:
-        err_console.print(
-            "[yellow]部分 prompt 分级失败或没能解析到模型。确认最低层 (tiny) "
-            "模型可达，并配置好 routing.levels / models.yaml。[/yellow]"
-        )
-
-
 @app.command(
     "route",
     help=(
         "路由分析：用最低层 (tiny) 模型把一段 prompt 分级、选模型 "
-        "(会对 tiny 模型发一次分类调用，不会调用最终选中的模型)。\n"
-        "特殊值 `mbridge route test` 跑内置 8 题验证路由配置。"
+        "(会对 tiny 模型发一次分类调用，不会调用最终选中的模型)。"
     ),
 )
 def cmd_route(
     prompt: str = typer.Argument(
-        ..., help="要被路由的 prompt；填 `test` 跑内置测试集。",
+        ..., help="要被路由的 prompt。",
     ),
     mode: Optional[str] = typer.Option(
         None, "--mode",
@@ -2617,13 +2601,6 @@ def cmd_route(
     ),
 ) -> None:
     """对一段 prompt 输出推荐模型与原因 (分级会调用最低层 tiny 模型)。"""
-    if prompt.strip().lower() == "test":
-        err_console.print(
-            "[yellow]⚠ `mbridge route test` 已移至 `mbridge doctor route`，将在 v1.2 移除。[/yellow]"
-        )
-        _run_route_test(mode)
-        return
-
     # M6 — capability awareness: when MCP servers are configured & enabled,
     # tell the classifier tools are in play (nudges agent-task levels up).
     try:
@@ -2777,7 +2754,24 @@ def cmd_cache_stats(
         f"  prefix_stability   : {s.prefix_stability * 100:.1f} %",
         f"  last prefix_hash   : {s.last_prefix_hash or '(none yet)'}",
         f"  last observed at   : {s.last_prefix_observed_at or '(never)'}",
+        "",
+        "[bold]per-model cache domains[/bold]",
     ]
+    if s.per_model:
+        for name, m in sorted(s.per_model.items()):
+            total = int(m["hits"] + m["misses"])
+            rate = m["hits"] / total * 100 if total else 0.0
+            lines.append(
+                f"  {name:<20} hits={int(m['hits']):<6} misses={int(m['misses']):<6} "
+                f"hit_rate={rate:5.1f}%  saved={int(m['saved_tokens']):,} tok / "
+                f"{m['saved_cost']:.4f} {s.currency}"
+            )
+        lines.append(
+            "[dim]缓存域按「厂商×模型」隔离 —— 切模型即换域；本表用于对比各模型命中率"
+            "与切换代价。[/dim]"
+        )
+    else:
+        lines.append("  (尚无按模型统计 — 首次命中/未命中后会在此列出)")
 
     # If --project is given, build a fresh prompt and compare each section
     # hash against the last persisted observation — gives a precise
@@ -2825,8 +2819,9 @@ def cmd_cache_stats(
     if s.total == 0:
         lines.append("")
         lines.append(
-            "[dim]hits/misses 为 0 是因为 provider 真实 cache stats 还未接入；"
-            "prefix_stability 仍可读 —— 它告诉你 prompt 前缀是否稳定。[/dim]"
+            "[dim]hits/misses 为 0：provider 未上报缓存信息（本地模型 / 该厂商不支持），"
+            "或本机尚未发生第二次可命中的请求。prefix_stability 仍可读 —— 它告诉你 "
+            "prompt 前缀是否稳定。[/dim]"
         )
     console.print(Panel("\n".join(lines), title="cache stats", border_style="cyan"))
 
@@ -2840,25 +2835,6 @@ def cmd_cache_reset(
         raise typer.Exit(code=0)
     s = reset_cache_stats()
     console.print(f"[green]✓[/green] 缓存统计已重置 (strategy={s.strategy})。")
-
-
-@_usage_cache_app.command("clean", hidden=True)
-def cmd_cache_clean(
-    yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认。"),
-) -> None:
-    """`cache reset` 的别名 — 清零缓存统计。"""
-    cmd_cache_reset(yes=yes)
-
-
-# ---------------------------------------------------------------------------
-# R2a: deprecated aliases (old paths → new canonical paths under `usage`)
-# ---------------------------------------------------------------------------
-# The impl functions are now canonically registered under usage_app /
-# _usage_cache_app (decorators above). The old apps (cost_app / cache_app)
-# only keep hidden deprecating aliases.
-
-# IA v1.2 cleanup: `mbridge cost estimate` / `mbridge cache stats|reset|clean`
-# aliases are GONE — use `mbridge usage cost` and `mbridge usage cache ...`.
 
 
 # ---------------------------------------------------------------------------
@@ -3972,40 +3948,6 @@ def cmd_prompt_show(
             console.print(f"  · {w}")
 
 
-# ---------------------------------------------------------------------------
-# prompt hash / diff — cache-stability diagnostics
-# ---------------------------------------------------------------------------
-
-def _build_for_hash(
-    project: Optional[Path],
-    query: str,
-    *,
-    include_files: bool = False,
-) -> tuple["PromptBuildResult", Optional["ProjectSummary"], str]:
-    """Shared builder used by ``prompt hash`` and ``prompt diff``.
-
-    Returns ``(result, summary, cache_reason)``. ``summary`` is ``None``
-    when no ``--project`` was supplied. ``cache_reason`` reports whether
-    the summary cache was hit ("hit"), refreshed ("refreshed"), or
-    bypassed ("(no project)").
-    """
-    builder = PromptBuilder().with_user_request(query).with_project(project)
-    summary = None
-    cache_reason = "(no project)"
-    if project is not None:
-        summary, check = scan_project_cached(project)
-        builder = builder.with_project_summary(
-            summary.to_markdown(),
-            file_tree_hash=summary.file_tree_hash,
-        )
-        cache_reason = check.reason
-        if include_files:
-            selection = select_files(query, summary)
-            file_contexts = read_files(selection.files, project_root=project)
-            builder = builder.with_project_files(file_contexts)
-    return builder.build(), summary, cache_reason
-
-
 @project_rules_app.callback(invoke_without_command=True)
 def cmd_project_rules(
     ctx: typer.Context,
@@ -4043,7 +3985,7 @@ def _do_project_init(
     yes: bool,
     timeout: float,
 ) -> None:
-    """Shared impl for ``project rules init`` and the deprecated ``project init``."""
+    """Generate ``AGENT.md`` via ``project rules init``."""
     root = Path(path).expanduser().resolve()
     if not root.is_dir():
         err_console.print(f"[red]项目路径不是目录: {root}[/red]")

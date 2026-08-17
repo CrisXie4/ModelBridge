@@ -150,6 +150,48 @@ def _clear(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     return CommandResult(clear_history=True)
 
 
+def _compact(sctx: SlashContext, *, args: list[str]) -> CommandResult:
+    """``/compact`` — manually compress older history into a summary.
+
+    Runs the same :func:`compact_session` the auto path uses, but immediately
+    and regardless of the usage threshold. Honours ``auto_compact_keep_turns``
+    from config for how many recent turns to preserve verbatim. Image-bearing
+    messages and tool-call groups are never summarised.
+    """
+    from ..config import load_app_config
+    from .compact import compact_session, format_notice
+
+    cfg = load_app_config().prompt
+    result = compact_session(
+        sctx.session,
+        keep_turns=cfg.auto_compact_keep_turns,
+        model_name=sctx.model_name,
+    )
+    sctx.console.print(format_notice(result))
+    return CommandResult()
+
+
+def _new(sctx: SlashContext, *, args: list[str]) -> CommandResult:
+    """``/new`` — archive the current session then start fresh.
+
+    Equivalent to ``/save`` (best-effort) followed by ``/clear``: the current
+    history is written to ``~/.modelbridge/sessions/`` for replay, then the
+    live history is dropped (the system prompt prefix is kept). A failed save
+    does not block the new session — it only warns.
+    """
+    path = sctx.session.save(label=f"new_{sctx.model_name}")
+    if path is None:
+        sctx.console.print(
+            "[yellow]旧会话存档失败（sessions 目录不可写?），但仍会新建。[/yellow]"
+        )
+    else:
+        sctx.console.print(f"[dim]旧会话已存档 →[/dim] {path}")
+    sctx.console.print(
+        "[green]✓[/green] 已新建会话（历史已清空，system prompt 保留）"
+    )
+    return CommandResult(clear_history=True)
+
+
 def _context(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     msgs = sctx.session.messages
     n_sys = sum(1 for m in msgs if m.role == "system")
@@ -822,6 +864,8 @@ _COMMANDS: dict[str, CommandFn] = {
     "model": _model,
     "clear": _clear,
     "cls":   _clear,
+    "compact": _compact,
+    "new":    _new,
     "context": _context,
     "ctx":     _context,
     "tokens":  _tokens,
@@ -859,6 +903,8 @@ _HELP_ROWS: list[tuple[str, str]] = [
     ("/rules",             "显示当前已加载的规则文件 (AGENT.md / CLAUDE.md / ...)"),
     ("/prompt",            "显示 PromptBuilder 组装结果与 prefix_hash"),
     ("/save",              "立即把会话写到 ~/.modelbridge/sessions/"),
+    ("/compact",           "手动压缩历史上下文 (把较早的对话摘要化，保留近 N 轮)"),
+    ("/new",               "新建会话 (先存档当前会话再清空历史)"),
     ("/policy",            "显示路径策略 (allowed_dirs / blocked / cwd / allow_bash)"),
     ("/tools",             "显示当前可用工具列表"),
     ("/mcp",               "MCP 控制台: list/tools/on/off/refresh/read/prompt"),

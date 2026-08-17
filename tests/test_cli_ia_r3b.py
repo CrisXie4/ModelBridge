@@ -1,6 +1,6 @@
 """R3b CLI IA tests:
   1. project rules init — canonical AGENT.md generator; project init removed.
-  2. doctor route — canonical route-self-test; route test deprecated.
+  2. doctor route / route test — removed in the v1.3 IA trim (test-only).
   3. edit --undo — rollback without diff generation.
 
 CliRunner in this Typer version has NO ``mix_stderr`` kwarg — use CliRunner() plain.
@@ -105,38 +105,28 @@ def test_project_rules_lists_init_subcommand():
 
 
 # ---------------------------------------------------------------------------
-# Part 2: doctor route / route test (deprecated hint)
+# Part 2: doctor route / route test — removed in v1.3 IA trim
+# (test-only commands; use `mbridge route "prompt"` to inspect one prompt)
 # ---------------------------------------------------------------------------
 
-def test_doctor_route_help_exits_ok():
-    """doctor route --help must exit 0."""
+def test_doctor_route_is_gone():
+    """`doctor route` was a test-suite runner; it must now be unknown."""
     r = runner.invoke(app, ["doctor", "route", "--help"])
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-
-
-def test_doctor_help_lists_route():
-    """doctor --help should list `route` subcommand."""
-    r = runner.invoke(app, ["doctor", "--help"])
-    assert r.exit_code in (0, 1), r.output  # doctor runs env check without subcommand
-    assert "route" in r.output, (
-        f"Expected 'route' in doctor --help output:\n{r.output}"
+    assert r.exit_code == 2, (
+        f"`mbridge doctor route` should be unknown (exit_code=2) after v1.3 trim, "
+        f"got exit_code={r.exit_code}.\nOutput:\n{r.output}"
     )
 
 
-def test_route_test_emits_deprecation_hint(home, monkeypatch):
-    """mbridge route test must print a deprecation hint to stderr/output."""
-    # Intercept _run_route_test so it returns immediately rather than calling model.
+def test_route_test_machinery_is_gone():
+    """`mbridge route test` (deprecated alias) machinery must be removed."""
     import modelbridge.cli as cli_mod
 
-    def _fake_run_route_test(mode):
-        cli_mod.console.print("[dim]route test (mocked)[/dim]")
-
-    monkeypatch.setattr(cli_mod, "_run_route_test", _fake_run_route_test)
-
-    r = runner.invoke(app, ["route", "test"])
-    assert r.exit_code == 0, f"exit_code={r.exit_code}\n{r.output}"
-    assert "doctor route" in r.output or "移至" in r.output or "v1.2" in r.output, (
-        f"Expected deprecation hint mentioning 'doctor route' or v1.2 in output:\n{r.output}"
+    assert not hasattr(cli_mod, "_run_route_test"), (
+        "cli._run_route_test should have been removed with the route-test commands"
+    )
+    assert not hasattr(cli_mod, "_ROUTE_TEST_PROMPTS"), (
+        "cli._ROUTE_TEST_PROMPTS should have been removed with the route-test commands"
     )
 
 

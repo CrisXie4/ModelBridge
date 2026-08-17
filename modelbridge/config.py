@@ -46,15 +46,15 @@ def default_app_config() -> AppConfig:
     user may not have configured yet. That is fine — they are just hints.
     """
     return AppConfig(
-        default_model="deepseek-chat",
+        default_model="deepseek-v4-flash",
         routing=RoutingConfig(
             mode="balanced",
             levels=RoutingLevels(
                 tiny="local-qwen",
-                cheap="deepseek-chat",
+                cheap="deepseek-v4-flash",
                 coder="qwen-coder",
                 agent="minimax-agent",
-                expert="kimi-k2",
+                expert="kimi-k3",
             ),
         ),
         security=SecurityConfig(),
@@ -189,20 +189,75 @@ def _migrate_raw_config(raw: Any) -> Any:
 
 
 def load_app_config() -> AppConfig:
+    """Load ``config.yaml``, parsed+validated at most once per file change.
+
+    The REPL hot path calls this several times per turn (session cache key,
+    auto-compact, status bar, …), and a full YAML parse + pydantic validation
+    costs ~1.5ms — so the parsed model is cached keyed by the file's
+    (mtime_ns, size) and callers get a deep copy (callers legitimately
+    mutate then re-save, e.g. ``cfg.default_model = ...``). Any write —
+    ours via :func:`save_app_config` or an external editor — changes the
+    key and the next load re-reads from disk.
+    """
     path = get_config_path()
+    key = _file_cache_key(path)
+    cached = _CONFIG_CACHE
+    if key is not None and cached is not None and cached[0] == key:
+        return cached[1].model_copy(deep=True)
     if not path.exists():
         # Soft default — let callers decide whether to nag about `cnagent init`.
         return default_app_config()
     raw = _safe_load_yaml(path)
     raw = _migrate_raw_config(raw)
     try:
-        return AppConfig.model_validate(raw)
+        cfg = AppConfig.model_validate(raw)
     except ValidationError as e:
         raise ConfigError(f"config.yaml is invalid: {e}") from e
+    _store_config_cache(path, cfg)
+    # Hand out a copy — callers legitimately mutate the result before
+    # re-saving, and the cached object must stay pristine.
+    return cfg.model_copy(deep=True)
 
 
 def save_app_config(cfg: AppConfig) -> None:
     _safe_dump_yaml(get_config_path(), cfg.model_dump(mode="json"))
+    _invalidate_config_cache()
+
+
+def _file_cache_key(path: Path) -> tuple[str, int, int] | None:
+    """Cache key for a possibly-missing file (``None`` = doesn't exist)."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (str(path), st.st_mtime_ns, st.st_size)
+
+
+# Parsed-file caches. ``_MODELS_CACHE``/``_CONFIG_CACHE`` hold the pydantic
+# model plus its stat key; a mismatch (changed file / different MBRIDGE_HOME)
+# forces a real reload. ``_MODELS_GENERATION`` bumps on every models.yaml
+# load/save so downstream caches (provider instances hold resolved API keys)
+# can invalidate when the registry changes.
+_CONFIG_CACHE: tuple[tuple[str, int, int], AppConfig] | None = None
+_MODELS_CACHE: tuple[tuple[str, int, int], ModelsFile] | None = None
+_MODELS_GENERATION: int = 0
+
+
+def _store_config_cache(path: Path, cfg: AppConfig) -> None:
+    global _CONFIG_CACHE
+    key = _file_cache_key(path)
+    if key is not None:
+        _CONFIG_CACHE = (key, cfg)
+
+
+def _invalidate_config_cache() -> None:
+    global _CONFIG_CACHE
+    _CONFIG_CACHE = None
+
+
+def models_generation() -> int:
+    """Monotonic counter of models.yaml reloads — for downstream caches."""
+    return _MODELS_GENERATION
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +265,17 @@ def save_app_config(cfg: AppConfig) -> None:
 # ---------------------------------------------------------------------------
 
 def load_models_file() -> ModelsFile:
+    """Load ``models.yaml`` with the same change-detecting cache as
+    :func:`load_app_config`. This is the single hottest loader in the REPL
+    (``find_model`` runs multiple times per agent iteration); the cached
+    deep copy is ~60× cheaper than re-parsing the 12-vendor registry."""
+    global _MODELS_CACHE, _MODELS_GENERATION
+
     path = get_models_path()
+    key = _file_cache_key(path)
+    cached = _MODELS_CACHE
+    if key is not None and cached is not None and cached[0] == key:
+        return cached[1].model_copy(deep=True)
     if not path.exists():
         return default_models_file()
     raw = _safe_load_yaml(path)
@@ -219,11 +284,16 @@ def load_models_file() -> ModelsFile:
     except ValidationError as e:
         raise ConfigError(f"models.yaml is invalid: {e}") from e
     _migrate_models_secrets(mf, path)
-    return mf
+    _MODELS_GENERATION += 1
+    _MODELS_CACHE = (key, mf) if key is not None else None
+    return mf.model_copy(deep=True) if _MODELS_CACHE else mf
 
 
 def save_models_file(mf: ModelsFile) -> None:
+    global _MODELS_CACHE, _MODELS_GENERATION
     _safe_dump_yaml(get_models_path(), mf.model_dump(mode="json"))
+    _MODELS_CACHE = None
+    _MODELS_GENERATION += 1
 
 
 def _migrate_models_secrets(mf: ModelsFile, path: Path) -> None:
@@ -347,7 +417,7 @@ def activate_profile(name: str) -> ProfileEntry:
     if missing:
         raise ConfigError(
             f"profile '{name}' 引用了 models.yaml 中不存在的模型："
-            f"{', '.join(sorted(set(missing)))}。请先 `mbridge model add` 或编辑该 profile。"
+            f"{', '.join(sorted(set(missing)))}。请先 `mbridge model init` 或编辑该 profile。"
         )
     cfg.active_profile = name
     cfg.default_model = profile.default_model

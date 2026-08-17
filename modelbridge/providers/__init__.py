@@ -8,21 +8,28 @@ Common surface:
 
 Per-provider adapters live in their own modules
 (``deepseek.py``, ``qwen.py``, ``kimi.py``, ``mimo.py``, ``glm.py``,
-``minimax.py``, ``ollama.py``, ``local_openai.py``).
+``minimax.py``, ``hunyuan.py``, ``doubao.py``, ``ernie.py``, ``spark.py``,
+``stepfun.py``, ``sensenova.py``, ``ollama.py``, ``local_openai.py``).
 """
 
 from ..schemas import ChatRequest, ChatResponse, ProviderError
 from .base import BaseProvider, HTTPProvider, StreamEvent
 from .deepseek import DeepSeekProvider
+from .doubao import DoubaoProvider
+from .ernie import ERNIEProvider
 from .glm import GLMProvider
+from .hunyuan import HunyuanProvider
 from .kimi import KimiProvider
 from .local_openai import LocalOpenAIProvider
 from .mimo import MiMoProvider
 from .minimax import MiniMaxProvider
 from .ollama import OllamaProvider
-from .openai_compatible import OpenAICompatibleProvider, get_provider_for
+from .openai_compatible import OpenAICompatibleProvider
 from .qwen import QwenProvider
-from .registry import get_provider, get_provider_class, list_provider_classes
+from .registry import get_provider, get_provider_class
+from .sensenova import SenseNovaProvider
+from .spark import SparkProvider
+from .stepfun import StepFunProvider
 
 __all__ = [
     "BaseProvider",
@@ -38,10 +45,14 @@ __all__ = [
     "MiMoProvider",
     "GLMProvider",
     "MiniMaxProvider",
+    "HunyuanProvider",
+    "DoubaoProvider",
+    "ERNIEProvider",
+    "SparkProvider",
+    "StepFunProvider",
+    "SenseNovaProvider",
     "OllamaProvider",
     "LocalOpenAIProvider",
     "get_provider",
     "get_provider_class",
-    "get_provider_for",
-    "list_provider_classes",
 ]

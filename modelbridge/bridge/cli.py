@@ -100,7 +100,7 @@ def cmd_on(
     console.print(f"  token : {data['token']}")
     console.print(
         "\n[yellow]下一步[/yellow]：到 chrome://extensions [bold]重新打开/刷新[/bold] 侧边栏"
-        "让宿主带着这个开关重启，然后即可：\n    mbridge browser \"在 GitHub 搜索 modelbridge\"\n"
+        "让宿主带着这个开关重启，然后即可在侧边栏里让 AI 操作当前网页。\n"
         "\n关闭：mbridge bridge off"
     )
 

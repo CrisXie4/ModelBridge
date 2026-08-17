@@ -85,12 +85,14 @@ class BrowserBridge:
         return {"ok": bool(msg.get("ok", True)), "content": str(msg.get("content", ""))}
 
     def request_approval(
-        self, *, tool: str, summary: str, detail: str = "", timeout: float | None = None
+        self, *, tool: str, summary: str, detail: str = "", reason: str = "",
+        timeout: float | None = None,
     ) -> str:
         """Ask the side panel to confirm. Returns ``yes`` | ``no`` | ``always``."""
         rid = self._next_id()
         frame = P.approval(
-            id=self.turn_id, request_id=rid, tool=tool, summary=summary, detail=detail
+            id=self.turn_id, request_id=rid, tool=tool, summary=summary,
+            detail=detail, reason=reason,
         )
         msg = self._await(rid, frame, timeout or DEFAULT_APPROVAL_TIMEOUT, self._approval_send)
         if msg is None:

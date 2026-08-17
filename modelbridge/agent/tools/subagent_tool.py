@@ -209,7 +209,7 @@ def _run_subagent(
     # resolution happens later in run_agent_turn)
     if not model_name:
         # Inherit parent's model by default
-        model_name = getattr(parent_ctx, "_parent_model", None) or "deepseek-chat"
+        model_name = getattr(parent_ctx, "_parent_model", None) or "deepseek-v4-flash"
     try:
         get_model_entry(model_name)
     except ChatError as e:

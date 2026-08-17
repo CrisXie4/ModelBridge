@@ -284,8 +284,12 @@ class InjectJsTool(Tool):
                     "type": "string",
                     "description": "要执行的 JavaScript 代码（函数体，返回值会作为结果）",
                 },
+                "reason": {
+                    "type": "string",
+                    "description": "为什么要注入这段脚本 (一句话，给用户审批看)。",
+                },
             },
-            "required": ["code"],
+            "required": ["code", "reason"],
             "additionalProperties": False,
         }
 
@@ -298,10 +302,12 @@ class InjectJsTool(Tool):
         if bridge is None:
             return self.err("浏览器工具仅在侧边栏环境可用。")
 
+        reason = str(args.get("reason", ""))
         if not ctx.confirm(
             tool=self.name,
             summary="注入 JavaScript",
             detail=f"执行后将自动移除:\n{code[:200]}{'…' if len(code) > 200 else ''}",
+            reason=reason,
             group="browser_write",
             pattern_key="inject_js",
             auto=True,

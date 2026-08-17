@@ -1,6 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Plus,
+  Sparkle,
+  MagnifyingGlass,
+  Key,
+  LockKey,
+  LockKeyOpen,
+  PencilSimple,
+  Trash,
+  X,
+} from "@phosphor-icons/react";
 import { api, CatalogEntry, ModelOut } from "@/lib/api";
 
 const PROVIDERS = [
@@ -35,6 +46,7 @@ const CAP_FLAGS = [
 export default function ModelsPage() {
   const [models, setModels] = useState<ModelOut[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<ModelOut | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [showCatalog, setShowCatalog] = useState(false);
@@ -68,37 +80,72 @@ export default function ModelsPage() {
     }
   }
 
-  return (
-    <div>
-      <h1 className="page-title">渠道 / 模型管理</h1>
-      <p className="page-sub">
-        增删改 models.yaml —— 每个「渠道」对应一个 provider 模型配置（base_url +
-        api_key + 模型ID）。
-      </p>
+  const filtered = useMemo(() => {
+    if (!query) return models;
+    const q = query.toLowerCase();
+    return models.filter(
+      (m) =>
+        m.name.toLowerCase().includes(q) ||
+        m.provider.toLowerCase().includes(q) ||
+        m.model.toLowerCase().includes(q)
+    );
+  }, [models, query]);
 
-      <div style={{ marginBottom: 16, display: "flex", gap: 10 }}>
-        <button
-          className="btn"
-          onClick={() => {
-            setEditing(null);
-            setShowForm(true);
-          }}
-        >
-          + 手动添加
-        </button>
-        <button
-          className="btn btn-secondary"
-          onClick={() => setShowCatalog(true)}
-        >
-          ✦ 从目录添加
-        </button>
+  return (
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">渠道 / 模型</h1>
+          <p className="page-sub">
+            增删改 models.yaml，每个「渠道」= base_url + api_key + 模型 ID。
+          </p>
+        </div>
+        <div className="toolbar">
+          <button
+            className="btn"
+            onClick={() => {
+              setEditing(null);
+              setShowForm(true);
+            }}
+          >
+            <Plus size={14} weight="bold" /> 手动添加
+          </button>
+          <button className="btn btn-secondary" onClick={() => setShowCatalog(true)}>
+            <Sparkle size={14} /> 从目录添加
+          </button>
+        </div>
       </div>
 
+      {models.length > 0 && (
+        <div className="model-search">
+          <MagnifyingGlass size={14} className="model-search-icon" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="搜索已配置的模型 / 厂商…"
+            className="model-search-input"
+          />
+        </div>
+      )}
+
       {loading ? (
-        <div className="card">加载中…</div>
+        <div className="card skeleton">
+          <div className="sk-line sk-md" />
+          <div className="sk-line sk-lg" />
+          <div className="sk-line sk-md" />
+        </div>
       ) : models.length === 0 ? (
-        <div className="card" style={{ color: "var(--mb-muted)" }}>
-          还没有配置任何模型。点「添加渠道」创建第一个。
+        <div className="card">
+          <div className="empty">
+            <div className="empty-icon">
+              <Plus size={20} />
+            </div>
+            <div className="empty-title">还没有配置任何模型</div>
+            <div className="empty-hint">
+              点右上角「从目录添加」，从内置厂商目录一键创建第一个渠道；
+              或「手动添加」填写 base_url 与 API Key。
+            </div>
+          </div>
         </div>
       ) : (
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
@@ -116,7 +163,7 @@ export default function ModelsPage() {
               </tr>
             </thead>
             <tbody>
-              {models.map((m) => (
+              {filtered.map((m) => (
                 <tr key={m.name}>
                   <td className="mono" style={{ fontWeight: 600 }}>
                     {m.name}
@@ -133,44 +180,55 @@ export default function ModelsPage() {
                   </td>
                   <td>
                     {m.has_api_key ? (
-                      <span className="badge badge-ok">已设</span>
+                      <span
+                        className="key-ok"
+                        title="API Key 已配置（加密存储）"
+                      >
+                        <LockKey size={14} weight="fill" /> 就绪
+                      </span>
                     ) : (
-                      <span className="badge badge-err">缺失</span>
+                      <span className="key-miss" title="未配置 API Key">
+                        <LockKeyOpen size={14} /> 缺失
+                      </span>
                     )}
                   </td>
                   <td>
-                    {CAP_FLAGS.filter((f) => m.capabilities?.[f]).map((f) => (
-                      <span
-                        key={f}
-                        className="badge badge-muted"
-                        style={{ marginRight: 4 }}
-                      >
-                        {f}
-                      </span>
-                    ))}
+                    <span className="cap-chips">
+                      {CAP_FLAGS.filter((f) => m.capabilities?.[f]).map((f) => (
+                        <span key={f} className="cap-chip">
+                          {f}
+                        </span>
+                      ))}
+                    </span>
                   </td>
                   <td>
-                    <button
-                      className="btn btn-sm btn-secondary"
-                      style={{ marginRight: 6 }}
-                      onClick={() => {
-                        setEditing(m);
-                        setShowForm(true);
-                      }}
-                    >
-                      编辑
-                    </button>
-                    <button
-                      className="btn btn-sm btn-danger"
-                      onClick={() => remove(m.name)}
-                    >
-                      删除
-                    </button>
+                    <div className="row-actions">
+                      <button
+                        className="btn btn-sm btn-ghost"
+                        onClick={() => {
+                          setEditing(m);
+                          setShowForm(true);
+                        }}
+                      >
+                        <PencilSimple size={13} /> 编辑
+                      </button>
+                      <button
+                        className="btn btn-sm btn-danger btn-outline"
+                        onClick={() => remove(m.name)}
+                      >
+                        <Trash size={13} /> 删除
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+          {filtered.length === 0 && (
+            <div className="muted" style={{ padding: 20, textAlign: "center" }}>
+              没有匹配「{query}」的模型。
+            </div>
+          )}
         </div>
       )}
 
@@ -272,46 +330,31 @@ function ModelForm({
   }
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.5)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 999,
-      }}
-      onClick={onClose}
-    >
+    <div className="modal-overlay" onClick={onClose}>
       <div
-        className="card"
-        style={{ width: 520, maxHeight: "85vh", overflowY: "auto" }}
+        className="modal"
+        style={{ width: 560, padding: 24 }}
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="card-title">
-          {initial ? "编辑渠道" : prefill ? "从目录添加" : "手动添加渠道"}
-        </h2>
+        <div className="modal-head">
+          <h2 className="modal-title">
+            {initial ? "编辑渠道" : prefill ? "从目录添加" : "手动添加渠道"}
+          </h2>
+          <button className="btn btn-sm btn-ghost modal-close" onClick={onClose}>
+            <X size={15} />
+          </button>
+        </div>
 
         {prefill && !initial && (
-          <div
-            style={{
-              background: "rgba(79,140,255,0.08)",
-              border: "1px solid rgba(79,140,255,0.3)",
-              borderRadius: 8,
-              padding: "10px 12px",
-              marginBottom: 16,
-              fontSize: 12,
-            }}
-          >
-            <strong>{prefill.model}</strong> · {prefill.currency}{" "}
-            {prefill.input_per_1m}/{prefill.output_per_1m} per 1M · ctx{" "}
-            {fmtCtx(prefill.context_window)}
-            {prefill.cache_hit_input_per_1m != null &&
-              ` · cache ${prefill.cache_hit_input_per_1m}`}{" "}
-            <span style={{ color: "var(--mb-muted)" }}>
-              [{prefill.pricing_source}]
+          <div className="prefill-note">
+            <strong className="mono">{prefill.model}</strong>
+            <span>
+              {prefill.currency} {prefill.input_per_1m} /{" "}
+              {prefill.output_per_1m} 每 1M · 上下文 {fmtCtx(prefill.context_window)}
+              {prefill.cache_hit_input_per_1m != null &&
+                ` · 缓存 ${prefill.cache_hit_input_per_1m}`}
             </span>
+            <span className="muted">价格来源 [{prefill.pricing_source}]</span>
           </div>
         )}
 
@@ -374,67 +417,56 @@ function ModelForm({
           />
         </div>
 
-        <div className="field">
-          <label>
-            API Key{initial ? "（留空 = 不修改）" : ""}
-          </label>
-          <input
-            type="password"
-            value={form.api_key}
-            onChange={(e) => setForm({ ...form, api_key: e.target.value })}
-            placeholder="sk-..."
-            className="mono"
-          />
-          <div style={{ fontSize: 11, color: "var(--mb-muted)", marginTop: 4 }}>
-            存储时自动加密（keyring / Fernet），不会明文落盘。
+        <div className="row">
+          <div className="field">
+            <label>
+              API Key{initial ? "（留空 = 不修改）" : ""}
+            </label>
+            <input
+              type="password"
+              value={form.api_key}
+              onChange={(e) => setForm({ ...form, api_key: e.target.value })}
+              placeholder="sk-..."
+              className="mono"
+            />
+          </div>
+          <div className="field">
+            <label>
+              <Key size={12} style={{ verticalAlign: -1 }} /> 或环境变量名
+            </label>
+            <input
+              value={form.api_key_env}
+              onChange={(e) => setForm({ ...form, api_key_env: e.target.value })}
+              placeholder="DEEPSEEK_API_KEY"
+              className="mono"
+            />
           </div>
         </div>
-
-        <div className="field">
-          <label>或用环境变量名</label>
-          <input
-            value={form.api_key_env}
-            onChange={(e) => setForm({ ...form, api_key_env: e.target.value })}
-            placeholder="DEEPSEEK_API_KEY"
-            className="mono"
-          />
+        <div className="field-hint" style={{ marginTop: -8, marginBottom: 14 }}>
+          存储时自动加密（keyring / Fernet），不会明文落盘。
         </div>
 
         <div className="field">
           <label>能力标志</label>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <div className="cap-switches">
             {CAP_FLAGS.map((f) => (
-              <label
+              <button
+                type="button"
                 key={f}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  cursor: "pointer",
-                  color: "var(--mb-text)",
-                  fontSize: 13,
-                  margin: 0,
-                }}
+                className={caps[f] ? "cap-switch on" : "cap-switch"}
+                onClick={() => setCaps({ ...caps, [f]: !caps[f] })}
               >
-                <input
-                  type="checkbox"
-                  checked={!!caps[f]}
-                  onChange={(e) =>
-                    setCaps({ ...caps, [f]: e.target.checked })
-                  }
-                  style={{ width: "auto" }}
-                />
                 {f}
-              </label>
+              </button>
             ))}
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 12, marginTop: 20 }}>
+        <div className="modal-foot">
           <button className="btn" onClick={save} disabled={saving}>
-            {saving ? "保存中…" : "保存"}
+            {saving ? "保存中…" : initial ? "保存修改" : "创建渠道"}
           </button>
-          <button className="btn btn-secondary" onClick={onClose}>
+          <button className="btn btn-ghost" onClick={onClose}>
             取消
           </button>
         </div>
@@ -480,87 +512,66 @@ function CatalogPicker({
   });
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.55)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 999,
-      }}
-      onClick={onClose}
-    >
+    <div className="modal-overlay" onClick={onClose}>
       <div
-        className="card"
-        style={{
-          width: "min(920px, 92vw)",
-          maxHeight: "85vh",
-          display: "flex",
-          flexDirection: "column",
-          padding: 0,
-        }}
+        className="modal catalog-modal"
         onClick={(e) => e.stopPropagation()}
       >
-        <div
-          style={{
-            padding: "16px 20px",
-            borderBottom: "1px solid var(--mb-border)",
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            flexWrap: "wrap",
-          }}
-        >
-          <h2 className="card-title" style={{ margin: 0 }}>
-            模型目录
-          </h2>
-          <span style={{ color: "var(--mb-muted)", fontSize: 12 }}>
-            {catalog.length} 个内置模型 · 点击一行预填表单
-          </span>
-          <div style={{ flex: 1 }} />
-          <select
-            value={provider}
-            onChange={(e) => setProvider(e.target.value)}
-            style={{ width: "auto", minWidth: 120 }}
-          >
-            {providers.map((p) => (
-              <option key={p} value={p}>
-                {p === "all" ? "全部厂商" : p}
-              </option>
-            ))}
-          </select>
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索模型 / 厂商…"
-            style={{ width: 200 }}
-            autoFocus
-          />
+        <div className="catalog-head">
+          <div>
+            <h2 className="modal-title">模型目录</h2>
+            <div className="muted" style={{ fontSize: 12 }}>
+              {catalog.length} 个内置模型 · 点击行预填表单
+            </div>
+          </div>
+          <div className="spacer" />
+          <div className="model-search" style={{ width: 220 }}>
+            <MagnifyingGlass size={14} className="model-search-icon" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="搜索模型 / 厂商…"
+              className="model-search-input"
+              autoFocus
+            />
+          </div>
+          <button className="btn btn-sm btn-ghost modal-close" onClick={onClose}>
+            <X size={15} />
+          </button>
         </div>
 
-        <div style={{ overflowY: "auto", flex: 1 }}>
+        <div className="catalog-filters">
+          {providers.map((p) => (
+            <button
+              key={p}
+              className={provider === p ? "filter-chip on" : "filter-chip"}
+              onClick={() => setProvider(p)}
+            >
+              {p === "all" ? "全部" : p}
+            </button>
+          ))}
+        </div>
+
+        <div className="catalog-body">
           {loading ? (
-            <div style={{ padding: 24, color: "var(--mb-muted)" }}>
+            <div className="muted" style={{ padding: 24 }}>
               加载目录…
             </div>
           ) : filtered.length === 0 ? (
-            <div style={{ padding: 24, color: "var(--mb-muted)" }}>
+            <div className="muted" style={{ padding: 24 }}>
               没有匹配的模型。
             </div>
           ) : (
-            <table style={{ fontSize: 12 }}>
+            <table style={{ fontSize: 12.5 }}>
               <thead>
                 <tr>
                   <th>模型</th>
                   <th>厂商</th>
-                  <th>输入价</th>
-                  <th>输出价</th>
-                  <th>缓存</th>
-                  <th>上下文</th>
+                  <th className="num">输入价</th>
+                  <th className="num">输出价</th>
+                  <th className="num">缓存</th>
+                  <th className="num">上下文</th>
                   <th>端点</th>
-                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -569,15 +580,11 @@ function CatalogPicker({
                     key={c.model}
                     style={{ cursor: "pointer" }}
                     onClick={() => onPick(c)}
-                    className="catalog-row"
                   >
                     <td className="mono" style={{ fontWeight: 600 }}>
                       {c.model}
                       {c.is_local && (
-                        <span
-                          className="badge badge-muted"
-                          style={{ marginLeft: 6, fontSize: 10 }}
-                        >
+                        <span className="badge badge-muted" style={{ marginLeft: 8 }}>
                           本地
                         </span>
                       )}
@@ -585,23 +592,23 @@ function CatalogPicker({
                     <td>
                       <span className="badge badge-accent">{c.provider}</span>
                     </td>
-                    <td className="mono">
+                    <td className="mono num">
                       {fmtPrice(c.input_per_1m, c.currency)}
                     </td>
-                    <td className="mono">
+                    <td className="mono num">
                       {fmtPrice(c.output_per_1m, c.currency)}
                     </td>
-                    <td className="mono" style={{ color: "var(--mb-muted)" }}>
+                    <td className="mono num" style={{ color: "var(--mb-muted)" }}>
                       {c.cache_hit_input_per_1m != null
                         ? fmtPrice(c.cache_hit_input_per_1m, c.currency)
                         : "—"}
                     </td>
-                    <td className="mono">{fmtCtx(c.context_window)}</td>
+                    <td className="mono num">{fmtCtx(c.context_window)}</td>
                     <td
                       className="mono"
                       style={{
                         color: "var(--mb-muted)",
-                        maxWidth: 200,
+                        maxWidth: 220,
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
@@ -609,21 +616,12 @@ function CatalogPicker({
                     >
                       {c.base_url}
                     </td>
-                    <td>
-                      <button className="btn btn-sm">选用</button>
-                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
         </div>
-
-        <style jsx>{`
-          :global(.catalog-row:hover) {
-            background: rgba(79, 140, 255, 0.06);
-          }
-        `}</style>
       </div>
     </div>
   );

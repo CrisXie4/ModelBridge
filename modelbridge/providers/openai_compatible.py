@@ -22,13 +22,3 @@ class OpenAICompatibleProvider(HTTPProvider):
 
     name = "openai-compatible"
     provider_type = ProviderType.OPENAI_COMPATIBLE
-
-
-def get_provider_for(entry: ModelEntry):
-    """Backwards-compatible shim for code written against v0.1.
-
-    New code should use :func:`modelbridge.providers.registry.get_provider`.
-    """
-    # Local import to avoid a circular dependency at module load time.
-    from .registry import get_provider
-    return get_provider(entry)

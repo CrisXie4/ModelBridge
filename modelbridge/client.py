@@ -1,7 +1,10 @@
 """High-level chat client used by the CLI / server.
 
-Wraps :mod:`modelbridge.providers` so the CLI never imports HTTP code
-directly. This layer is where v0.3 routing and v0.4 caching will land.
+Wraps :mod:`modelbridge.providers` so callers (LLM router classifier, AI
+autocomplete, MCP sampling, project init) never import HTTP code directly.
+This is the *auxiliary-call* path — it builds a minimal [system?, user]
+pair; the main REPL / ``ask`` paths assemble prompts via
+:mod:`modelbridge.prompt` instead (stable prefix for cache hits).
 """
 
 from __future__ import annotations

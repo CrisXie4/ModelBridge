@@ -23,7 +23,7 @@ Config::
     mcp:
       sampling:
         enabled: true
-        model: deepseek-v3      # optional; default_model otherwise
+        model: deepseek-v4-flash  # optional; default_model otherwise
         max_tokens: 2048        # hard per-call output cap
         max_calls: 32           # per-server, per-session ceiling
 
@@ -148,13 +148,4 @@ class SamplingService:
         }
 
 
-def build_sampling_handler(settings: MCPSettings) -> SamplingHandler:
-    """Back-compat shim: a single un-namespaced handler (server id ``"*"``).
-
-    The manager uses :class:`SamplingService` directly for per-server limits;
-    this stays for callers/tests that want one handler.
-    """
-    return SamplingService(settings).handler_for("*")
-
-
-__all__ = ["SamplingService", "build_sampling_handler"]
+__all__ = ["SamplingService"]

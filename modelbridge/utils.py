@@ -14,7 +14,7 @@ from pathlib import Path
 # Atomic file writes
 # ---------------------------------------------------------------------------
 
-def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8", sync: bool = True) -> None:
     """Write ``text`` to ``path`` atomically (temp file in the same dir +
     ``os.replace``).
 
@@ -23,6 +23,13 @@ def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None
     a torn half. ``os.replace`` is atomic on the same volume on both POSIX
     and Windows. This matters for state files like ``cache_stats.json``
     whose corruption would otherwise silently lose provider-cache savings.
+
+    ``sync=False`` skips the ``fsync`` before replace: on Windows (with
+    antivirus scanning every temp file) an fsync costs ~10ms+ per write, so
+    high-frequency ephemeral state (cache stats, live.json) opts out —
+    those files keep atomic-replace durability and simply risk losing the
+    last write on an OS crash, which is acceptable for counters/UI state.
+    Real configuration keeps the fsync.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -31,7 +38,8 @@ def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None
         with os.fdopen(fd, "w", encoding=encoding) as f:
             f.write(text)
             f.flush()
-            os.fsync(f.fileno())
+            if sync:
+                os.fsync(f.fileno())
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -207,3 +215,64 @@ def now_iso() -> str:
 def now_filestamp() -> str:
     """Filesystem-safe timestamp used for raw log filenames."""
     return datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
+
+# ---------------------------------------------------------------------------
+# LLM safety judgement (shared)
+# ---------------------------------------------------------------------------
+
+def llm_safety_judge(
+    *, tool: str, summary: str, detail: str, reason: str = "",
+) -> tuple[bool, str]:
+    """Ask a tiny/cheap model whether a browser action is safe to auto-approve.
+
+    Single shared implementation for the CLI REPL, the bridge side-panel and
+    the weixin gateway — the judgement prompt and verdict parsing must stay
+    identical across channels, so they live in exactly one place.
+
+    Returns ``(is_safe, judge_reason)``. On any failure (no model available,
+    provider error, timeout) returns ``(False, reason)`` so callers fail
+    closed to manual approval — never auto-approve on a judge error.
+    """
+    try:
+        from .providers import get_provider
+        from .config import load_app_config, load_models_file, find_model
+        from .schemas import ChatMessage, ChatRequest
+
+        reason_line = f"\n意图: {reason}" if reason else ""
+        prompt = (
+            f"判断以下浏览器操作是否安全可自动同意。先给出理由，再给出结论"
+            f"「安全」或「不安全」。\n"
+            f"工具: {tool}\n操作: {summary}{reason_line}\n详情: {detail[:300]}\n\n"
+            f"判定「安全」的标准：后果可控可撤销，或属于常规低风险操作"
+            f"（清缓存、关弹窗、取消订阅、登出、滚动、筛选、展开折叠、翻页、"
+            f"同意 cookie 等）。涉及支付/转账/删除账户/提交订单/修改密码/"
+            f"发送消息/同意条款 → 「不安全」。"
+        )
+
+        cfg = load_app_config()
+        models_file = load_models_file()
+        tiny = None
+        for m in models_file.models:
+            if getattr(m, "level", None) in ("tiny", "cheap") or "tiny" in m.name.lower():
+                tiny = m
+                break
+        if tiny is None and cfg.default_model:
+            tiny = find_model(cfg.default_model)
+        if tiny is None:
+            return False, "(未找到可用模型，保守判不安全)"
+        entry = find_model(tiny.name)
+        if entry is None:
+            return False, "(模型解析失败，保守判不安全)"
+
+        provider = get_provider(entry)
+        resp = provider.chat(
+            ChatRequest(model=entry.model, messages=[ChatMessage(role="user", content=prompt)]),
+            timeout=15.0,
+        )
+        content = resp.content or ""
+        is_safe = "安全" in content and "不安全" not in content
+        judge_reason = content.strip() if len(content) <= 200 else content.strip()[:200] + "…"
+        return is_safe, judge_reason
+    except Exception as e:
+        return False, f"(AI 判断失败，保守判不安全: {e})"

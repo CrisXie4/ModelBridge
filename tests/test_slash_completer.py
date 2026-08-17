@@ -1,4 +1,4 @@
-"""Headless tests for the prompt_toolkit /slash-command completer."""
+"""Headless tests for the slash-command completer (command name + subcommands)."""
 
 from __future__ import annotations
 
@@ -8,76 +8,105 @@ from prompt_toolkit.document import Document
 from modelbridge.agent.slash_completer import SlashCommandCompleter
 
 
-def _display_text(comp) -> str:
-    """Extract plain text from a Completion's display (FormattedText or str)."""
-    d = comp.display
-    if isinstance(d, str):
-        return d
-    return "".join(seg[1] for seg in d)
-
-
 def _complete(c: SlashCommandCompleter, text: str) -> list:
     doc = Document(text, len(text))
     return list(c.get_completions(doc, CompleteEvent()))
 
 
-def test_bare_slash_offers_all_commands():
+def _texts(c: SlashCommandCompleter, text: str) -> list[str]:
+    return [comp.text for comp in _complete(c, text)]
+
+
+def test_command_name_completion() -> None:
     c = SlashCommandCompleter()
-    comps = _complete(c, "/")
-    names = {comp.text for comp in comps}
-    # Core commands must show up.
-    assert "help" in names
-    assert "tokens" in names
-    assert "exit" in names
-    # Every offered completion is displayed with a leading slash.
-    assert all(_display_text(comp).startswith("/") for comp in comps)
+    assert "help" in _texts(c, "/h")
+    assert "think" in _texts(c, "/t")
 
 
-def test_prefix_filters():
+def test_command_name_completion_no_prefix_yields_all() -> None:
     c = SlashCommandCompleter()
-    comps = _complete(c, "/to")
-    names = {comp.text for comp in comps}
-    # /to should match tokens, token, t, tools — but NOT exit/help.
-    assert "tokens" in names
-    assert "tools" in names
-    assert "exit" not in names
-    assert "help" not in names
+    texts = _texts(c, "/")
+    # a handful of known commands must show up
+    for name in ("help", "model", "think", "mcp"):
+        assert name in texts
 
 
-def test_start_position_replaces_partial():
+def test_subcommand_completion_think_on() -> None:
     c = SlashCommandCompleter()
-    comps = _complete(c, "/tok")
-    assert comps
-    # The completion must replace the partial "tok" (start_position = -3).
-    assert all(comp.start_position == -3 for comp in comps)
+    texts = _texts(c, "/think o")
+    assert "on" in texts
+    assert "off" in texts
 
 
-def test_no_slash_no_completions():
+def test_subcommand_completion_mcp_list() -> None:
     c = SlashCommandCompleter()
-    # Plain text without a leading slash should not trigger command completion.
-    assert _complete(c, "hello") == []
-    assert _complete(c, "tokens") == []
+    texts = _texts(c, "/mcp l")
+    assert "list" in texts
 
 
-def test_stops_after_space_args_not_completed():
+def test_subcommand_completion_no_prefix_yields_all_subs() -> None:
     c = SlashCommandCompleter()
-    # Once a space is typed, we're in argument territory — no more
-    # command-name suggestions (we deliberately don't complete args).
-    assert _complete(c, "/think ") == []
-    assert _complete(c, "/tokens off") == []
+    texts = _texts(c, "/mcp ")
+    assert "list" in texts
+    assert "tools" in texts
+    assert "refresh" in texts
 
 
-def test_completions_carry_descriptions():
+def test_subcommand_completion_unknown_command_offers_nothing() -> None:
     c = SlashCommandCompleter()
-    comps = {comp.text: comp.display_meta for comp in _complete(c, "/")}
-    # /tokens should carry a non-empty description from the help table.
-    assert comps.get("tokens")
+    assert _texts(c, "/nonexistent x") == []
 
 
-def test_multiline_does_not_fire_on_mid_text_slash():
+def test_subcommand_completion_stops_after_second_token() -> None:
+    # /think on <more> — we only complete the first argument.
     c = SlashCommandCompleter()
-    # A "/" not at the start of its line should not trigger completion.
-    assert _complete(c, "some text /tokens") == []
-    # A fresh line starting with "/" does.
-    comps = _complete(c, "previous line\n/t")
-    assert comps and any(comp.text == "tokens" for comp in comps)
+    assert _texts(c, "/think on more") == []
+
+
+def test_model_subcommand_uses_provider() -> None:
+    c = SlashCommandCompleter(model_names_provider=lambda: ["deepseek-chat", "qwen-turbo"])
+    texts = _texts(c, "/model deep")
+    assert "deepseek-chat" in texts
+    assert "qwen-turbo" not in texts
+
+
+def test_model_subcommand_no_provider_offers_nothing() -> None:
+    c = SlashCommandCompleter()
+    assert _texts(c, "/model deep") == []
+
+
+def test_model_subcommand_provider_error_swallows() -> None:
+    def boom() -> list[str]:
+        raise RuntimeError("nope")
+    c = SlashCommandCompleter(model_names_provider=boom)
+    assert _texts(c, "/model ") == []
+
+
+def test_multiline_does_not_fire_mid_line() -> None:
+    c = SlashCommandCompleter()
+    # A non-slash line offers nothing.
+    assert _texts(c, "hello world") == []
+    # /th on its own line (after a newline) still completes — the completer
+    # only looks at the current line.
+    texts = _texts(c, "print()\n/th")
+    assert "think" in texts
+
+
+def test_non_slash_line_offers_nothing_repeated() -> None:
+    # sanity: a plain question never offers slash completions
+    c = SlashCommandCompleter()
+    assert _texts(c, "how do I parse json?") == []
+
+
+def test_init_flags() -> None:
+    c = SlashCommandCompleter()
+    texts = _texts(c, "/init --")
+    assert "--force" in texts
+    assert "--yes" in texts
+
+
+def test_debug_on_off() -> None:
+    c = SlashCommandCompleter()
+    texts = _texts(c, "/debug o")
+    assert "on" in texts
+    assert "off" in texts

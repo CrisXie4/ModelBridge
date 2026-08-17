@@ -504,9 +504,14 @@ def _build_file_tree(
     return lines
 
 
-def _is_sensitive(basename: str) -> bool:
+def is_sensitive_name(basename: str) -> bool:
+    """Canonical sensitive-file check (shared by file_index / file_reader)."""
     from fnmatch import fnmatch
     return any(fnmatch(basename, pat) for pat in SENSITIVE_FILE_PATTERNS)
+
+
+# Historical private alias kept for internal scanner call sites.
+_is_sensitive = is_sensitive_name
 
 
 # ---------------------------------------------------------------------------
@@ -659,6 +664,7 @@ __all__ = [
     "compute_manifest_hash",
     "compute_rules_hash",
     "SENSITIVE_FILE_PATTERNS",
+    "is_sensitive_name",
     "SKIP_DIRS",
     "LANG_SUFFIXES",
     "MANIFEST_FILES",

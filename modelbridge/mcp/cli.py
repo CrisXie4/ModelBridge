@@ -11,7 +11,6 @@ Commands:
 * ``mbridge mcp prompts``   — all discovered prompts
 * ``mbridge mcp call``      — invoke one tool with JSON args (manual test)
 * ``mbridge mcp read``      — read a resource by uri
-* ``mbridge mcp ping``      — heartbeat every ready server (M5)
 
 Note: running ModelBridge *itself* as an MCP server (M7) is done via
 ``python -m modelbridge.mcp.server`` — there is intentionally no
@@ -37,11 +36,10 @@ mcp_app = typer.Typer(
     name="mcp",
     help=(
         "MCP 客户端：连接外部 MCP server (list / tools / resources / "
-        "prompts / call / read / ping)。\n\n"
+        "prompts / call / read)。\n\n"
         "常用示例:\n"
         "    mbridge mcp list                                  # 看 server 连接状态\n"
         "    mbridge mcp tools                                 # 列所有工具 (限定名)\n"
-        "    mbridge mcp ping                                  # 心跳 / 延迟检查\n"
         "    mbridge mcp call filesystem__list_dir -a '{\"path\":\".\"}'\n"
         "                                                     # 手动调一个工具\n\n"
         "把 ModelBridge 自己作为 MCP server 暴露：\n"
@@ -181,34 +179,6 @@ def call_tool(
     except MCPError as e:
         err_console.print(f"[red]{e.display()}[/red]")
         raise typer.Exit(code=1) from e
-    finally:
-        manager.shutdown()
-
-
-@mcp_app.command("ping", hidden=True)
-def ping_servers(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
-    """对每个已连接的 server 发一次 ping，显示延迟。"""
-    import time
-
-    manager = _open_manager(verbose=verbose)
-    try:
-        table = Table(title="MCP ping")
-        table.add_column("id")
-        table.add_column("result")
-        table.add_column("latency", justify="right")
-        for s in manager.statuses():
-            if s.state != "ready":
-                table.add_row(s.server_id, f"[dim]{s.state}[/dim]", "-")
-                continue
-            session = manager.sessions[s.server_id]
-            t0 = time.monotonic()
-            try:
-                session.ping()
-                ms = int((time.monotonic() - t0) * 1000)
-                table.add_row(s.server_id, "[green]ok[/green]", f"{ms} ms")
-            except MCPError as e:
-                table.add_row(s.server_id, f"[red]{e.message}[/red]", "-")
-        console.print(table)
     finally:
         manager.shutdown()
 

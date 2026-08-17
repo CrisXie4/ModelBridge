@@ -45,9 +45,24 @@ _SYSTEM_PROMPT = (
     "需要页面信息时主动调用工具，不要凭空猜测页面内容。回答要直接、可执行。\n"
     "页面正在加载时，工具会自动等到加载完成后再执行；navigate / click 触发跳转后"
     "也会等新页面加载完再返回。所以遇到加载慢的页面，继续调用工具完成任务即可，"
-    "不要中途放弃、不要让用户自己去刷新或查看页面。\n"
-    "若已登录联网搜索，遇到需要最新信息或网络资料时调用 web_search 工具。"
+    "不要中途放弃、不要让用户自己去刷新或查看页面。"
 )
+
+
+def _llm_safety_judge(
+    *, tool: str, summary: str, detail: str, reason: str = "",
+) -> tuple[bool, str]:
+    """Ask a tiny/cheap model whether a browser action is safe to auto-approve.
+
+    Thin wrapper over the shared :func:`modelbridge.utils.llm_safety_judge`
+    (same implementation as the CLI REPL and weixin gateway). On any failure
+    (no model available, provider error, timeout) it returns ``(False, ...)``
+    so the caller falls through to the manual side-panel approval — never
+    blocks the action.
+    """
+    from modelbridge.utils import llm_safety_judge
+
+    return llm_safety_judge(tool=tool, summary=summary, detail=detail, reason=reason)
 
 
 class SessionRunner:
@@ -71,14 +86,32 @@ class SessionRunner:
         return self.session
 
     def _build_context(self, bridge: BrowserBridge) -> AgentContext:
-        def approve(*, tool: str, summary: str, detail: str = "",
+        def approve(*, tool: str, summary: str, detail: str = "", reason: str = "",
                     save_pattern: str | None = None, auto: bool = False) -> ApprovalDecision:
-            # ``save_pattern`` / ``auto`` are CLI-side concerns (persistent
-            # approval + LLM auto-judge). The bridge round-trip doesn't
-            # support either; silently drop them so the protocol stays
-            # forward-compatible without changing the bridge payload.
-            _ = (save_pattern, auto)
-            decision = bridge.request_approval(tool=tool, summary=summary, detail=detail)
+            # ``save_pattern`` is a CLI-side concern (persistent approval to
+            # disk). The bridge round-trip doesn't support it; silently drop.
+            _ = save_pattern
+            # ── Context-aware auto-approval (LLM safety judge) ─────────────
+            # When ``auto`` is set (browser write tools pass auto=True, or the
+            # user enabled /auto mode), ask a tiny model whether this action
+            # is safe given the model's stated ``reason`` + target. Safe →
+            # auto-approve without bugging the user. Unsafe → fall through to
+            # the side-panel card. Failures (no model / network) also fall
+            # through to the panel — never block on the judge.
+            if auto:
+                is_safe, judge_reason = _llm_safety_judge(
+                    tool=tool, summary=summary, detail=detail, reason=reason,
+                )
+                if is_safe:
+                    self._log.info("bridge.auto_approve tool=%s reason=%s",
+                                   tool, judge_reason[:120])
+                    return ApprovalDecision.YES
+                if judge_reason:
+                    self._log.info("bridge.auto_judge_unsafe tool=%s reason=%s",
+                                   tool, judge_reason[:120])
+            decision = bridge.request_approval(
+                tool=tool, summary=summary, detail=detail, reason=reason,
+            )
             return {
                 "yes": ApprovalDecision.YES,
                 "always": ApprovalDecision.ALWAYS,
@@ -98,18 +131,8 @@ class SessionRunner:
         )
 
     def build_registry(self):
-        """Browser tools (read tools always; write tools added in Stage 3).
-
-        联网搜索：已登录则把 web_search 也注册进来（经本地 CLI 凭据调用服务端
-        /v1/search，结果融入 AI 回复，扩展端无需改动）。
-        """
+        """Browser tools (read tools always; write tools added in Stage 3)."""
         registry = build_browser_registry(include_write=True)
-        try:
-            from ..search.wiring import maybe_register_web_search
-
-            maybe_register_web_search(registry)
-        except Exception as e:  # noqa: BLE001
-            self._log.warning("web_search 工具加载失败: %s", e)
         return registry
 
     def run(

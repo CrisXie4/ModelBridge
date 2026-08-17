@@ -388,15 +388,13 @@ def run_model_doctor(
 # ---------------------------------------------------------------------------
 
 def run_doctor_all(
-    *, test_tools: bool = False, save_raw: bool = False, timeout: float = 20.0
+    *,
+    test_tools: bool = False,
+    save_raw: bool = False,
+    timeout: float = 20.0,
 ) -> list[ModelDoctorReport]:
     mf = load_models_file()
     return [
         run_model_doctor(m, test_tools=test_tools, save_raw=save_raw, timeout=timeout)
         for m in mf.models
     ]
-
-
-# Back-compat alias for v0.1 callers.
-def run_doctor() -> list[CheckResult]:
-    return run_global_doctor()

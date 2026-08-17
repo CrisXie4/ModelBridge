@@ -3,16 +3,44 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import {
+  Gauge,
+  Pulse,
+  PlugsConnected,
+  Path,
+  NotePencil,
+  Sparkle,
+  ShieldCheck,
+  Coins,
+} from "@phosphor-icons/react";
 
-const NAV = [
-  { href: "/", label: "概览", icon: "◈" },
-  { href: "/activity", label: "Agent 活动", icon: "◉" },
-  { href: "/models", label: "渠道 / 模型", icon: "▤" },
-  { href: "/routing", label: "路由配置", icon: "⇄" },
-  { href: "/skills", label: "Skills", icon: "✦" },
-  { href: "/prompts", label: "提示词", icon: "✎" },
-  { href: "/doctor", label: "自检", icon: "✓" },
-  { href: "/usage", label: "成本 / 缓存", icon: "￥" },
+const NAV_GROUPS: {
+  label: string;
+  items: { href: string; label: string; Icon: typeof Gauge }[];
+}[] = [
+  {
+    label: "监控",
+    items: [
+      { href: "/", label: "概览", Icon: Gauge },
+      { href: "/activity", label: "Agent 活动", Icon: Pulse },
+    ],
+  },
+  {
+    label: "配置",
+    items: [
+      { href: "/models", label: "渠道 / 模型", Icon: PlugsConnected },
+      { href: "/routing", label: "路由配置", Icon: Path },
+      { href: "/prompts", label: "提示词", Icon: NotePencil },
+      { href: "/skills", label: "Skills", Icon: Sparkle },
+    ],
+  },
+  {
+    label: "系统",
+    items: [
+      { href: "/doctor", label: "自检", Icon: ShieldCheck },
+      { href: "/usage", label: "成本 / 缓存", Icon: Coins },
+    ],
+  },
 ];
 
 export function Sidebar() {
@@ -20,92 +48,37 @@ export function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <span className="sidebar-logo">◆</span>
-        <span className="sidebar-name">ModelBridge</span>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/icon.png" alt="ModelBridge" className="sidebar-logo" />
+        <div className="sidebar-name">
+          ModelBridge
+          <span className="sidebar-tag">本地管理台</span>
+        </div>
       </div>
       <nav className="sidebar-nav">
-        {NAV.map((item) => {
-          const active =
-            item.href === "/"
-              ? pathname === "/"
-              : pathname.startsWith(item.href);
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={active ? "nav-item active" : "nav-item"}
-            >
-              <span className="nav-icon">{item.icon}</span>
-              <span>{item.label}</span>
-            </Link>
-          );
-        })}
+        {NAV_GROUPS.map((group) => (
+          <div className="nav-group" key={group.label}>
+            <div className="nav-group-label">{group.label}</div>
+            {group.items.map(({ href, label, Icon }) => {
+              const active =
+                href === "/" ? pathname === "/" : pathname.startsWith(href);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  className={active ? "nav-item active" : "nav-item"}
+                >
+                  <Icon size={16} weight={active ? "fill" : "regular"} />
+                  <span>{label}</span>
+                </Link>
+              );
+            })}
+          </div>
+        ))}
       </nav>
       <div className="sidebar-foot">
         <ApiStatus />
       </div>
-      <style jsx>{`
-        .sidebar {
-          width: 220px;
-          border-right: 1px solid var(--mb-border);
-          background: var(--mb-panel);
-          display: flex;
-          flex-direction: column;
-          flex-shrink: 0;
-          padding: 20px 0;
-        }
-        .sidebar-brand {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 0 20px 20px;
-          border-bottom: 1px solid var(--mb-border);
-        }
-        .sidebar-logo {
-          color: var(--mb-accent);
-          font-size: 20px;
-        }
-        .sidebar-name {
-          font-weight: 700;
-          font-size: 15px;
-        }
-        .sidebar-nav {
-          flex: 1;
-          padding: 12px 8px;
-          display: flex;
-          flex-direction: column;
-          gap: 2px;
-        }
-        .sidebar-foot {
-          padding: 8px;
-          border-top: 1px solid var(--mb-border);
-        }
-        :global(.nav-item) {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 9px 12px;
-          border-radius: 8px;
-          color: var(--mb-muted);
-          text-decoration: none;
-          font-size: 13px;
-          font-weight: 500;
-          transition: all 0.12s;
-        }
-        :global(.nav-item:hover) {
-          background: rgba(255, 255, 255, 0.04);
-          color: var(--mb-text);
-        }
-        :global(.nav-item.active) {
-          background: rgba(79, 140, 255, 0.14);
-          color: var(--mb-accent);
-        }
-        :global(.nav-icon) {
-          width: 18px;
-          text-align: center;
-          font-size: 13px;
-        }
-      `}</style>
     </aside>
   );
 }
@@ -122,10 +95,10 @@ const SPARK_MAX = 24;
 const DEGRADED_MS = 300;
 
 const STATUS_COLOR: Record<ApiState, string> = {
-  checking: "#8b93a7",
-  online: "#3fb950",
-  degraded: "#d29922",
-  offline: "#e5484d",
+  checking: "#6d7a90",
+  online: "#46c07a",
+  degraded: "#e0b45c",
+  offline: "#f0565c",
 };
 
 type ApiState = "checking" | "online" | "degraded" | "offline";
@@ -284,118 +257,6 @@ function ApiStatus() {
         <Sparkline data={history} color={STATUS_COLOR[status]} />
         <span className="api-rel">{rel ?? "等待中"}</span>
       </div>
-      <style jsx>{`
-        .api-status {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-          padding: 10px 12px;
-          margin: 0 8px;
-          border-radius: 10px;
-          background: rgba(255, 255, 255, 0.025);
-          border: 1px solid var(--mb-border);
-          min-height: 60px;
-        }
-        .api-row {
-          display: flex;
-          align-items: center;
-          gap: 9px;
-        }
-        .api-row-sub {
-          justify-content: space-between;
-        }
-        .api-dot {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          flex-shrink: 0;
-          position: relative;
-          background: ${STATUS_COLOR["checking"]};
-        }
-        .api-dot::after {
-          content: "";
-          position: absolute;
-          inset: -3px;
-          border-radius: 50%;
-          border: 1.5px solid transparent;
-          opacity: 0;
-        }
-        .api-dot.online {
-          background: ${STATUS_COLOR["online"]};
-          box-shadow: 0 0 8px ${STATUS_COLOR["online"]}99;
-        }
-        .api-dot.online::after {
-          border-color: ${STATUS_COLOR["online"]};
-          animation: pulse 2.4s ease-out infinite;
-        }
-        .api-dot.degraded {
-          background: ${STATUS_COLOR["degraded"]};
-          box-shadow: 0 0 8px ${STATUS_COLOR["degraded"]}99;
-        }
-        .api-dot.degraded::after {
-          border-color: ${STATUS_COLOR["degraded"]};
-          animation: pulse 1.1s ease-out infinite;
-        }
-        .api-dot.checking::after {
-          border-color: ${STATUS_COLOR["checking"]};
-          animation: pulse 2.4s ease-out infinite;
-        }
-        .api-dot.offline {
-          background: ${STATUS_COLOR["offline"]};
-        }
-        .api-label {
-          flex: 1;
-          font-size: 13px;
-          font-weight: 600;
-          color: var(--mb-text);
-        }
-        .api-latency {
-          font-size: 12px;
-          font-weight: 600;
-          font-variant-numeric: tabular-nums;
-          color: var(--mb-muted);
-          min-width: 44px;
-          text-align: right;
-        }
-        .api-latency.online {
-          color: ${STATUS_COLOR["online"]};
-        }
-        .api-latency.degraded {
-          color: ${STATUS_COLOR["degraded"]};
-        }
-        .api-latency.offline {
-          color: ${STATUS_COLOR["offline"]};
-        }
-        .api-rel {
-          font-size: 11px;
-          color: var(--mb-muted);
-          font-variant-numeric: tabular-nums;
-          flex-shrink: 0;
-        }
-        :global(.spark) {
-          display: block;
-          flex: 1;
-          min-width: 0;
-        }
-        @keyframes pulse {
-          0% {
-            opacity: 0.55;
-            transform: scale(0.75);
-          }
-          100% {
-            opacity: 0;
-            transform: scale(1.9);
-          }
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .api-dot.online::after,
-          .api-dot.degraded::after,
-          .api-dot.checking::after {
-            animation: none;
-            display: none;
-          }
-        }
-      `}</style>
     </div>
   );
 }

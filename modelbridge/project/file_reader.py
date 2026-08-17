@@ -23,7 +23,6 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 from .file_selector import SelectedFile
-from .scanner import SENSITIVE_FILE_PATTERNS
 
 
 # --- caps -------------------------------------------------------------------
@@ -267,8 +266,8 @@ def _read_one(
 
 
 def _is_sensitive(basename: str) -> bool:
-    from fnmatch import fnmatch
-    return any(fnmatch(basename, pat) for pat in SENSITIVE_FILE_PATTERNS)
+    from .scanner import is_sensitive_name
+    return is_sensitive_name(basename)
 
 
 def _fence_lang_for(rel_path: str) -> str:

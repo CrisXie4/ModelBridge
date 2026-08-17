@@ -8,7 +8,7 @@
 >
 > 直接运行 `mbridge` 进入**持续会话** (像 Claude Code) — AI 可以读 / 写 / 编辑项目文件，需要时也能跑 shell。管理类操作 (添加模型、自检、路由、成本、缓存) 走子命令。
 >
-> 支持 DeepSeek / Qwen / Kimi / MiMo / GLM / MiniMax / 腾讯混元 / Ollama / vLLM / LM Studio。Provider Adapter 层吸收国产模型字段差异 (`reasoning_content`、`thinking`、`tool_calls`)。
+> 支持 DeepSeek / 豆包 / Qwen / Kimi / MiMo / GLM / MiniMax / 腾讯混元 / 百度文心 / 讯飞星火 / 阶跃星辰 / 商汤日日新 / Ollama / vLLM / LM Studio——12 家国产云厂商 + 本地运行时。Provider Adapter 层吸收国产模型字段差异 (`reasoning_content`、`thinking`、`tool_calls`)。
 
 ---
 
@@ -17,7 +17,7 @@
 本项目由 **[6哥 API（6geapi.com）](https://6geapi.com)** 友情赞助，特此鸣谢 🙏
 
 > **6哥 API —— 一站式 AI 大模型中转站（API 聚合中转）。**
-> 一个 **OpenAI 兼容**接口、一个 **API Key**，即可统一调用 GPT / Claude / Gemini / DeepSeek / Qwen / GLM / Kimi 等海内外主流大模型：国内直连、稳定低延迟、按量计费，不必逐家注册充值。
+> 一个 **OpenAI 兼容**接口、一个 **API Key**，即可统一调用 DeepSeek / Qwen / Kimi / MiMo / MiniMax / GLM 等主流国产大模型：国内直连、稳定低延迟、按量计费，不必逐家注册充值。
 >
 > 用 ModelBridge 把国产模型接进你的工作流，用 6哥 API 一站拿齐所有模型的 Key —— 省心、省事、省钱。
 >
@@ -36,7 +36,7 @@ mbridge --allow-bash               额外开启 run_bash 工具 (每条命令仍
 mbridge --yes                      跳过所有 write/edit/bash 确认弹窗
 
 mbridge init                       初始化 ~/.modelbridge/
-mbridge model init / add / list / remove   模型管理 (init 推荐入口)
+mbridge model init / list / remove        模型管理 (init 交互式添加)
 mbridge config show / upgrade              查看 / 升级 config.yaml
 mbridge config profile add/list/use/show/remove   命名配置切换
 
@@ -46,24 +46,23 @@ mbridge run "pytest -x"            在项目内安全执行白名单 shell 命�
 mbridge route "..."                路由分析 (输出等级与模型，不实调；加 --mode)
 
 mbridge doctor                     全局自检
-mbridge doctor model NAME / doctor all / doctor route   模型 / 全部 / 路由自检
+mbridge doctor model NAME / doctor all   模型 / 全部探测
 
 mbridge usage cost "..."           成本估算
 mbridge usage cache                缓存命中统计
 
-mbridge prompt list / show / edit / set-system / reset   提示词与规则文件
-mbridge project scan / rules / rules init                项目扫描 / 规则 / 生成 AGENT.md
+mbridge prompt list / show         提示词与规则文件
+mbridge project rules / rules init 查看规则文件 / 生成 AGENT.md
 mbridge mcp list / tools / resources / prompts           MCP 客户端
 python -m modelbridge.mcp.server                         把 ModelBridge 自己作为 MCP server
 mbridge bridge install / status / on / off               浏览器侧边栏宿主 (装扩展见下方章节)
 mbridge skill list / show / add / remove                 用户自定义 skill（Claude Code 兼容）
 
-mbridge version [--check]          显示版本号
-mbridge --version / -V             同上 (任意位置)
+mbridge --version / -V             显示版本号 (任意位置)
 mbridge update [--yes]             检查并下载新版本
 ```
 
-> 已物理删除的别名（`No such command`）：`chat`（→ `ask`）、`cost estimate`（→ `usage cost`）、`cache stats/reset/clean`（→ `usage cache ...`）、`profile add/list/use/show/remove`（→ `config profile ...`）、`model test`（→ `doctor model`）、`bridge control`（→ `bridge on/off/status`）、`project init`（→ `project rules init`）、`mcp serve`（→ `python -m modelbridge.mcp.server`）。  
+> 已物理删除的别名（`No such command`）：`chat`（→ `ask`）、`cost estimate`（→ `usage cost`）、`cache stats/reset/clean`（→ `usage cache ...`）、`profile add/list/use/show/remove`（→ `config profile ...`）、`model test`（→ `doctor model`）、`model add`（→ `model init`）、`bridge control`（→ `bridge on/off/status`）、`project init`（→ `project rules init`）、`mcp serve`（→ `python -m modelbridge.mcp.server`）、`doctor route` / `route test`（路由验证套件，已随 v1.3 精简移除）、`weixin test`（→ `weixin status`）、`mcp ping`（→ `mcp list`）。  
 > **预算功能（`mbridge usage budget`）已在 2026-07 移除。**
 
 > **版本与自动更新**：REPL 启动时会显示当前版本，并在每天检查一次 GitHub
@@ -96,7 +95,7 @@ mbridge init
 
 # 2. 添加一个模型
 export DEEPSEEK_API_KEY=sk-xxx
-mbridge model init             # 选 DeepSeek → 输入 deepseek-chat
+mbridge model init             # 选 DeepSeek → 输入 deepseek-v4-flash
 
 # 3. 自检
 mbridge doctor
@@ -116,10 +115,10 @@ mbridge -m qwen-coder --cwd ~/my-project --allow-bash
 直接运行 `mbridge`，进入交互式会话 — 你可以连续输入指令，AI 一直保留上下文，可以主动调用工具读写文件。
 
 ```
-$ mbridge -m deepseek-chat
+$ mbridge -m deepseek-flash
 ┌─ mbridge ──────────────────────────────────────────────┐
 │ ModelBridge agent REPL                                 │
-│ model     : deepseek-chat                              │
+│ model     : deepseek-flash                             │
 │ cwd       : /home/me/my-project                        │
 │ tools     : list_dir, read_file, str_replace, write_file
 │ approval  : 每次询问                                   │
@@ -140,7 +139,7 @@ you: 帮我用 str_replace 修掉第二个
 
 you: /exit
 [bye]
-session saved → ~/.modelbridge/sessions/2026-05-23_153012_repl_deepseek-chat.json
+session saved → ~/.modelbridge/sessions/2026-05-23_153012_repl_deepseek-flash.json
 ```
 
 **特殊输入**：
@@ -207,9 +206,12 @@ mbridge ask -m qwen-vl "对比这两张图" --image a.png --image https://x/b.jp
 
 REPL 会话里：
 
+- **DeepSeek V4** (v4-flash / v4-pro)：wire 规则对齐 DeepSeek 官方 harness (deepseek-harness)——`thinking` 参数自动翻译为顶层 `thinking: {type: enabled|disabled}`，预算映射 `reasoning_effort` (high/max)；带 tool_calls 的历史轮回传 `reasoning_content`，纯文本轮自动省略以省 token；assistant `content` 永不为 `null`（否则 400）；空 tool 输出以 `(no output)` 占位。峰谷计价表已内置 (闲时半价)。
 - **MiMo** thinking + tool_calls：assistant 消息原样回传 (`reasoning_content` + `raw`)，不会被清洗，避免 400。
-- **Kimi / DeepSeek-reasoner** thinking 模型：`reasoning_content` 完整保留，多轮不丢。
+- **Kimi** thinking 模型：`reasoning_content` 完整保留，多轮不丢。
 - **Qwen 百炼**：`thinking` / `thinking_budget` 走 adapter 自动转换。
+- **豆包 (火山方舟)**：seed 系列默认深度思考，`/think off` 自动发送 `thinking:{type:disabled}`；model 别名与 ep- 接入点都可用。
+- **腾讯混元 / 百度文心 / 讯飞星火 / 阶跃 / 商汤**：专用适配器给出端点纠错与中文排查提示 (混元兼容端点 / 千帆 v2 / 星辰 MaaS / compatible-mode)。
 - **Ollama / vLLM / LM Studio**：本地模型若不支持 tools，会在第一次调用时报清晰错误而不是静默失败。
 
 ---
@@ -341,7 +343,7 @@ ModelBridge 的核心能力之一是：**简单任务自动用便宜 / 本地模
 
 | 模式 | 取舍 |
 |---|---|
-| `economy` | 尽量 tiny / cheap，失败再升级，偏好本地 / cache 友好模型 |
+| `economy` | 尽量 tiny / cheap，失败再升级 |
 | `balanced` | **默认** — 普通问 cheap、代码 coder、复杂 agent，失败 fallback expert |
 | `powerful` | 代码直接 coder/agent，架构直接 expert，少考虑成本 |
 
@@ -351,7 +353,6 @@ ModelBridge 的核心能力之一是：**简单任务自动用便宜 / 本地模
 mbridge route "帮我修复这个项目里的登录 bug" --mode economy   # → cheap
 mbridge route "帮我修复这个项目里的登录 bug" --mode balanced  # → coder
 mbridge route "帮我修复这个项目里的登录 bug" --mode powerful  # → agent
-mbridge route test                                            # 8 题套件
 ```
 
 ### 3. 自动调用：`ask --route` / `ask --auto`
@@ -381,11 +382,11 @@ mbridge ask "..." --route --mode powerful --fallback
 
 ```yaml
 pricing:
-  deepseek-chat:
-    input_per_1m: 0.27
-    output_per_1m: 1.10
-    currency: USD
-    cache_hit_input_per_1m: 0.027
+  deepseek-v4-flash:        # DeepSeek V4 峰谷计价，此处为高峰价，闲时半价
+    input_per_1m: 3.0
+    output_per_1m: 9.0
+    currency: CNY
+    cache_hit_input_per_1m: 0.1
 ```
 
 ### 5. 预算守卫
@@ -398,7 +399,7 @@ pricing:
 
 ### 6. 缓存命中率与固定前缀
 
-`cache/prompt_builder.py` 提供 `PromptBuilder` —— **固定段顺序**是 prefix-cache 命中的关键：
+`prompt/builder.py` 提供 `PromptBuilder` —— **固定段顺序**是 prefix-cache 命中的关键：
 
 ```
 1. system_prompt
@@ -409,9 +410,20 @@ pricing:
 6. user_query   ← 唯一变化的段，放最后
 ```
 
-为什么重要：provider 的 prefix cache 按消息前缀匹配，一旦你今天把 system 放第 1、明天放第 3，所有累积的缓存都失效。`PromptBuilder` 强制顺序，并对稳定段输出一个确定性 hash（v0.4 接到请求层时直接当 cache key 用）。
+为什么重要：provider 的 prefix cache 按消息前缀匹配，一旦你今天把 system 放第 1、明天放第 3，所有累积的缓存都失效。`PromptBuilder` 强制顺序，并对稳定段输出一个确定性 hash。
 
 不要做：把时间戳放最前；把 user 问题塞进 system；每次随机重排 tool 列表。
+
+#### 缓存域与模型切换 (cache affinity)
+
+前缀缓存按**「厂商 × 模型」隔离**（DeepSeek 官方 harness 的明确表述：*changing the provider or model selects a different cache domain*）。这意味着：
+
+- **切模型 = 换缓存域**。同厂商 flash↔pro 也不共享缓存；跨厂商更是完全冷启动。`/model` 切换时会给出缓存域提示。
+- **历史保留不影响新域**——切换后原模型的缓存域仍在，切回去即可恢复命中。
+- **`--route` / `--fallback` 现在走同一套 PromptBuilder 稳定前缀**（与 REPL / `ask` 字节一致），路由请求不再绕过前缀缓存；升级重试只换模型、消息不变。
+- **按模型遥测**：`mbridge usage cache stats` 与 `/api/usage/cache` 输出 per-model 命中表（命中率 / 节省 token / 节省金额），模型切换的代价直接可见；节省金额优先用厂商真实缓存命中价（`cache_hit_input_per_1m`）计算。
+- **可选预热**：`cache.warmup_on_switch: true`（默认关）在 `/model` 切换后用后台 `max_tokens=4` 请求预填新缓存域——省的是下一轮首 token 延迟，不是钱（前缀总要以 miss 价付一次）。
+- **缓存键（opt-in）**：对声明了 `extra.cache_key_field` 的模型（如 OpenAI 风格的 `prompt_cache_key` 自定义网关），ModelBridge 会把由 `stable_prefix_hash` 派生的键（`mb-<sha256[:24]>`，跨会话/跨模型切换稳定）注入请求体；`cache.affinity_key: false` 可全局关闭。DeepSeek 线规**没有**请求体缓存键字段，因此不注入。
 
 ### 7. 本地模型 = 0 成本
 
@@ -673,7 +685,7 @@ ModelBridge **优先遵守项目规则文件**。项目规则文件越清楚，A
 
 ```bash
 # CLI 模式
-mbridge project rules init --path . --model deepseek-chat
+mbridge project rules init --path . --model deepseek-flash
 
 # REPL 模式 (mbridge 进 REPL 后)
 > /init           # AI 扫描项目并生成 AGENT.md，写前给预览

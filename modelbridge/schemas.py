@@ -108,7 +108,8 @@ class ChatRequest(BaseModel):
     # Cross-provider knobs. Adapters translate these per provider:
     #   Qwen   → extra_body.enable_thinking / thinking_budget
     #   Kimi   → server-side via model name (kimi-k1 vs kimi-k1-thinking)
-    #   DeepSeek → server-side via model name (deepseek-reasoner)
+    #   DeepSeek → top-level thinking: {type: enabled|disabled} +
+    #              reasoning_effort (high|max; budget-mapped, see DeepSeekProvider)
     #   MiMo   → server-side
     thinking: bool | None = None
     thinking_budget: int | None = None
@@ -116,6 +117,14 @@ class ChatRequest(BaseModel):
     # Anything provider-specific that the user (or upstream caller) wants to
     # pass through verbatim. Adapters can override / merge keys here.
     extra_body: dict[str, Any] = Field(default_factory=dict)
+
+    # Cache-affinity key derived from the stable prompt prefix (see
+    # modelbridge.cache.affinity). Injected into the request body ONLY on
+    # models that declare a field name via ``models.yaml extra.cache_key_field``
+    # (e.g. OpenAI-style ``prompt_cache_key`` endpoints). DeepSeek defines no
+    # body cache key — and each provider+model pair is its own cache domain —
+    # so the key is never sent there.
+    cache_key: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -142,33 +151,6 @@ class ChatResponse(BaseModel):
     provider: str | None = None
     finish_reason: str | None = None
     elapsed_ms: int = 0
-
-
-# ---------------------------------------------------------------------------
-# Capabilities
-# ---------------------------------------------------------------------------
-
-class ModelCapability(BaseModel):
-    """Capability matrix for a model.
-
-    This intentionally mirrors :class:`modelbridge.models.Capabilities` (the
-    config-layer flag set persisted in ``models.yaml``) but lives in the
-    provider layer where adapters consume a transport-facing copy. The two are
-    deliberately separate — see the project's known-debt notes; merging them
-    requires re-threading every provider import. v0.2 adds ``streaming``
-    (used by future server / agent stages).
-    """
-
-    tools: bool = False
-    # ``json`` intentionally shadows the deprecated pydantic ``BaseModel.json()``
-    # method — it's a capability flag exposed in configs as ``capabilities.json``.
-    json: bool = False  # type: ignore[assignment]
-    vision: bool = False
-    reasoning: bool = False
-    reasoning_content_back: bool = False
-    cache: bool = False
-    local: bool = False
-    streaming: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +200,5 @@ __all__ = [
     "text_of",
     "ChatRequest",
     "ChatResponse",
-    "ModelCapability",
     "ProviderError",
 ]

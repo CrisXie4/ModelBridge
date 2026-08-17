@@ -64,6 +64,7 @@ class Pricing:
 #
 # 2026-08 refresh: each entry below now cites the official vendor page it was
 # verified against (URLs in the per-section headers). Source legend:
+#   vendor-2026-08-17 — re-verified against the live vendor pricing page this sweep
 #   vendor-2026-08  — re-verified against the live vendor pricing page this sweep
 #   vendor-2026-07  — verified against vendor rate sheet 2026-07 (prior sweep)
 #   builtin / litellm-2026-07 — pre-existing, not re-verified this sweep
@@ -91,15 +92,35 @@ class Pricing:
 # current payable price ($0.30/$1.20) as the default; the pre-promo rate is
 # noted in the comment for reference.
 DEFAULT_PRICING: dict[str, Pricing] = {
-    # ---- DeepSeek (vendor 2026-08, USD) ----
-    "deepseek-v4-pro":    Pricing("USD", 0.435, 0.87, "vendor-2026-08",
-                                  cache_hit_input_per_1m=0.003625),
-    "deepseek-v4-flash":  Pricing("USD", 0.14,  0.28, "vendor-2026-08",
-                                  cache_hit_input_per_1m=0.0028),
+    # ---- DeepSeek (vendor 2026-08-17 峰谷计价, CNY; api-docs.deepseek.com) ----
+    # V4 全系正式版 2026-08-13 上线，新价 2026-08-17 00:00 生效。表里记录
+    # 高峰时段价（北京时间 9:00-12:00 / 14:00-18:00），闲时一律半价；缓存
+    # 命中输入单独计价。旧 USD 预览价 ($0.435/$0.87) 已作废。
+    "deepseek-v4-pro":    Pricing("CNY", 9.0,  27.0, "vendor-2026-08-17",
+                                  cache_hit_input_per_1m=0.30),   # 闲时 0.15/4.5/13.5
+    "deepseek-v4-flash":  Pricing("CNY", 3.0,  9.0,  "vendor-2026-08-17",
+                                  cache_hit_input_per_1m=0.10),   # 闲时 0.05/1.5/4.5
 
-    # ---- 腾讯混元 (vendor sheet 2026-07, CNY) ----
-    "hy3-preview":        Pricing("CNY", 1.2, 4.0, "vendor-2026-07",
-                                  cache_hit_input_per_1m=0.4),
+    # ---- 字节豆包 / 火山方舟 (builtin best-effort, CNY；官方价以
+    #      docs.volcengine.com/docs/82379/1544106 为准) ----
+    # Seed-Evolving 为最新 Coding & Agent 旗舰 (输出价 ¥30/1M 见 AI Hub)。
+    "doubao-seed-evolving": Pricing("CNY", 8.0, 30.0, "builtin"),
+    # 官网快照列表价；限时促销价 0.48/1.92。
+    "doubao-seed-1.8":     Pricing("CNY", 5.76, 23.04, "builtin"),
+    # 证券时报报道的 1.6 定价。
+    "doubao-seed-1.6":     Pricing("CNY", 2.4, 24.0, "builtin"),
+
+    # ---- 百度文心 / 千帆 (builtin best-effort, CNY；以千帆价格文档为准) ----
+    "ernie-4.5-turbo-128k": Pricing("CNY", 0.8, 3.2, "builtin"),
+    "ernie-4.0-turbo-8k":   Pricing("CNY", 30.0, 90.0, "builtin"),  # 2024 挂牌价
+    "ernie-speed-128k":     Pricing("CNY", 0.0, 0.0, "builtin"),    # 免费档
+    "ernie-x1-turbo-32k":   Pricing("CNY", 1.0, 4.0, "builtin"),    # 推理系列
+
+    # ---- 腾讯混元 (vendor 2026-08, CNY) ----
+    # hy3 正式版 GA (快慢思考融合 MoE 295B/A21B)；TokenHub 闲时半价。
+    # preview 已被 GA 版替代并从价格表移除（windows 表保留兼容旧配置）。
+    "hy3":                Pricing("CNY", 1.0, 4.0, "vendor-2026-08",
+                                  cache_hit_input_per_1m=0.25),
 
     # ---- 智谱 GLM (vendor sheet 2026-07) ----
     "glm-5.2":            Pricing("CNY", 8.0,  28.0, "vendor-2026-07"),
@@ -150,7 +171,9 @@ DEFAULT_PRICING: dict[str, Pricing] = {
     # ---- Retained from earlier sweep (not on this sheet; still valid models) ----
     # Qwen / 百炼 — older tiers (prices unchanged, still callable)
     "qwen-plus-latest":   Pricing("CNY", 0.8,  2.0,  "builtin"),
+    "qwen3.6-plus":       Pricing("CNY", 0.8,  2.0,  "builtin"),  # 同 plus 档
     "qwen-max-latest":    Pricing("CNY", 2.4,  9.6,  "builtin"),
+    "qwen3-max":          Pricing("CNY", 2.4,  9.6,  "builtin"),  # 同 max 家族价
     "qwen3-coder-plus":   Pricing("CNY", 4.0, 16.0, "builtin"),
     "qwen3-coder-flash":  Pricing("CNY", 1.5,  6.0, "builtin"),
     # Kimi thinking family
@@ -171,15 +194,23 @@ def load_pricing_overrides() -> dict[str, Pricing]:
     surfaces parse errors separately). The expected structure is ::
 
         pricing:
-          deepseek-chat:
-            input_per_1m: 0.27
-            output_per_1m: 1.10
-            currency: USD
-            cache_hit_input_per_1m: 0.027
+          deepseek-v4-flash:
+            input_per_1m: 3.0
+            output_per_1m: 9.0
+            currency: CNY
+            cache_hit_input_per_1m: 0.1
+
+    Results are mtime-cached (see ``_PRICING_CACHE``); callers get a copy.
     """
+    global _PRICING_CACHE
     path = get_pricing_path()
-    if not path.exists():
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
         return {}
+    if _PRICING_CACHE is not None and _PRICING_CACHE[0] == key:
+        return dict(_PRICING_CACHE[1])
     try:
         with path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
@@ -208,7 +239,12 @@ def load_pricing_overrides() -> dict[str, Pricing]:
             )
         except (KeyError, TypeError, ValueError):
             continue
-    return out
+    _PRICING_CACHE = (key, out)
+    return dict(out)
+
+
+# mtime-keyed cache — this loader sits on the per-iteration cost path.
+_PRICING_CACHE: tuple[tuple[str, int, int], dict[str, Pricing]] | None = None
 
 
 def get_pricing(

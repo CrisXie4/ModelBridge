@@ -42,6 +42,11 @@ class ProviderType(str, Enum):
     GLM = "glm"
     MINIMAX = "minimax"
     HUNYUAN = "hunyuan"
+    DOUBAO = "doubao"
+    ERNIE = "ernie"
+    SPARK = "spark"
+    STEPFUN = "stepfun"
+    SENSENOVA = "sensenova"
     OLLAMA = "ollama"
     VLLM = "vllm"
     LMSTUDIO = "lmstudio"
@@ -192,17 +197,10 @@ class RoutingFallbackConfig(BaseModel):
     max_upgrade_steps: int = 2
 
 
-class RoutingRulesConfig(BaseModel):
-    prefer_local_for_tiny: bool = True
-    prefer_cache_supported: bool = True
-    prefer_low_cost: bool = True
-
-
 class RoutingConfig(BaseModel):
     mode: str = "balanced"
     levels: RoutingLevels = Field(default_factory=RoutingLevels)
     fallback: RoutingFallbackConfig = Field(default_factory=RoutingFallbackConfig)
-    rules: RoutingRulesConfig = Field(default_factory=RoutingRulesConfig)
 
     @field_validator("mode", mode="before")
     @classmethod
@@ -259,6 +257,15 @@ class ExecutorConfig(BaseModel):
 class CacheConfig(BaseModel):
     enabled: bool = True
     strategy: str = "stable-prefix"
+    # Send the derived per-prefix affinity key (ChatRequest.cache_key) on
+    # models that declare ``extra.cache_key_field``. No effect on models
+    # without such a field — DeepSeek has none, and there each provider+model
+    # pair is an independent cache domain.
+    affinity_key: bool = True
+    # After a mid-session /model switch, pre-fill the new cache domain with
+    # one background max_tokens-limited request. Off by default: it pre-pays
+    # one miss-priced pass over the prefix (the win is latency, not money).
+    warmup_on_switch: bool = False
 
 
 class PromptConfig(BaseModel):
@@ -278,6 +285,21 @@ class PromptConfig(BaseModel):
     use_agent_md: bool = True
     max_rules_chars: int = 20000
     inject_position: str = "before_user_request"
+    # AI inline completion (ghost text) in the REPL. Default on; users can
+    # disable it in config.yaml via ``prompt.ai_autocomplete: false``.
+    ai_autocomplete: bool = True
+    # Minimum idle time (ms) before firing an AI completion request. Lower =
+    # more responsive but more API calls.
+    ai_autocomplete_debounce_ms: int = 450
+    # Auto context compression: when session usage crosses the threshold,
+    # older history is summarized (by the same model) so the REPL can keep
+    # going without a manual /clear. Default on; disable in config.yaml via
+    # ``prompt.auto_compact: false``. Failures degrade gracefully and never
+    # break the REPL.
+    auto_compact: bool = True
+    auto_compact_threshold_pct: int = 80
+    auto_compact_keep_turns: int = 6
+    auto_compact_min_messages: int = 20
 
 
 # Current config.yaml schema version. Bump when a breaking structural change

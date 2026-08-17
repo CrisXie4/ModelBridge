@@ -17,6 +17,7 @@ the OpenAI spec.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -24,6 +25,7 @@ from typing import Any, Iterator
 
 import httpx
 
+from ..cache.affinity import sanitize_cache_key
 from ..error_hints import (
     classify_error_type,
     hint_for_exception,
@@ -35,7 +37,6 @@ from ..schemas import (
     ChatMessage,
     ChatRequest,
     ChatResponse,
-    ModelCapability,
     ProviderError,
 )
 from ..secrets import reveal
@@ -61,26 +62,6 @@ class BaseProvider(ABC):
         self.api_key = resolved
 
     # ------------------------------------------------------------------
-    # Capability helpers
-    # ------------------------------------------------------------------
-
-    def supports_capability(self, cap: str) -> bool:
-        return bool(getattr(self.entry.capabilities, cap, False))
-
-    def get_capabilities(self) -> ModelCapability:
-        c = self.entry.capabilities
-        return ModelCapability(
-            tools=c.tools,
-            json=c.json,
-            vision=c.vision,
-            reasoning=c.reasoning,
-            reasoning_content_back=c.reasoning_content_back,
-            cache=c.cache,
-            local=c.local,
-            streaming=getattr(c, "streaming", False),
-        )
-
-    # ------------------------------------------------------------------
     # Reachability
     # ------------------------------------------------------------------
 
@@ -92,8 +73,8 @@ class BaseProvider(ABC):
         """
         url = self.entry.base_url.rstrip("/")
         try:
-            with httpx.Client(timeout=timeout) as client:
-                resp = client.get(f"{url}/models", headers=self.build_headers())
+            client = _shared_http_client(url)
+            resp = client.get(f"{url}/models", headers=self.build_headers(), timeout=timeout)
             if resp.status_code < 500:
                 return True, f"GET /models → {resp.status_code}"
             return False, f"GET /models → {resp.status_code}"
@@ -144,6 +125,19 @@ class BaseProvider(ABC):
         # per-request extras override
         for k, v in (request.extra_body or {}).items():
             body[k] = v
+        # Cache-affinity key: injected only on models that name a body field
+        # via ``extra.cache_key_field`` (e.g. OpenAI-style ``prompt_cache_key``
+        # custom endpoints). Explicit values merged above always win.
+        # DeepSeek deliberately declares none — its wire format has no body
+        # cache key and every provider+model pair is its own cache domain.
+        cache_field = (self.entry.extra or {}).get("cache_key_field")
+        if (
+            cache_field
+            and isinstance(cache_field, str)
+            and request.cache_key
+            and cache_field not in body
+        ):
+            body[cache_field] = sanitize_cache_key(request.cache_key)
         return body
 
     def _serialize_message(self, m: ChatMessage) -> dict[str, Any]:
@@ -281,8 +275,11 @@ class HTTPProvider(BaseProvider):
         error_dict: dict[str, Any] | None = None
         try:
             try:
-                with httpx.Client(timeout=timeout) as client:
-                    resp = client.post(endpoint, headers=headers, json=body)
+                # Pooled client: reuses the TCP+TLS connection across turns
+                # (a per-call Client paid a full handshake every request —
+                # 100-300ms of pure latency on cn endpoints).
+                client = _shared_http_client(endpoint)
+                resp = client.post(endpoint, headers=headers, json=body, timeout=timeout)
             except httpx.HTTPError as exc:
                 err = self.normalize_error(exc=exc)
                 error_dict = err.to_dict()
@@ -356,50 +353,88 @@ class HTTPProvider(BaseProvider):
         acc = _StreamAccumulator(model_default=self.entry.model, provider=self.name)
         start = time.perf_counter()
 
+        client = _shared_http_client(endpoint)
         try:
-            client = httpx.Client(timeout=timeout)
+            stream_cm = client.stream(
+                "POST", endpoint, headers=headers, json=body, timeout=timeout
+            )
         except httpx.HTTPError as exc:
             raise self.normalize_error(exc=exc) from exc
 
-        try:
+        with stream_cm as resp:
+            if resp.status_code >= 400:
+                body_text = resp.read().decode("utf-8", errors="replace")
+                raise self.normalize_error(status_code=resp.status_code, body=body_text)
+
             try:
-                stream_cm = client.stream("POST", endpoint, headers=headers, json=body)
+                for raw_line in resp.iter_lines():
+                    line = raw_line if isinstance(raw_line, str) else raw_line.decode("utf-8", errors="replace")
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith(":"):  # SSE keep-alive comment
+                        continue
+                    if line.startswith("data:"):
+                        line = line[5:].lstrip()
+                    if line == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        # Some servers send mid-stream warnings on
+                        # their own lines; tolerate and move on.
+                        continue
+                    for ev in acc.consume(chunk):
+                        yield ev
             except httpx.HTTPError as exc:
                 raise self.normalize_error(exc=exc) from exc
 
-            with stream_cm as resp:
-                if resp.status_code >= 400:
-                    body_text = resp.read().decode("utf-8", errors="replace")
-                    raise self.normalize_error(status_code=resp.status_code, body=body_text)
-
-                try:
-                    for raw_line in resp.iter_lines():
-                        line = raw_line if isinstance(raw_line, str) else raw_line.decode("utf-8", errors="replace")
-                        line = line.strip()
-                        if not line:
-                            continue
-                        if line.startswith(":"):  # SSE keep-alive comment
-                            continue
-                        if line.startswith("data:"):
-                            line = line[5:].lstrip()
-                        if line == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(line)
-                        except json.JSONDecodeError:
-                            # Some servers send mid-stream warnings on
-                            # their own lines; tolerate and move on.
-                            continue
-                        for ev in acc.consume(chunk):
-                            yield ev
-                except httpx.HTTPError as exc:
-                    raise self.normalize_error(exc=exc) from exc
-
-        finally:
-            client.close()
-
         acc.elapsed_ms = int((time.perf_counter() - start) * 1000)
         yield StreamEvent(kind="done", response=acc.to_response())
+
+
+# ---------------------------------------------------------------------------
+# Shared connection pool
+# ---------------------------------------------------------------------------
+
+# One httpx.Client per request origin (scheme+host+port), shared by every
+# provider adapter and call site (chat / stream / health / warm-up). httpx
+# clients are thread-safe and keep-alive their connections, so consecutive
+# turns to the same vendor reuse the TLS session instead of re-handshaking.
+# Keyed by origin — never by API key — because connections are not
+# authenticated state; the Authorization header travels per request.
+_CLIENT_POOL: dict[tuple[str, str, int], httpx.Client] = {}
+_CLIENT_POOL_LOCK = threading.Lock()
+# Generous idle keep-alive: REPL turns can be minutes apart, and a closed
+# idle connection is silently re-established by httpx anyway.
+_POOL_TIMEOUTS = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
+_POOL_LIMITS = httpx.Limits(max_connections=32, max_keepalive_connections=16)
+
+
+def _shared_http_client(url: str) -> httpx.Client:
+    try:
+        u = httpx.URL(url)
+        key = (u.scheme, u.host, u.port or (443 if u.scheme == "https" else 80))
+    except Exception:
+        key = ("", url, 0)
+    with _CLIENT_POOL_LOCK:
+        client = _CLIENT_POOL.get(key)
+        if client is None:
+            client = httpx.Client(timeout=_POOL_TIMEOUTS, limits=_POOL_LIMITS)
+            _CLIENT_POOL[key] = client
+        return client
+
+
+def close_shared_http_clients() -> None:
+    """Tear the pool down (tests / embedding callers); the REPL never calls this."""
+    with _CLIENT_POOL_LOCK:
+        clients = list(_CLIENT_POOL.values())
+        _CLIENT_POOL.clear()
+    for c in clients:
+        try:
+            c.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

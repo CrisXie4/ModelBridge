@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Pulse, FolderOpen, ListChecks } from "@phosphor-icons/react";
 import { api, SessionLive } from "@/lib/api";
 
 const POLL_MS = 2000;
@@ -45,15 +46,19 @@ export default function ActivityPage() {
   }, []);
 
   return (
-    <div>
-      <h1 className="page-title">Agent 活动</h1>
-      <p className="page-sub">
-        正在运行的 <span className="mono">mbridge</span> REPL 实时状态 ——
-        上下文用量、当前主题、AI 的待办计划。每 {POLL_MS / 1000} 秒刷新。
-      </p>
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">Agent 活动</h1>
+          <p className="page-sub">
+            正在运行的 <code>mbridge</code> REPL 实时状态，每 {POLL_MS / 1000}{" "}
+            秒刷新。
+          </p>
+        </div>
+      </div>
 
       {error ? (
-        <div className="card" style={{ borderColor: "#e5484d" }}>
+        <div className="card" style={{ borderColor: "var(--mb-err)" }}>
           连接失败：{error}
         </div>
       ) : !data ? (
@@ -103,8 +108,8 @@ function StatusHeader({ data }: { data: SessionLive }) {
   const rel = data.updated_at ? relativeTime(data.age_seconds) : null;
 
   return (
-    <div className="card" style={{ marginBottom: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+    <div className="card" style={{ marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
         <span
           className={`status-dot ${data.status}`}
           title={statusMeta.label}
@@ -137,7 +142,7 @@ function StatusHeader({ data }: { data: SessionLive }) {
       </div>
       {data.cwd && (
         <div className="cwd-line mono" title={data.cwd}>
-          📁 {data.cwd}
+          <FolderOpen size={12} style={{ verticalAlign: -1.5 }} /> {data.cwd}
         </div>
       )}
     </div>
@@ -162,8 +167,7 @@ function ContextBar({
   msgs: number;
 }) {
   const pctClamped = Math.min(100, Math.max(0, pct));
-  const grade =
-    pct < 50 ? "ok" : pct < 80 ? "warn" : "critical";
+  const grade = pct < 50 ? "ok" : pct < 80 ? "warn" : "critical";
   const color = GRADE_COLOR[grade];
 
   return (
@@ -204,7 +208,7 @@ function TodoHeader({
   return (
     <div className="todo-head">
       <h2 className="card-title" style={{ margin: 0 }}>
-        待办计划
+        <ListChecks size={14} className="icon" /> 待办计划
       </h2>
       {total > 0 ? (
         <div className="todo-meta">
@@ -226,7 +230,9 @@ function TodoList({ todos }: { todos: SessionLive["todos"] }) {
   if (todos.length === 0) {
     return (
       <div className="empty">
-        <div className="empty-icon">✦</div>
+        <div className="empty-icon">
+          <ListChecks size={20} />
+        </div>
         <div className="empty-title">AI 还没有写下计划</div>
         <div className="empty-hint">
           在 REPL 里让 AI 处理一个多步任务，它会用 <code>todo</code> 工具拆解
@@ -275,8 +281,8 @@ function OfflineCard() {
   return (
     <div className="card">
       <div className="empty">
-        <div className="empty-icon" style={{ color: "#8b93a7" }}>
-          ○
+        <div className="empty-icon">
+          <Pulse size={20} />
         </div>
         <div className="empty-title">没有正在运行的 REPL</div>
         <div className="empty-hint">
@@ -312,15 +318,15 @@ const STATUS_META: Record<
   string,
   { label: string; color: string }
 > = {
-  idle: { label: "空闲", color: "#3fb950" },
-  working: { label: "处理中", color: "#d29922" },
-  offline: { label: "离线", color: "#8b93a7" },
+  idle: { label: "空闲", color: "#46c07a" },
+  working: { label: "处理中", color: "#e0b45c" },
+  offline: { label: "离线", color: "#6d7a90" },
 };
 
 const GRADE_COLOR: Record<string, string> = {
-  ok: "#3fb950",
-  warn: "#d29922",
-  critical: "#e5484d",
+  ok: "#46c07a",
+  warn: "#e0b45c",
+  critical: "#f0565c",
 };
 
 const TODO_MARK: Record<string, string> = {
@@ -342,259 +348,3 @@ function relativeTime(s: number | null): string {
   if (s < 3600) return `${Math.round(s / 60)}分钟前`;
   return `${Math.round(s / 3600)}小时前`;
 }
-
-// ---------------------------------------------------------------------------
-// 局部样式
-// ---------------------------------------------------------------------------
-
-<style jsx>{`
-  .status-dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    flex-shrink: 0;
-    background: ${STATUS_META.idle.color};
-    position: relative;
-  }
-  .status-dot.working {
-    background: ${STATUS_META.working.color};
-    box-shadow: 0 0 10px ${STATUS_META.working.color}aa;
-  }
-  .status-dot.working::after {
-    content: "";
-    position: absolute;
-    inset: -4px;
-    border-radius: 50%;
-    border: 2px solid ${STATUS_META.working.color};
-    animation: pulse 1.2s ease-out infinite;
-  }
-  @keyframes pulse {
-    0% {
-      opacity: 0.6;
-      transform: scale(0.7);
-    }
-    100% {
-      opacity: 0;
-      transform: scale(1.9);
-    }
-  }
-  .status-label {
-    font-size: 16px;
-    font-weight: 700;
-  }
-  .topic {
-    margin-top: 6px;
-    font-size: 14px;
-    color: var(--mb-text);
-    line-height: 1.5;
-    word-break: break-word;
-  }
-  .topic-kicker {
-    display: inline-block;
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--mb-muted);
-    margin-right: 8px;
-    padding: 1px 6px;
-    border: 1px solid var(--mb-border);
-    border-radius: 4px;
-    vertical-align: middle;
-  }
-  .rel-time {
-    font-size: 12px;
-    color: var(--mb-muted);
-    font-variant-numeric: tabular-nums;
-    flex-shrink: 0;
-    white-space: nowrap;
-  }
-  .cwd-line {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid var(--mb-border);
-    font-size: 12px;
-    color: var(--mb-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .ctx-track {
-    height: 10px;
-    background: var(--mb-bg);
-    border: 1px solid var(--mb-border);
-    border-radius: 6px;
-    overflow: hidden;
-    margin-bottom: 10px;
-  }
-  .ctx-fill {
-    height: 100%;
-    border-radius: 5px;
-    transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-    background: ${GRADE_COLOR.ok};
-  }
-  .ctx-fill.warn {
-    background: ${GRADE_COLOR.warn};
-  }
-  .ctx-fill.critical {
-    background: ${GRADE_COLOR.critical};
-  }
-  .ctx-meta {
-    display: flex;
-    gap: 20px;
-    flex-wrap: wrap;
-    font-size: 13px;
-    align-items: baseline;
-  }
-  .ctx-pct {
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-  }
-  .todo-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 12px;
-    flex-wrap: wrap;
-  }
-  .todo-meta {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
-  .todo-pct {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--mb-muted);
-    margin-left: 4px;
-    font-variant-numeric: tabular-nums;
-  }
-  :global(.todo-list) {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-  }
-  .todo-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 4px;
-    border-bottom: 1px solid var(--mb-border);
-    font-size: 13px;
-  }
-  .todo-item:last-child {
-    border-bottom: none;
-  }
-  .todo-mark {
-    width: 18px;
-    text-align: center;
-    font-weight: 700;
-    flex-shrink: 0;
-    color: var(--mb-muted);
-  }
-  .todo-item.in_progress .todo-mark {
-    color: var(--mb-accent);
-  }
-  .todo-item.done .todo-mark {
-    color: #3fb950;
-  }
-  .todo-content {
-    flex: 1;
-    min-width: 0;
-    word-break: break-word;
-  }
-  .todo-item.done .todo-content {
-    color: var(--mb-muted);
-    text-decoration: line-through;
-  }
-  .todo-id {
-    font-size: 11px;
-    color: var(--mb-muted);
-    font-variant-numeric: tabular-nums;
-    flex-shrink: 0;
-  }
-  .empty {
-    text-align: center;
-    padding: 32px 16px;
-  }
-  .empty-icon {
-    font-size: 28px;
-    margin-bottom: 12px;
-  }
-  .empty-title {
-    font-size: 15px;
-    font-weight: 600;
-    margin-bottom: 6px;
-  }
-  .empty-hint {
-    font-size: 13px;
-    color: var(--mb-muted);
-    max-width: 440px;
-    margin: 0 auto 14px;
-    line-height: 1.6;
-  }
-  .empty-example,
-  :global(code) {
-    background: var(--mb-bg);
-    border: 1px solid var(--mb-border);
-    border-radius: 6px;
-    padding: 2px 7px;
-    font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
-    font-size: 12px;
-  }
-  .empty-example {
-    display: inline-block;
-    padding: 6px 14px;
-  }
-  .skeleton {
-    min-height: 80px;
-  }
-  .sk-line {
-    height: 14px;
-    background: linear-gradient(
-      90deg,
-      var(--mb-border) 25%,
-      rgba(255, 255, 255, 0.06) 50%,
-      var(--mb-border) 75%
-    );
-    background-size: 200% 100%;
-    animation: shimmer 1.4s ease-in-out infinite;
-    border-radius: 5px;
-    margin-bottom: 10px;
-  }
-  .sk-lg {
-    width: 45%;
-    height: 20px;
-  }
-  .sk-md {
-    width: 70%;
-  }
-  .sk-sm {
-    width: 30%;
-  }
-  .sk-track {
-    height: 10px;
-    border-radius: 6px;
-    background: var(--mb-bg);
-    border: 1px solid var(--mb-border);
-    margin-bottom: 10px;
-  }
-  @keyframes shimmer {
-    0% {
-      background-position: 200% 0;
-    }
-    100% {
-      background-position: -200% 0;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .status-dot.working::after,
-    .sk-line {
-      animation: none;
-    }
-    .ctx-fill {
-      transition: none;
-    }
-  }
-`}</style>

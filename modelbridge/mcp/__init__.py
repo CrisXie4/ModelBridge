@@ -10,7 +10,7 @@ Public facade. Typical wiring from the CLI / agent REPL::
     ...
     manager.shutdown()
 
-See ``docs/mcp-architecture.md`` for the full design. Implemented: M0–M7 —
+See ``docs/architecture/mcp-architecture.md`` for the full design. Implemented: M0–M7 —
 stdio + Streamable HTTP transports, handshake + discovery, tool calls,
 resources, prompts, multi-server governance and failure isolation, reconnect
 backoff + heartbeat + ``list_changed`` hot refresh, runtime server toggling

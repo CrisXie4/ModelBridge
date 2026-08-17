@@ -166,9 +166,14 @@ def tool_call(*, id: str, request_id: str, name: str, args: dict[str, Any]) -> d
 
 
 def approval(
-    *, id: str, request_id: str, tool: str, summary: str, detail: str = ""
+    *, id: str, request_id: str, tool: str, summary: str, detail: str = "",
+    reason: str = "",
 ) -> dict[str, Any]:
-    """Ask the side panel to confirm a mutating action."""
+    """Ask the side panel to confirm a mutating action.
+
+    ``reason`` is the LLM's justification for the action (shown on the card so
+    the user understands *why* the model wants to click/fill/navigate/inject).
+    """
     return {
         "type": T_APPROVAL,
         "id": id,
@@ -176,6 +181,7 @@ def approval(
         "tool": tool,
         "summary": summary,
         "detail": detail,
+        "reason": reason,
     }
 
 

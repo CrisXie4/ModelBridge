@@ -3,7 +3,6 @@
 * ``mbridge weixin login``     — 扫码登录 iLink Bot，拿到 bot_token 写入 ~/.modelbridge/weixin.json
 * ``mbridge weixin status``    — 查看登录状态
 * ``mbridge weixin logout``    — 清除凭据
-* ``mbridge weixin test``      — 快速 ping 一次 iLink，确认凭据有效
 
 * ``mbridge gateway``          — 启动微信网关（默认），或 ``mbridge gateway --channel bridge`` 跑浏览器侧边栏
 * ``mbridge gateway gui``      — 浏览器侧边栏模式别名
@@ -72,7 +71,7 @@ def _render_qrcode(data: str) -> bool:
 
 weixin_app = typer.Typer(
     name="weixin",
-    help="微信 iLink Bot 通道：login / status / logout / test。",
+    help="微信 iLink Bot 通道：login / status / logout。",
     no_args_is_help=True,
 )
 
@@ -220,28 +219,6 @@ def cmd_logout() -> None:
     """清除微信凭据。"""
     clear_credentials()
     console.print("[green]✓ 微信凭据已清除[/green]")
-
-
-@weixin_app.command("test")
-def cmd_test() -> None:
-    """快速 ping 一次 iLink，确认凭据可用。"""
-    from .client import WeixinClient, WeixinError
-    creds = load_credentials()
-    if not creds:
-        err_console.print("[red]未登录。先 `mbridge weixin login`。[/red]")
-        raise typer.Exit(code=2)
-    cli = WeixinClient(
-        bot_token=creds.get("bot_token", ""),
-        bot_id=creds.get("ilink_bot_id"),
-        user_id=creds.get("ilink_user_id"),
-        baseurl=creds.get("baseurl"),
-    )
-    try:
-        cfg = cli.get_config()
-    except WeixinError as e:
-        err_console.print(f"[red]连接失败：{e}[/red]")
-        raise typer.Exit(code=1) from e
-    console.print(f"[green]✓ 连接正常[/green]\n  {cfg}")
 
 
 __all__ = ["weixin_app"]

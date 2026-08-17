@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from ..cache.affinity import session_cache_key
 from ..client import get_model_entry
 from ..providers import ProviderError, get_provider
 from ..schemas import ChatRequest, ChatResponse
@@ -82,6 +83,10 @@ def run_agent_turn(
             max_tokens=(entry.extra or {}).get("max_tokens"),
             thinking=thinking,
             thinking_budget=thinking_budget,
+            # Stable per-prefix affinity key: survives /model switches
+            # (dropped by adapters unless the model opts in via
+            # extra.cache_key_field).
+            cache_key=session_cache_key(session),
         )
 
         if on_assistant_start is not None:
@@ -318,6 +323,16 @@ def run_interactive(
 
         if on_turn_done is not None:
             on_turn_done()
+
+        # Auto context compression — give the next turn headroom when usage
+        # crosses the configured threshold. Self-contained: reads config,
+        # measures usage, summarises older history, and notifies via
+        # on_system. Never raises (see maybe_auto_compact).
+        from .compact import maybe_auto_compact
+
+        maybe_auto_compact(
+            session, model_name=_active_model, on_system=on_system
+        )
 
 
 def _stream_one(
