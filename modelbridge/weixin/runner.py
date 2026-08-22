@@ -87,7 +87,7 @@ class WeixinGateway:
         allow_bash: bool = True,        # 微信通道用户期望「能控制电脑」
         approval_mode: str = "auto",   # auto | yes | reject-unsafe
         cwd: Path | None = None,
-        max_iters: int = 20,
+        max_iters: int | None = None,   # None = 不限制（默认）
         idle_gc_seconds: int = 1800,
     ) -> None:
         self.model_name = model_name

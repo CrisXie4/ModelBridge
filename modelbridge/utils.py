@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import tempfile
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -231,8 +232,9 @@ def llm_safety_judge(
     identical across channels, so they live in exactly one place.
 
     Returns ``(is_safe, judge_reason)``. On any failure (no model available,
-    provider error, timeout) returns ``(False, reason)`` so callers fail
-    closed to manual approval — never auto-approve on a judge error.
+    provider error, timeout, unparseable verdict) returns ``(False, reason)``
+    so callers fail closed to manual approval — never auto-approve on a
+    judge error.
     """
     try:
         from .providers import get_provider
@@ -241,13 +243,16 @@ def llm_safety_judge(
 
         reason_line = f"\n意图: {reason}" if reason else ""
         prompt = (
-            f"判断以下浏览器操作是否安全可自动同意。先给出理由，再给出结论"
-            f"「安全」或「不安全」。\n"
+            f"判断以下浏览器操作是否安全可自动同意。\n"
             f"工具: {tool}\n操作: {summary}{reason_line}\n详情: {detail[:300]}\n\n"
             f"判定「安全」的标准：后果可控可撤销，或属于常规低风险操作"
             f"（清缓存、关弹窗、取消订阅、登出、滚动、筛选、展开折叠、翻页、"
             f"同意 cookie 等）。涉及支付/转账/删除账户/提交订单/修改密码/"
-            f"发送消息/同意条款 → 「不安全」。"
+            f"发送消息/同意条款 → 「不安全」。\n\n"
+            f"先用一两句话给理由，最后一行严格按此格式输出结论，不要加别的字：\n"
+            f"结论：安全\n"
+            f"或\n"
+            f"结论：不安全\n"
         )
 
         cfg = load_app_config()
@@ -271,8 +276,34 @@ def llm_safety_judge(
             timeout=15.0,
         )
         content = resp.content or ""
-        is_safe = "安全" in content and "不安全" not in content
         judge_reason = content.strip() if len(content) <= 200 else content.strip()[:200] + "…"
+        is_safe, matched = _parse_safety_verdict(content)
+        if not matched:
+            return False, f"(判定格式异常，保守判不安全: {judge_reason})"
         return is_safe, judge_reason
     except Exception as e:
         return False, f"(AI 判断失败，保守判不安全: {e})"
+
+
+def _parse_safety_verdict(content: str) -> tuple[bool, bool]:
+    """Extract the judge's verdict from its reply. Returns ``(is_safe, matched)``.
+
+    Only the structured ``结论：安全/不安全`` line counts — the reasoning
+    above it naturally restates the unsafe categories ("不涉及支付等不安全
+    操作"), so substring checks over the whole reply always saw "不安全" and
+    every verdict failed. We take the LAST ``结论`` line; without one we
+    fall back to the reply's last non-empty line, and only recognise it when
+    it *ends* with the bare verdict word. Anything ambiguous → not matched
+    (caller fails closed).
+    """
+    matches = re.findall(r"结论\s*[：:]\s*(不安全|安全)", content)
+    if matches:
+        return matches[-1] == "安全", True
+    lines = [ln.strip() for ln in content.strip().splitlines() if ln.strip()]
+    if lines:
+        last = lines[-1].rstrip("。.!！?？ ")
+        if last.endswith("不安全"):
+            return False, True
+        if last.endswith("安全"):
+            return True, True
+    return False, False

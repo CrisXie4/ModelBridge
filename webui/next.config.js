@@ -14,8 +14,13 @@ const nextConfig = {
   },
 };
 
-// 可选：静态导出（MBRIDGE_STATIC=1 next build）让 FastAPI 单端口托管。
-if (process.env.MBRIDGE_STATIC === "1") {
+// 静态导出（供 FastAPI 单端口托管）：`MBRIDGE_STATIC=1 next build`，或直接
+// `npm run build:static`（跨平台 —— npm 会把脚本名放进 npm_lifecycle_event，
+// 免去 Windows 下 set/$env: 设环境变量的麻烦）。产物写入 webui/out。
+if (
+  process.env.MBRIDGE_STATIC === "1" ||
+  process.env.npm_lifecycle_event === "build:static"
+) {
   nextConfig.output = "export";
 }
 

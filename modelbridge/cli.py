@@ -109,7 +109,6 @@ from .agent.ui import (
     render_context_panel,
     render_reasoning_meter,
     render_tool_bubble,
-    render_user_bubble,
 )
 from .utils import (
     get_app_dir,
@@ -320,9 +319,9 @@ def cmd_gateway(
         help="（weixin 通道）审批模式：auto (默认，LLM 安全判断) / yes "
              "(全部放行) / reject-unsafe (高危直接拒)。",
     ),
-    max_iters: int = typer.Option(
-        20, "--max-iters",
-        help="（weixin 通道）单轮 agent 最大工具调用次数。",
+    max_iters: Optional[int] = typer.Option(
+        None, "--max-iters",
+        help="（weixin 通道）单轮 agent 最大工具轮次 (默认不限制；仅作防死循环保险)。",
     ),
 ) -> None:
     """启动网关：长轮询微信消息 → 喂给 agent → 回复发回微信。
@@ -367,7 +366,7 @@ def cmd_gateway(
         f"工作区  : {Path.cwd()}\n"
         f"bash    : {'允许' if allow_bash else '禁用'}\n"
         f"审批    : {approval}\n"
-        f"max_iters: {max_iters}",
+        f"max_iters: {'不限' if max_iters is None else max_iters}",
         title="ModelBridge 网关", border_style="cyan",
     ))
     code = gw.run()
@@ -400,12 +399,13 @@ def _root(
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="自动同意全部 write/edit/bash 操作。"),
     allow_bash: bool = typer.Option(
-        False, "--allow-bash",
-        help="启用 run_bash 工具。默认关闭。即使启用，每条命令仍会请求确认 (除非加 --yes)。",
+        True, "--allow-bash/--no-allow-bash",
+        help="启用 run_bash 工具。默认开启，与微信通道一致；首次使用会请求确认，"
+             "选 always 后本会话不再询问 (加 --yes 则全自动)。",
     ),
-    max_iters: int = typer.Option(
-        20, "--max-iters",
-        help="单轮 user 输入内 tool_call 的最多次数 (避免无限循环)。",
+    max_iters: Optional[int] = typer.Option(
+        None, "--max-iters",
+        help="单轮内 agent 循环轮次上限 (默认不限制；仅作防死循环保险)。",
     ),
     save_session: bool = typer.Option(
         True, "--save/--no-save",
@@ -438,7 +438,7 @@ def _run_repl(
     cwd: Optional[Path],
     yes: bool,
     allow_bash: bool,
-    max_iters: int,
+    max_iters: Optional[int],
     save_session: bool,
     system: Optional[str],
     timeout: float,
@@ -597,9 +597,18 @@ def _run_repl(
     registry.register(TodoTool(todo_store))
 
     # Computer control tools: mouse, keyboard, screenshot, and inject_js.
-    from .agent.tools.computer_control_tools import build_computer_registry
-    for tool in build_computer_registry().tools.values():
-        registry.register(tool)
+    # Only offered when pyautogui is actually importable — registering tools
+    # that can only fail ("pyautogui 未安装") invites the model to flail with
+    # hotkey/click attempts instead of using the tools it really has.
+    try:
+        import pyautogui  # noqa: F401
+
+        from .agent.tools.computer_control_tools import build_computer_registry
+
+        for tool in build_computer_registry().tools.values():
+            registry.register(tool)
+    except Exception:
+        pass
 
     browser_bridge = RemoteBrowserBridge()
     agent_ctx.browser_bridge = browser_bridge
@@ -1031,9 +1040,9 @@ def _run_repl(
     }
 
     def on_user_echo(text: str) -> None:
-        # Render the user input as a right-aligned green bubble so the
-        # transcript looks like a chat.
-        render_user_bubble(console, text)
+        # NOTE: no re-echo of the input here. The prompt line itself already
+        # leaves what the user typed in scrollback; a second right-aligned
+        # bubble printed the same text twice every turn.
         live_writer.set_topic(text)
         live_writer.flush(status="working")
 
@@ -1082,11 +1091,17 @@ def _run_repl(
         # Provider-reported cache hit/miss → ``mbridge cache stats``.
         # Resolve the model FRESH — the closure's `model_name` is the REPL's
         # startup value and goes stale after /model, which would attribute
-        # hits to (and price savings with) the wrong model.
+        # hits to (and price savings with) the wrong model. The messages are
+        # the fallback token source when the provider reports no usage; drop
+        # the assistant reply run_agent_turn just appended (it wasn't in the
+        # prompt that got billed).
         entry = find_model(_active_model())
         if entry is not None:
             try:
-                _record_cache_outcome(entry, resp)
+                sent = session.messages
+                if sent and sent[-1].role == "assistant":
+                    sent = sent[:-1]
+                _record_cache_outcome(entry, resp, prompt_messages=sent)
             except Exception:
                 pass
 
@@ -1313,6 +1328,20 @@ def _make_approval(*, yes: bool):
 
     def _ask(*, tool: str, summary: str, detail: str = "", reason: str = "",
              save_pattern: str | None = None, auto: bool = False):
+        # ── 永久批准（approved_patterns.json，跨会话生效）────────────────
+        # [a]lways 存的 pattern → 直接放行；[o]auto 存的 "<pattern>:auto"
+        # → 本类操作自动启用 AI 判断。之前只写不读，"以后同类请求将自动
+        # 通过"的承诺实际从未兑现（重启 REPL 后照样弹确认）。
+        if save_pattern:
+            try:
+                approved = _load_approved()
+            except Exception:
+                approved = {}
+            if save_pattern in approved:
+                return ApprovalDecision.YES
+            if f"{save_pattern}:auto" in approved:
+                auto = True
+
         # ── Auto-judge phase ───────────────────────────────────────────────
         if auto:
             console.print("[dim]AI safety check...[/dim]")
@@ -1415,7 +1444,7 @@ def _default_system_prompt(*, allow_bash: bool) -> str:
         "若工具返回「未启用 / 未连接」，告诉用户运行 `mbridge bridge on` 并打开浏览器侧边栏。\n"
     )
     return (
-        "你是 ModelBridge 嵌入的编程助手 (类似 Claude Code)。"
+        "你是 ModelBridge 嵌入的编程助手 (类似 Claude Code)，目标是独立、可靠地完成用户的编程任务。"
         "你可以读、写、编辑项目文件，必要时也可以调用 shell。\n\n"
         "可用工具:\n"
         "- read_file(path): 读取项目内文件 (path 相对于工作目录)。\n"
@@ -1425,11 +1454,20 @@ def _default_system_prompt(*, allow_bash: bool) -> str:
         f"{bash_line}"
         f"{browser_block}"
         "\n"
-        "原则:\n"
-        "1. 修改前先读取相关文件，确认上下文再动手；不要凭空写代码。\n"
-        "2. 改动尽量用 str_replace 而不是 write_file，避免覆盖未读过的内容。\n"
-        "3. 如果工具调用失败，分析错误，调整参数后再尝试；不要陷入死循环。\n"
-        "4. 任务完成或不确定时，给用户清晰的简短结论。\n"
+        "工作方式:\n"
+        "1. 先读后写：修改任何文件前先读相关文件与上下文；没有读过的内容绝不覆盖。\n"
+        "2. 最小改动：只改完成任务所必需的行；新代码贴合项目现有的命名、缩进与错误处理风格，"
+        "不引入项目未使用的新依赖，不顺手重构无关代码。\n"
+        "3. 多步推进：复杂任务拆成小步连续执行，每步基于上一步的实际结果决定下一步，"
+        "直到任务真正完成；不要做一步就停下来让用户接力。\n"
+        "4. 改后验证：改动完成后主动验证——回读文件确认、跑相关测试或命令；"
+        "发现新问题继续修，而不是把问题抛给用户。\n"
+        "5. 失败换路：工具调用失败时先分析错误信息，修正参数或换方法再试；"
+        "同一做法最多尝试两次，之后必须换思路，绝不死循环。\n"
+        "6. 改动尽量用 str_replace 而不是 write_file，避免覆盖未读过的内容。\n"
+        "7. 汇报简洁：完成后先给一句话结论，再列关键改动与验证结果；"
+        "信息不足时做最合理的假设并继续，但要把假设明确说出来让用户可纠正。\n"
+        "8. 用中文回复中文用户，技术术语 (API、token、diff) 保留英文。\n"
     )
 
 
@@ -1784,7 +1822,7 @@ def cmd_ask(
         f"{resp.elapsed_ms}ms · prefix={result.prompt_prefix_hash}"
     )
     console.print(Panel(resp.content or "[dim](empty)[/dim]", title=title, border_style="cyan"))
-    _record_cache_outcome(entry, resp)
+    _record_cache_outcome(entry, resp, prompt_messages=result.messages)
 
     meta_parts = [
         f"rules sources: {', '.join(sum((v for v in result.sources.values()), [])) or '(none)'}",
@@ -1806,39 +1844,97 @@ def cmd_ask(
     return
 
 
-def _record_cache_outcome(entry: ModelEntry, resp) -> None:
+def _prompt_billed_cost(pricing, hit: int, miss: int) -> float:
+    """What the provider charges for the input side of one request.
+
+    Cache-hit tokens bill at ``cache_hit_input_per_1m`` when the pricing
+    table has one, the uncached rest at the full input rate. Without a
+    cache-hit rate everything bills at full input (the discount, if any,
+    is unknown — savings tracking handles the known-discount case).
+    """
+    if pricing is None:
+        return 0.0
+    if pricing.cache_hit_input_per_1m is not None:
+        return (
+            hit / 1_000_000 * pricing.cache_hit_input_per_1m
+            + miss / 1_000_000 * pricing.input_per_1m
+        )
+    return (hit + miss) / 1_000_000 * pricing.input_per_1m
+
+
+def _record_cache_outcome(
+    entry: ModelEntry, resp, prompt_messages=None
+) -> None:
     """Read provider-reported cache hit/miss from ``resp.usage`` and persist.
 
-    No-op when the provider doesn't report cache info (older providers,
-    local models, or just no cached prefix this turn). Savings use the
-    model's real cache-hit input rate when the pricing table has one
-    (DeepSeek / Hunyuan / Kimi / MiniMax do — ``saved = hit × (input −
+    Providers that don't report cache fields used to be skipped entirely —
+    but the prompt they billed is known locally, so those turns now count
+    as misses with the locally-estimated prompt tokens and their input
+    cost ("那也要收钱的"). Even on provider-reported turns, the uncached
+    prompt tokens (billed at the FULL input rate) enter the spend total —
+    previously only the hit-side discount was priced.
+
+    ``prompt_messages`` is whatever the caller actually sent (REPL session
+    messages / PromptBuilder output); it's only consulted when the
+    provider reports no usage at all. Savings use the model's real
+    cache-hit input rate when the pricing table has one (DeepSeek /
+    Hunyuan / Kimi / MiniMax do — ``saved = hit × (input −
     cache_hit_rate)``); otherwise it falls back to the old heuristic of
     cached tokens billed at ~25 % of the input rate. Every hit/miss is
     also attributed per model in ``cache.per_model`` — prefix caches are
     per provider+model, so that table is what makes model-switch costs
     visible in ``mbridge usage cache stats``.
     """
-    hit, miss = extract_cache_tokens(getattr(resp, "usage", None))
-    if hit <= 0 and miss <= 0:
-        return  # provider didn't report any cache info — leave stats alone
+    usage = getattr(resp, "usage", None)
+    hit, miss = extract_cache_tokens(usage)
+
+    prompt_total = 0
+    if isinstance(usage, dict):
+        prompt_total = int(usage.get("prompt_tokens") or 0)
+    if prompt_total <= 0 and (hit or miss):
+        prompt_total = hit + miss
+    if prompt_total <= 0 and prompt_messages:
+        # Provider reported no usage — estimate the prompt we built locally.
+        try:
+            prompt_total = estimate_session_tokens(prompt_messages)
+        except Exception:
+            prompt_total = 0
+    if hit <= 0 and miss <= 0 and prompt_total <= 0:
+        return  # nothing measurable — leave stats alone
+
+    pricing = None
+    try:
+        pricing = get_pricing(entry)
+    except Exception:
+        pricing = None
+
     if hit > 0:
         saved_cost = 0.0
-        try:
-            pricing = get_pricing(entry)
-            if pricing is not None:
-                if pricing.cache_hit_input_per_1m is not None:
-                    saved_cost = hit / 1_000_000 * (
-                        pricing.input_per_1m - pricing.cache_hit_input_per_1m
-                    )
-                else:
-                    full = pricing.cost(input_tokens=hit, output_tokens=0)
-                    saved_cost = full * 0.75
-        except Exception:
-            pass
-        record_hit(saved_tokens=hit, saved_cost=saved_cost, model=entry.name)
+        if pricing is not None:
+            if pricing.cache_hit_input_per_1m is not None:
+                saved_cost = hit / 1_000_000 * (
+                    pricing.input_per_1m - pricing.cache_hit_input_per_1m
+                )
+            else:
+                full = pricing.cost(input_tokens=hit, output_tokens=0)
+                saved_cost = full * 0.75
+        billed = hit + miss if (hit + miss) > 0 else prompt_total
+        record_hit(
+            saved_tokens=hit,
+            saved_cost=saved_cost,
+            billed_tokens=billed,
+            spend=_prompt_billed_cost(pricing, hit, max(0, billed - hit)),
+            model=entry.name,
+        )
     else:
-        record_miss(model=entry.name)
+        # Miss turn: provider-reported miss tokens when available, else the
+        # locally-estimated prompt. All billed at the full input rate.
+        tokens = miss if miss > 0 else prompt_total
+        record_miss(
+            missed_tokens=tokens,
+            spend=_prompt_billed_cost(pricing, 0, tokens),
+            model=entry.name,
+        )
 
 
 def _chat_with_routing(
@@ -1942,7 +2038,7 @@ def _chat_with_routing(
             "chat-route ok model=%s elapsed=%dms attempts=%d",
             entry.name, resp.elapsed_ms, attempts_used + 1,
         )
-        _record_cache_outcome(entry, resp)
+        _record_cache_outcome(entry, resp, prompt_messages=result.messages)
         title = (
             f"[bold cyan]{entry.name}[/bold cyan] · {entry.provider.value} · "
             f"{resp.elapsed_ms}ms · routed"
@@ -2747,6 +2843,8 @@ def cmd_cache_stats(
         f"  hit_rate           : {s.hit_rate * 100:.1f} %",
         f"  saved_tokens       : {s.saved_tokens:,}",
         f"  estimated_savings  : {s.estimated_savings:.4f} {s.currency}",
+        f"  billed_prompt      : {s.billed_tokens:,} t  (含本地估算的未上报部分)",
+        f"  prompt_spend (est) : {s.spend:.4f} {s.currency}",
         "",
         "[bold]stable prefix stability[/bold]",
         f"  observations       : {s.prefix_observations}",
@@ -2764,7 +2862,8 @@ def cmd_cache_stats(
             lines.append(
                 f"  {name:<20} hits={int(m['hits']):<6} misses={int(m['misses']):<6} "
                 f"hit_rate={rate:5.1f}%  saved={int(m['saved_tokens']):,} tok / "
-                f"{m['saved_cost']:.4f} {s.currency}"
+                f"{m['saved_cost']:.4f} {s.currency}  billed={int(m.get('billed_tokens', 0)):,} tok / "
+                f"{m.get('spend', 0.0):.4f} {s.currency}"
             )
         lines.append(
             "[dim]缓存域按「厂商×模型」隔离 —— 切模型即换域；本表用于对比各模型命中率"
@@ -3436,8 +3535,9 @@ def cmd_edit(
         "    mbridge run \"pytest -k smoke -v\"   # 多选项 + 引号\n"
         "    mbridge run \"python script.py\"    # 跑脚本\n"
         "    mbridge run --dry-run \"npm test\"  # 仅校验 + 解析报错\n\n"
-        "命令必须命中白名单 (pytest/python/npm/go/cargo …)，"
-        "禁止任何 shell 元字符 (;|&> 等)。失败时自动解析 traceback / pytest / Node / 编译错误。"
+        "支持 ; && | 等组合命令与重定向——逐段校验：每段程序都必须命中白名单 "
+        "(pytest/python/npm/go/cargo …)，反引号与 $( ) 替换会被拒绝。"
+        "失败时自动解析 traceback / pytest / Node / 编译错误。"
     ),
 )
 def cmd_run(

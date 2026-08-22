@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CapabilitiesIn(BaseModel):
@@ -39,7 +39,9 @@ class ModelIn(BaseModel):
     api_key: str | None = None
     api_key_env: str | None = None
     level: str = "cheap"
-    capabilities: CapabilitiesIn = ConfigDict(default_factory=CapabilitiesIn)  # type: ignore[assignment]
+    # Was accidentally ``ConfigDict(default_factory=...)`` — a raw dict as
+    # the default (silently skipped validation, warned in /openapi.json).
+    capabilities: CapabilitiesIn = Field(default_factory=CapabilitiesIn)
     extra: dict[str, Any] = {}
 
 

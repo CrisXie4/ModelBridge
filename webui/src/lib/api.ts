@@ -70,6 +70,8 @@ export interface CacheStats {
   misses: number;
   saved_tokens: number;
   estimated_savings: number;
+  billed_tokens: number;
+  spend: number;
   currency: string;
   hit_rate: number;
   prefix_stability: number;

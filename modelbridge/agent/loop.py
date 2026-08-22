@@ -45,7 +45,9 @@ def run_agent_turn(
     registry: ToolRegistry,
     model_name: str,
     timeout: float = 120.0,
-    max_iters: int = 20,
+    # Runaway guard only: caps the number of model iterations per turn.
+    # ``None`` (default) = unlimited — the model decides when to stop.
+    max_iters: int | None = None,
     stream: bool = False,
     thinking: bool | None = None,
     thinking_budget: int | None = None,
@@ -73,7 +75,9 @@ def run_agent_turn(
     executed: list[ToolCall] = []
     last_response: ChatResponse | None = None
 
-    for i in range(1, max_iters + 1):
+    i = 0
+    while True:
+        i += 1
         request = ChatRequest(
             model=entry.model,
             messages=list(session.messages),  # snapshot
@@ -153,13 +157,13 @@ def run_agent_turn(
                     )
             raise
         # loop continues — model may want to call more tools or finalize
-
-    return AgentResult(
-        final_response=last_response,
-        iterations=max_iters,
-        tool_calls_executed=executed,
-        stopped_reason="max_iters",
-    )
+        if max_iters is not None and i >= max_iters:
+            return AgentResult(
+                final_response=last_response,
+                iterations=i,
+                tool_calls_executed=executed,
+                stopped_reason="max_iters",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +194,7 @@ def run_interactive(
     on_system: Callable[[str], None] | None = None,
     on_turn_done: Callable[[], None] | None = None,
     timeout: float = 120.0,
-    max_iters_per_turn: int = 20,
+    max_iters_per_turn: int | None = None,
     pending_images: dict[str, Any] | None = None,
 ) -> Session:
     """Run a persistent REPL until ``read_input`` raises EOFError.

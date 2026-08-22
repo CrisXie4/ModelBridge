@@ -256,8 +256,42 @@ class AIAutoSuggest(AutoSuggest):
             # Cap length so a chatty model can't dump a paragraph.
             if len(suggestion) > _MAX_SUGGESTION_CHARS:
                 suggestion = suggestion[:_MAX_SUGGESTION_CHARS]
+            # An ASCII↔CJK boundary glues words together when Tab accepts
+            # the ghost text ("serve" + "你帮我…" → "serve你帮我…"). Insert
+            # the separator the model omitted so accepted input stays sane.
+            suggestion = _apply_boundary_space(text, suggestion)
             self._cache[text] = suggestion
             return suggestion or None
+
+
+def _is_cjk_char(ch: str) -> bool:
+    """CJK ideographs / radicals / fullwidth forms — the ranges that fuse
+    visually with adjacent ASCII when no space separates them."""
+    if not ch:
+        return False
+    o = ord(ch)
+    return (
+        0x2E80 <= o <= 0x9FFF      # CJK radicals + Unified Ideographs
+        or 0x3000 <= o <= 0x303F   # CJK punctuation
+        or 0xFF00 <= o <= 0xFFEF   # fullwidth forms
+    )
+
+
+def _apply_boundary_space(buffer_text: str, suggestion: str) -> str:
+    """Prefix a space when gluing would fuse an ASCII and a CJK word.
+
+    Pure-CJK continuations (中文接中文) and ASCII-to-ASCII (code completion)
+    are left untouched — Chinese doesn't take inner spaces and code must not
+    get any.
+    """
+    if not buffer_text or not suggestion:
+        return suggestion
+    left, right = buffer_text[-1], suggestion[0]
+    if left.isspace() or right.isspace():
+        return suggestion
+    if _is_cjk_char(left) != _is_cjk_char(right):
+        return " " + suggestion
+    return suggestion
 
 
 # ---------------------------------------------------------------------------

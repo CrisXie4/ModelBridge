@@ -9,6 +9,8 @@ Storage: ``~/.modelbridge/cache.json`` ::
       "misses": 0,
       "saved_tokens": 0,
       "estimated_savings": 0.0,
+      "billed_tokens": 0,
+      "spend": 0.0,
       "currency": "CNY",
       "per_model": {"<model name>": {"hits": 0, "misses": 0, ...}},
       "last_updated": "2026-05-22T14:30:00"
@@ -46,6 +48,12 @@ class CacheStats:
     misses: int = 0
     saved_tokens: int = 0
     estimated_savings: float = 0.0
+    # Billable input side: prompt tokens the provider charged for (cached part
+    # at the cache-hit rate + uncached part at the input rate), and what they
+    # cost. Misses with no provider-reported cache info fall back to the
+    # locally-estimated prompt tokens — those are billed too.
+    billed_tokens: int = 0
+    spend: float = 0.0
     currency: str = "CNY"
     last_updated: str = field(default_factory=now_iso)
     # Last-observed prompt prefix so ``mbridge cache stats`` can point at
@@ -91,6 +99,8 @@ class CacheStats:
             "misses": self.misses,
             "saved_tokens": self.saved_tokens,
             "estimated_savings": round(self.estimated_savings, 6),
+            "billed_tokens": self.billed_tokens,
+            "spend": round(self.spend, 6),
             "currency": self.currency,
             "last_updated": self.last_updated,
             "last_prefix_hash": self.last_prefix_hash,
@@ -110,6 +120,8 @@ class CacheStats:
             misses=int(d.get("misses", 0) or 0),
             saved_tokens=int(d.get("saved_tokens", 0) or 0),
             estimated_savings=float(d.get("estimated_savings", 0.0) or 0.0),
+            billed_tokens=int(d.get("billed_tokens", 0) or 0),
+            spend=float(d.get("spend", 0.0) or 0.0),
             currency=str(d.get("currency", "CNY")).upper(),
             last_updated=str(d.get("last_updated") or now_iso()),
             last_prefix_hash=str(d.get("last_prefix_hash", "")),
@@ -134,6 +146,8 @@ def _coerce_per_model(raw: Any) -> dict[str, dict[str, float]]:
             "misses": int(m.get("misses", 0) or 0),
             "saved_tokens": int(m.get("saved_tokens", 0) or 0),
             "saved_cost": float(m.get("saved_cost", 0.0) or 0.0),
+            "billed_tokens": int(m.get("billed_tokens", 0) or 0),
+            "spend": float(m.get("spend", 0.0) or 0.0),
         }
     return out
 
@@ -199,31 +213,54 @@ def record_hit(
     *,
     saved_tokens: int = 0,
     saved_cost: float = 0.0,
+    billed_tokens: int = 0,
+    spend: float = 0.0,
     model: str | None = None,
 ) -> CacheStats:
     s = load_cache_stats()
     s.hits += 1
     s.saved_tokens += max(0, saved_tokens)
     s.estimated_savings += max(0.0, saved_cost)
+    s.billed_tokens += max(0, billed_tokens)
+    s.spend += max(0.0, spend)
     if model:
         m = s.per_model.setdefault(
-            model, {"hits": 0, "misses": 0, "saved_tokens": 0, "saved_cost": 0.0}
+            model,
+            {
+                "hits": 0, "misses": 0, "saved_tokens": 0, "saved_cost": 0.0,
+                "billed_tokens": 0, "spend": 0.0,
+            },
         )
         m["hits"] += 1
         m["saved_tokens"] += max(0, saved_tokens)
         m["saved_cost"] += max(0.0, saved_cost)
+        m["billed_tokens"] += max(0, billed_tokens)
+        m["spend"] += max(0.0, spend)
     save_cache_stats(s)
     return s
 
 
-def record_miss(*, model: str | None = None) -> CacheStats:
+def record_miss(
+    *,
+    missed_tokens: int = 0,
+    spend: float = 0.0,
+    model: str | None = None,
+) -> CacheStats:
     s = load_cache_stats()
     s.misses += 1
+    s.billed_tokens += max(0, missed_tokens)
+    s.spend += max(0.0, spend)
     if model:
         m = s.per_model.setdefault(
-            model, {"hits": 0, "misses": 0, "saved_tokens": 0, "saved_cost": 0.0}
+            model,
+            {
+                "hits": 0, "misses": 0, "saved_tokens": 0, "saved_cost": 0.0,
+                "billed_tokens": 0, "spend": 0.0,
+            },
         )
         m["misses"] += 1
+        m["billed_tokens"] += max(0, missed_tokens)
+        m["spend"] += max(0.0, spend)
     save_cache_stats(s)
     return s
 

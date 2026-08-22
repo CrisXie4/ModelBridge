@@ -282,6 +282,80 @@ def test_cache_hit_rate_savings_use_real_pricing(home):
     assert s.per_model["ds-test"]["hits"] == 1
     assert s.saved_tokens == 1_000_000
     assert s.estimated_savings == pytest.approx(2.90)
+    # The uncached 10 tokens bill at the FULL input rate — they cost money too.
+    assert s.billed_tokens == 1_000_010
+    assert s.spend == pytest.approx(1_000_000 / 1e6 * 0.10 + 10 / 1e6 * 3.0)
+
+
+def test_cache_miss_turn_prices_prompt_tokens(home):
+    """A miss-only turn records the miss tokens + their full-rate cost.
+
+    Regression: miss turns used to bump a counter but record no tokens and
+    no spend, so the billed prompt never entered the stats.
+    """
+    from modelbridge.cli import _record_cache_outcome
+    from modelbridge.schemas import ChatResponse
+
+    entry = ModelEntry(
+        name="ds-miss",
+        provider=ProviderType.DEEPSEEK,
+        model="deepseek-v4-flash",
+        base_url="https://api.deepseek.com",
+    )
+    resp = ChatResponse(
+        content="ok",
+        usage={"prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 500_000},
+    )
+    _record_cache_outcome(entry, resp)
+    s = load_cache_stats()
+    assert s.misses == 1
+    assert s.per_model["ds-miss"]["misses"] == 1
+    assert s.billed_tokens == 500_000
+    assert s.spend == pytest.approx(500_000 / 1e6 * 3.0)
+
+
+def test_cache_no_report_falls_back_to_local_prompt_tokens(home):
+    """Provider reports no cache fields (and maybe no usage at all) — the
+    locally-built prompt still gets billed, so its estimated tokens count
+    as a miss with full-rate spend instead of being skipped."""
+    from modelbridge.cli import _record_cache_outcome
+    from modelbridge.schemas import ChatMessage, ChatResponse
+
+    entry = ModelEntry(
+        name="q-test",
+        provider=ProviderType.CUSTOM,
+        model="qwen3.7-plus",
+        base_url="https://gw.example.com/v1",
+    )
+    msgs = [
+        ChatMessage(role="system", content="你是助手" * 200),
+        ChatMessage(role="user", content="帮我总结这段很长的文本" * 100),
+    ]
+
+    # Case 1: usage present but without any cache breakdown.
+    resp = ChatResponse(content="ok", usage={"prompt_tokens": 7_000,
+                                             "completion_tokens": 300})
+    _record_cache_outcome(entry, resp, prompt_messages=msgs)
+    s = load_cache_stats()
+    assert s.misses == 1
+    assert s.billed_tokens == 7_000
+    assert s.spend == pytest.approx(7_000 / 1e6 * 2.0)  # qwen3.7-plus ¥2/1M
+
+    # Case 2: no usage at all → local estimate of the sent messages.
+    resp2 = ChatResponse(content="ok")
+    _record_cache_outcome(entry, resp2, prompt_messages=msgs)
+    s = load_cache_stats()
+    assert s.misses == 2
+    assert s.billed_tokens > 7_000  # local estimate added on top
+    from modelbridge.context import estimate_session_tokens
+
+    assert s.billed_tokens == 7_000 + estimate_session_tokens(msgs)
+    assert s.per_model["q-test"]["spend"] == pytest.approx(s.spend)
+
+    # Case 3: nothing reported and no messages to estimate → still a no-op.
+    resp3 = ChatResponse(content="ok")
+    _record_cache_outcome(entry, resp3)
+    assert load_cache_stats().misses == 2
 
 
 def test_switch_note_distinguishes_domains():

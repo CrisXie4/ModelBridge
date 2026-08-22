@@ -91,8 +91,13 @@ def render_tool_bubble(
     args_preview: str,
     body: str,
 ) -> None:
-    """Print a tool call/result — left-aligned, magenta color bar, no border."""
-    # Label line: tool name + dimmed args.
+    """Print a tool call/result — label line + indented body.
+
+    Body is indented 2 (same geometry as assistant content, which also sits
+    under the bar) instead of a single ``▎`` on the first line only — with
+    multi-line results that half-bar looked like stray output from the
+    assistant rather than part of the tool call.
+    """
     label = Text.assemble(
         ("▸ ", "magenta"),
         (tool_name, "bold magenta"),
@@ -100,9 +105,8 @@ def render_tool_bubble(
     if args_preview:
         label.append(f"  {args_preview}", style="dim")
     capped = body if len(body) <= 1200 else body[:1200] + "\n…"
-    content = Text.assemble((_BAR, "magenta"), (" " + capped, ""))
     console.print(label)
-    console.print(content)
+    console.print(Padding(Text(capped), (0, 0, 0, 2)))
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +232,13 @@ class AssistantStream:
             except Exception:
                 pass
             self._live = None
+        # Pure tool-call iteration: the model said nothing on screen (the
+        # live `▎ …` placeholder was transient). Deposit nothing — otherwise
+        # every tool round leaves an empty `● model / ▎ …` stub in the
+        # transcript and the display fills with header noise.
+        if not self._content_parts and not self._reasoning_parts:
+            self._opened = False
+            return
         # Deposit the FULL (uncropped) panel into scrollback. This is what
         # the user reads after the response is done. Wrapping in try/except
         # so a Markdown parse glitch on the last token can't crash the REPL.

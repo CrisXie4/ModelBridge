@@ -74,6 +74,11 @@ export default function UsagePage() {
                 label="节省费用"
                 value={`${stats.estimated_savings.toFixed(4)} ${stats.currency}`}
               />
+              <Metric label="计费 prompt" value={fmtNum(stats.billed_tokens)} />
+              <Metric
+                label="输入花费"
+                value={`${stats.spend.toFixed(4)} ${stats.currency}`}
+              />
               <Metric
                 label="前缀稳定度"
                 value={`${(stats.prefix_stability * 100).toFixed(1)}%`}
@@ -146,7 +151,13 @@ export default function UsagePage() {
                   </span>
                 </div>
                 <div className="cost-rows">
-                  <Row label="输入 token" value={cost.input_tokens} />
+                  <Row label="输入合计" value={cost.input_tokens} />
+                  <Row
+                    label="系统提示词 (system.md+rules.md)"
+                    value={cost.prefix_tokens}
+                    muted
+                  />
+                  <Row label="用户输入" value={cost.user_tokens} muted />
                   <Row label="输出 token（估算）" value={cost.output_tokens} />
                   <Row
                     label="单价（每 1M）"

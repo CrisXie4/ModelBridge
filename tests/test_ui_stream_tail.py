@@ -54,3 +54,32 @@ def test_live_view_is_bounded_final_is_full():
     # Tail view shows the most recent content, not the oldest.
     assert any("行59" in ln for ln in live)
     assert not any("行0" in ln and "行09" not in ln for ln in live[:3])
+
+
+def test_empty_stream_deposits_nothing():
+    """A pure tool-call iteration (no content, no reasoning) must leave NO
+    final `● model / ▎ …` stub in the transcript — that header noise made
+    the REPL unreadable during tool loops.
+
+    Non-terminal console: Live draws nothing there, so the capture shows
+    exactly what the final deposit (the only permanent print) leaves."""
+    import io
+
+    console = Console(file=io.StringIO(), width=80, height=20, force_terminal=False)
+    s = AssistantStream(console, model_name="ds")
+    with s:
+        pass  # no deltas arrived
+    out = console.file.getvalue()
+    assert out == "", f"expected no output, got: {out!r}"
+
+
+def test_stream_with_content_deposits_label_and_body():
+    import io
+
+    console = Console(file=io.StringIO(), width=80, height=20, force_terminal=True)
+    s = AssistantStream(console, model_name="ds")
+    with s:
+        s.append_content("hello world")
+    out = console.file.getvalue()
+    assert "● ds" in out
+    assert "hello world" in out

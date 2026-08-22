@@ -33,12 +33,6 @@ def _result(stdout="ok", stderr="", exit_code=0, truncated=False, timed_out=Fals
 
 def _patch(monkeypatch, result):
     monkeypatch.setattr(bash_mod, "run_command", lambda *a, **k: result)
-    # Decouple from the command allowlist — these tests are about output handling.
-    monkeypatch.setattr(
-        bash_mod.CommandPolicy,
-        "from_config",
-        lambda: type("P", (), {"validate": lambda self, cmd: None})(),
-    )
 
 
 def test_bash_tool_passes_decoded_output_through(tmp_path, monkeypatch):

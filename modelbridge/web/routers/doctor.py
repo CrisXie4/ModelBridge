@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
+from ...config import find_model
 from ...doctor import run_global_doctor, run_model_doctor
 
 router = APIRouter(prefix="/doctor", tags=["doctor"])
@@ -24,7 +25,12 @@ def global_doctor() -> dict:
 @router.post("/{model_name}")
 def model_doctor(model_name: str) -> dict:
     """Run a single-model connectivity test. This makes a real API call."""
-    report = run_model_doctor(model_name)
+    entry = find_model(model_name)
+    if entry is None:
+        raise HTTPException(
+            status_code=404, detail=f"模型 '{model_name}' 不在 models.yaml 中"
+        )
+    report = run_model_doctor(entry)
     return {
         "name": report.name,
         "provider": report.provider,

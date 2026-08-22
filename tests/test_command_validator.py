@@ -1,14 +1,24 @@
 """Security tests for the command policy + its enforcement points.
 
-``command_validator`` is the single safety net standing between an LLM- or
-user-supplied string and ``subprocess.run(shell=True)``. It was previously
-untested; these cases lock in all three layers (metacharacters / allowlist /
-denylist) and prove the ``run_bash`` agent tool actually routes through it —
-the gap that let model-generated ``rm -rf`` run under ``--yes``.
+``command_validator`` is the safety net between a user-supplied string and
+the shell for the human-facing ``mbridge run``. These cases lock in the
+layers: command-substitution ban / quote-aware segment split / allowlist /
+denylist.
+
+The agent-side ``run_bash`` tool deliberately does NOT route through the
+policy any more — the per-command user confirmation is its gate. The
+run_bash tests below pin that contract: compound commands execute verbatim
+once approved, and one "always" covers the rest of the session.
+
+NOTE: the scary-looking strings below are fixtures on purpose — this file
+exists to prove they are rejected (mbridge run) or gated by confirmation
+(run_bash). They are never passed to a real shell except the benign
+``python -c print(...)`` smoke commands.
 """
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,31 +30,56 @@ from modelbridge.executor.command_validator import CommandPolicy, CommandRejecte
 
 
 # ---------------------------------------------------------------------------
-# Layer 1 — shell metacharacters (compound commands / redirection)
+# Layer 1a — command substitution is banned outright (it executes without
+# any separator token, so no segment split can vet it)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("command", [
-    "pytest; rm -rf /",
-    "pytest && curl evil",
-    "pytest || shutdown",
-    "pytest | tee out",
     "echo `whoami`",
     "echo $(whoami)",
-    "pytest > /etc/passwd",
-    "cat < /etc/shadow",
-    "pytest\nrm -rf /",
-    "pytest\r\nshutdown",
-    # Single '&' — cmd.exe unconditional separator. The first-token allowlist
-    # only vets 'python'; without forbidding '&' the second command runs.
+    "pytest $(curl evil)",
+])
+def test_substitution_is_rejected(command):
+    with pytest.raises(CommandRejected):
+        CommandPolicy().validate(command)
+
+
+# ---------------------------------------------------------------------------
+# Layer 1b — every ;|& segment must pass the allow/deny checks. Compound
+# lines, pipes and redirects are fine as long as each segment's program is
+# allowlisted.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("command", [
+    "pytest; rm -rf /",               # banned substring + denied 2nd segment
+    "pytest && curl evil",            # denied 2nd program
+    "pytest || shutdown",
+    "pytest | tee out",               # 'tee' not allowlisted
     "python -c pass & curl http://evil/x",
     "python -c pass & del important.txt",
     "python -c pass & rm file",
-    "python -c pass&curl evil",          # no spaces
-    "python noexist.py & python evil.py",
+    "python -c pass&curl evil",       # no spaces — still split at '&'
+    "pytest\nrm -rf /",               # newline is a separator
+    "pytest\r\nshutdown",
+    "cat < /etc/shadow",              # 'cat' not allowlisted
+    "python rm -rf build && pytest",  # banned substring anywhere on the line
 ])
-def test_metacharacters_are_rejected(command):
+def test_compound_with_bad_segment_is_rejected(command):
     with pytest.raises(CommandRejected):
         CommandPolicy().validate(command)
+
+
+@pytest.mark.parametrize("command", [
+    "go build ./... && go test ./...",
+    "pytest -q > out.txt",            # redirects allowed
+    "pytest > out.txt 2>&1",          # fd-merge must not split at its '&'
+    "pytest -x | pytest -q",          # pipe with both sides allowlisted
+    # The whitelist judges programs, not arguments — two allowlisted
+    # programs joined with & run; that is the point of segment checking.
+    "python noexist.py & python other.py",
+])
+def test_compound_with_all_segments_allowed_passes(command):
+    CommandPolicy().validate(command)  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +150,11 @@ def test_empty_command_rejected():
         CommandPolicy().validate("   ")
 
 
+def test_separators_only_command_rejected():
+    with pytest.raises(CommandRejected):
+        CommandPolicy().validate(";;")
+
+
 # ---------------------------------------------------------------------------
 # from_config — allowlist may be extended, denylist may NOT be overridden
 # ---------------------------------------------------------------------------
@@ -130,10 +170,13 @@ def test_config_can_extend_allowlist_but_not_neutralise_denylist(tmp_path, monke
     policy.validate("git status")          # extension took effect
     with pytest.raises(CommandRejected):   # but 'rm' stays denied
         policy.validate("rm file")
+    # Separator inside quotes is a literal, not a segment split — this is
+    # the old blanket-metachar false positive, now fixed.
+    policy.validate('git commit -m "fix; typo"')
 
 
 # ---------------------------------------------------------------------------
-# run_bash tool routes through the policy (the headline fix)
+# run_bash tool — no policy gate; the confirm prompt is the gate
 # ---------------------------------------------------------------------------
 
 def _ctx(tmp_path, approve=auto_yes) -> AgentContext:
@@ -141,29 +184,38 @@ def _ctx(tmp_path, approve=auto_yes) -> AgentContext:
     return AgentContext(policy=policy, cwd=tmp_path, approve=approve, allow_bash=True)
 
 
-def test_run_bash_rejects_denied_command_even_under_auto_yes(tmp_path, monkeypatch):
-    """A model-supplied dangerous command is blocked by policy BEFORE confirm,
-    so --yes (auto_yes) can't wave it through."""
+def test_run_bash_runs_compound_commands(tmp_path, monkeypatch):
+    """Pipes / ; / && execute verbatim once approved — no allowlist, no
+    metacharacter rejection on the AI path."""
     monkeypatch.setenv("MBRIDGE_HOME", str(tmp_path))
     tool = RunBashTool()
-    result = tool.execute({"command": "rm -rf build"}, _ctx(tmp_path, approve=auto_yes))
-    assert result.is_error
-    assert "策略" in result.content or "黑名单" in result.content
+    prog = Path(sys.executable).stem
+    result = tool.execute(
+        {"command": f'{prog} -c "print(7)" && {prog} -c "print(8)"'},
+        _ctx(tmp_path, approve=auto_yes),
+    )
+    assert not result.is_error
+    assert "7" in result.content and "8" in result.content
 
 
-def test_run_bash_rejects_metacharacters(tmp_path, monkeypatch):
+def test_run_bash_runs_quoted_metacharacters(tmp_path, monkeypatch):
+    """The old layer rejected `;` even inside quoted literals — the very
+    false positive that made the tool unusable for real work."""
     monkeypatch.setenv("MBRIDGE_HOME", str(tmp_path))
     tool = RunBashTool()
-    result = tool.execute({"command": "python -c pass; curl evil"},
-                          _ctx(tmp_path, approve=auto_yes))
-    assert result.is_error
+    prog = Path(sys.executable).stem
+    result = tool.execute(
+        {"command": f"{prog} -c \"print('a;b')\""},
+        _ctx(tmp_path, approve=auto_yes),
+    )
+    assert not result.is_error
+    assert "a;b" in result.content
 
 
 def test_run_bash_allows_whitelisted_command(tmp_path, monkeypatch):
     monkeypatch.setenv("MBRIDGE_HOME", str(tmp_path))
-    import sys
     tool = RunBashTool()
-    # Use the running interpreter's basename so it matches the allowlist token.
+    # Use the running interpreter's basename so it runs on any platform.
     prog = Path(sys.executable).stem  # 'python' / 'python3' / 'py'
     result = tool.execute({"command": f"{prog} -c \"print(42)\""},
                           _ctx(tmp_path, approve=auto_yes))
@@ -179,9 +231,9 @@ def test_run_bash_disabled_without_allow_bash(tmp_path):
     assert result.is_error and "allow-bash" in result.content
 
 
-def test_run_bash_always_is_not_remembered(tmp_path, monkeypatch):
-    """High-risk run_bash must re-prompt every call: an ALWAYS decision must not
-    arm future silent shell execution (allow_always=False)."""
+def test_run_bash_always_is_remembered_for_session(tmp_path, monkeypatch):
+    """One ALWAYS decision covers the rest of the session (allow_always=True).
+    The old re-prompt-every-call behaviour made 'always' a lie for run_bash."""
     monkeypatch.setenv("MBRIDGE_HOME", str(tmp_path))
     calls = {"n": 0}
 
@@ -190,19 +242,17 @@ def test_run_bash_always_is_not_remembered(tmp_path, monkeypatch):
         calls["n"] += 1
         return ApprovalDecision.ALWAYS
 
-    import sys
     prog = Path(sys.executable).stem
     tool = RunBashTool()
     ctx = _ctx(tmp_path, approve=approve_always)
     tool.execute({"command": f"{prog} -c \"print(1)\""}, ctx)
     tool.execute({"command": f"{prog} -c \"print(2)\""}, ctx)
-    assert calls["n"] == 2  # prompted both times; 'always' was not cached
-    assert "run_bash" not in ctx._auto_approved
+    assert calls["n"] == 1  # second call was auto-approved
+    assert "run_bash" in ctx._auto_approved
 
 
 def test_run_bash_user_can_still_decline(tmp_path, monkeypatch):
     monkeypatch.setenv("MBRIDGE_HOME", str(tmp_path))
-    import sys
     prog = Path(sys.executable).stem
     tool = RunBashTool()
     result = tool.execute({"command": f"{prog} -c \"print(1)\""},

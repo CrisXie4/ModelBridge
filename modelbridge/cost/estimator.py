@@ -359,10 +359,18 @@ class CostEstimate:
     input_tokens: int
     output_tokens: int
     cost: float
+    # Fixed stable-prefix tokens every real request carries (system.md +
+    # rules.md). ``input_tokens`` already includes them; ``user_tokens``
+    # is the variable part (the prompt text itself).
+    prefix_tokens: int = 0
 
     @property
     def currency(self) -> str:
         return self.pricing.currency
+
+    @property
+    def user_tokens(self) -> int:
+        return max(0, self.input_tokens - self.prefix_tokens)
 
     def as_str(self) -> str:
         return (
@@ -378,6 +386,7 @@ def estimate_cost(
     prompt: str,
     expected_output_tokens: int | None = None,
     pricing: Pricing | None = None,
+    prefix_tokens: int = 0,
 ) -> CostEstimate:
     """Estimate the cost of one call to ``entry`` for ``prompt``.
 
@@ -385,9 +394,14 @@ def estimate_cost(
     ``extra.max_tokens`` (capped at 1024) as a generous upper bound — the
     real call usually costs *less*, which is what you want for a quick
     "is this safe to send" sanity check.
+
+    ``prefix_tokens`` adds the fixed stable-prefix overhead (system.md +
+    rules.md) that every real request prepends — callers that estimate a
+    single call from just the user text should pass it so the estimate
+    matches what the provider actually bills.
     """
     p = pricing or get_pricing(entry)
-    in_tokens = estimate_tokens(prompt)
+    in_tokens = estimate_tokens(prompt) + prefix_tokens
     if expected_output_tokens is None:
         budget_cap = int((entry.extra or {}).get("max_tokens", 1024))
         expected_output_tokens = min(budget_cap, 1024)
@@ -399,4 +413,5 @@ def estimate_cost(
         input_tokens=in_tokens,
         output_tokens=expected_output_tokens,
         cost=cost,
+        prefix_tokens=prefix_tokens,
     )

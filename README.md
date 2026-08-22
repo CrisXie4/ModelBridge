@@ -32,7 +32,7 @@
 ```
 mbridge                            进入持续会话 REPL (默认 default_model)
 mbridge -m NAME --cwd PATH         切换模型 / 工作目录
-mbridge --allow-bash               额外开启 run_bash 工具 (每条命令仍要确认)
+mbridge --no-allow-bash            关闭 run_bash 工具 (默认开启，每条命令仍要确认)
 mbridge --yes                      跳过所有 write/edit/bash 确认弹窗
 
 mbridge init                       初始化 ~/.modelbridge/
@@ -122,7 +122,7 @@ $ mbridge -m deepseek-flash
 │ cwd       : /home/me/my-project                        │
 │ tools     : list_dir, read_file, str_replace, write_file
 │ approval  : 每次询问                                   │
-│ allow_bash: False                                      │
+│ allow_bash: True                                       │
 └────────────────────────────────────────────────────────┘
 
 you: 看一下 src/auth.py，告诉我 login 函数有什么问题
@@ -158,7 +158,7 @@ session saved → ~/.modelbridge/sessions/2026-05-23_153012_repl_deepseek-flash.
 | `list_dir(path)` | 列目录 (默认隐藏点文件) | 否 |
 | `write_file(path, content)` | 覆盖 / 创建文件 (500 KB 上限) | **是** |
 | `str_replace(path, old_str, new_str)` | 精确替换；要求 old_str 在文件中唯一出现 | **是** |
-| `run_bash(command)` | 执行 shell；默认 30s 超时；输出截断到 8 KB | **是** (且需 `--allow-bash` 启用) |
+| `run_bash(command)` | 执行 shell（支持管道 / 重定向 / `; &&` 组合）；默认 30s 超时；输出截断到 8 KB | **是** (选 a 后本会话免确认；`--no-allow-bash` 可整体关闭) |
 
 确认弹窗有三个选项：
 
@@ -200,7 +200,7 @@ mbridge ask -m qwen-vl "对比这两张图" --image a.png --image https://x/b.jp
 1. **白名单** — 必须落在 `config.yaml: security.allowed_project_dirs` 之内 (或当前 `--cwd`)。Symlink 解析后再校验，不能逃逸。
 2. **黑名单** — 命中 `block_sensitive_files` 模式 (`.env`、`id_rsa`、`.ssh`、`config.json`、`secrets.yaml` 等) 一律拒绝。
 
-`run_bash` **默认关闭**。即使开启 (`--allow-bash`)，AI 每条命令仍会请求确认 (除非 `--yes`)。需要更强隔离请把 ModelBridge 跑在容器里。
+`run_bash` **默认开启**（与微信通道一致），但 AI 每条命令仍会请求确认 (除非 `--yes`)。想彻底禁掉用 `--no-allow-bash` 启动；需要更强隔离请把 ModelBridge 跑在容器里。
 
 ### 国产模型兼容
 

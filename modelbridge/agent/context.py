@@ -104,8 +104,10 @@ class AgentContext:
         ``navigate`` so approving one with ALWAYS auto-approves them all this
         session. Defaults to the tool's own name (per-tool, the old behaviour).
 
-        ``allow_always=False`` is for high-risk tools (e.g. ``run_bash``): an
-        ALWAYS decision is honoured for *this* call only and never remembered.
+        ``allow_always=False`` is for tools where every single call must be
+        seen by the user: an ALWAYS decision is honoured for *this* call only
+        and never remembered. (No current tool uses this; run_bash moved to
+        ``allow_always=True`` — one "always" covers the session.)
 
         ``pattern_key``, if set, is passed to the approval callback so it can
         persist the "always" choice to disk (used by ``spawn_subagent`` for

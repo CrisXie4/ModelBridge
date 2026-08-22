@@ -32,7 +32,11 @@ class ToolRegistry:
         return sorted(self.tools)
 
     def openai_tools(self) -> list[dict[str, Any]]:
-        return [t.openai_tool() for t in self.tools.values()]
+        # Sorted by name so the schema array is a pure function of the tool
+        # *set*: MCP hot refresh (unregister + re-register) must not reorder
+        # the array — any change in tool order invalidates the provider's
+        # prompt-prefix cache for the whole conversation.
+        return [self.tools[name].openai_tool() for name in sorted(self.tools)]
 
     def dispatch(self, call: ToolCall, ctx: AgentContext) -> ToolResult:
         tool = self.get(call.name)
