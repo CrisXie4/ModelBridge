@@ -158,6 +158,10 @@ def test_explore_kind_needs_no_confirmation(tmp_path, monkeypatch):
         return _R()
 
     monkeypatch.setattr(sub_mod, "run_agent_turn", fake_run_agent_turn)
+    # 模型解析也必须隔离：CI 上没有 models.yaml，会落在硬编码的
+    # deepseek-v4-flash 兜底名上直接报"模型不可用"，走不到 mock 的回合。
+    monkeypatch.setattr(sub_mod, "get_model_entry", lambda _name: None)
+    monkeypatch.setattr(sub_mod, "_default_model_name", lambda: "test-model")
     res = SpawnSubagentTool().execute({"goal": "找一下入口函数", "kind": "explore"}, ctx)
     assert not res.is_error, res.content
     assert prompted == []                      # no confirmation asked
@@ -200,6 +204,8 @@ def test_general_kind_confirms_and_forwards_parent_approval(tmp_path, monkeypatc
         return _R()
 
     monkeypatch.setattr(sub_mod, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(sub_mod, "get_model_entry", lambda _name: None)
+    monkeypatch.setattr(sub_mod, "_default_model_name", lambda: "test-model")
     res = SpawnSubagentTool().execute(
         {"goal": "把 README 改成英文", "kind": "general"}, ctx
     )

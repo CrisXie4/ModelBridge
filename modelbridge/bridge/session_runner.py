@@ -194,6 +194,15 @@ class SessionRunner:
         self._todos._on_change = lambda: self._send_state()
         return registry
 
+    def _log_tool_call(self, call: Any, out: str, is_err: bool = False) -> None:
+        """``run_agent_turn`` 的 on_tool_call 钩子 — 桥接轮次的工具流水进日志。
+
+        带默认值的 lambda 会让 mypy 报 "Cannot infer type of lambda"，所以落成小方法。
+        """
+        self._log.info(
+            "bridge.turn tool=%s%s", call.name, " (error)" if is_err else ""
+        )
+
     def run(
         self,
         msg: dict[str, Any],
@@ -248,9 +257,7 @@ class SessionRunner:
                 on_reasoning_delta=lambda t: reply_send(
                     P.delta(id=turn_id, kind="reasoning", text=t)
                 ),
-                on_tool_call=lambda call, out, is_err=False: self._log.info(
-                    "bridge.turn tool=%s%s", call.name, " (error)" if is_err else ""
-                ),
+                on_tool_call=self._log_tool_call,
                 # Seamless compaction notices (context pressure / overflow
                 # recovery) surface in the panel's activity rail, not the chat.
                 on_system=lambda t: reply_send(P.notice(id=turn_id, text=t)),

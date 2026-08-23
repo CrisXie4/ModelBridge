@@ -325,7 +325,8 @@ def _run_subagent(
         WriteFileTool,
     )
 
-    tools_by_name = {
+    # dict[str, Any]: 值是各工具类；收窄到基类会让实例化报 abstract。
+    tools_by_name: dict[str, Any] = {
         "read_file": ReadFileTool,
         "list_dir": ListDirTool,
         "grep": GrepTool,

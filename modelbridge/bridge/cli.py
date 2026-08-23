@@ -177,8 +177,10 @@ def _status_impl() -> None:
     console.print(f"  配置目录   : {st['app_dir']}")
     ep = st.get("endpoint")
     if st["host_alive"]:
+        port = ep.get("port") if ep else "?"
+        pid = ep.get("pid") if ep else "?"
         console.print(
-            f"  宿主       : [green]运行中[/green] (port {ep.get('port')} · pid {ep.get('pid')})"
+            f"  宿主       : [green]运行中[/green] (port {port} · pid {pid})"
         )
     elif ep:
         console.print(

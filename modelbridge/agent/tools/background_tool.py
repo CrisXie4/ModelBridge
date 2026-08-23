@@ -18,6 +18,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from ...executor.runner import run_command
@@ -77,7 +78,7 @@ class BackgroundTaskManager:
 
         def work() -> None:
             try:
-                res = run_command(command, cwd=cwd, timeout=timeout, max_output=200_000)
+                res = run_command(command, cwd=Path(cwd), timeout=timeout, max_output=200_000)
             except Exception as e:  # noqa: BLE001 — surface as task error
                 task.status = "error"
                 task.output = f"{type(e).__name__}: {e}"
@@ -135,7 +136,9 @@ class BackgroundTaskManager:
         with self._lock:
             return self._tasks.get(task_id)
 
-    def list(self) -> list[dict[str, Any]]:
+    def list_tasks(self) -> list[dict[str, Any]]:
+        """All tasks as dicts. (Not named ``list`` — that would shadow the
+        builtin inside this class's annotations.)"""
         with self._lock:
             return [t.to_dict() for t in self._tasks.values()]
 

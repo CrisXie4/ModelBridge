@@ -317,15 +317,14 @@ def prune_tool_results(
         head = m.content[:_PRUNE_HEAD_CHARS]
         tail = m.content[-_PRUNE_TAIL_CHARS:]
         cut = before - _PRUNE_HEAD_CHARS - _PRUNE_TAIL_CHARS
+        pruned = f"{head}\n[…中间已剪裁 {cut} 字符，如仍需要请重新调用工具…]\n{tail}"
         messages[i] = ChatMessage(
             role="tool",
             tool_call_id=m.tool_call_id,
             name=m.name,
-            content=(
-                f"{head}\n[…中间已剪裁 {cut} 字符，如仍需要请重新调用工具…]\n{tail}"
-            ),
+            content=pruned,
         )
-        removed += before - len(messages[i].content)
+        removed += before - len(pruned)
     return removed
 
 

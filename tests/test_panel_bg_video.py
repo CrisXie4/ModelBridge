@@ -232,7 +232,7 @@ def test_bg_tool_denied_without_confirm(tmp_path):
     mgr = BackgroundTaskManager()
     res = _dispatch_start(mgr, ctx, "c2")
     assert res.is_error
-    assert mgr.list() == []
+    assert mgr.list_tasks() == []
 
 
 # ---------------------------------------------------------------------------

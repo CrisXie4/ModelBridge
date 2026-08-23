@@ -59,7 +59,7 @@ class BackgroundTaskTool(Tool):
                 return self.err("没有这个任务编号。")
             return self.ok(_fmt_task(info), structured=info)
         if action == "list":
-            items = self.manager.list()
+            items = self.manager.list_tasks()
             if not items:
                 return self.ok("当前没有后台任务。")
             body = "\n".join(_fmt_task(i) for i in items)

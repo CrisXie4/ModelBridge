@@ -1032,8 +1032,8 @@ def _run_repl(
             _tui.start()
             _time_mod.sleep(0.5)  # 等 UI 线程起来；没起来就回退并说明原因
             if not _tui.is_alive():
-                reason = (_tui.start_error or "").strip().splitlines()
-                tail = reason[-1].strip() if reason else "未知原因"
+                reason_lines = str(_tui.start_error or "").strip().splitlines()
+                tail = reason_lines[-1].strip() if reason_lines else "未知原因"
                 err_console.print(
                     f"[yellow]全屏界面启动失败（{tail}），已回退经典模式。"
                     "设 MBRIDGE_TUI_DEBUG=1 可查看完整堆栈。[/yellow]"
@@ -1502,7 +1502,7 @@ def _run_repl(
         # ── 退出告别卡：品牌 + 主题 + 对话保存位置 ──────────────────────
         # 替换以前那行淡色 "session saved → …"——退出时用户要一眼看到这次
         # 聊了什么、存在哪。
-        _exit_path: str | None = None
+        _exit_path: Path | None = None
         if save_session and len(session.messages) > 1:
             _exit_path = session.save(label=f"repl_{model_name}")
         try:

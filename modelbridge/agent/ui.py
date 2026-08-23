@@ -695,10 +695,10 @@ class AssistantStream:
                 from rich.layout import Layout
 
                 layout = Layout()
-                layout.split_row(
-                    Layout(body, name="left"),
-                    Layout(self.side_panel(), name="side", minimum=30),
-                )
+                side = Layout(self.side_panel(), name="side")
+                # rich 运行时支持最小宽度，但类型标注没跟上 — setattr 绕过。
+                setattr(side, "minimum", 30)
+                layout.split_row(Layout(body, name="left"), side)
                 return layout
             except Exception:
                 pass

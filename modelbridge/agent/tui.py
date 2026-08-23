@@ -27,7 +27,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from queue import Queue
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from .ui import SidePanel
 
@@ -48,7 +48,8 @@ def _ansi_to_fragments(block: str) -> list[tuple[str, str]]:
     from prompt_toolkit.formatted_text import ANSI, to_formatted_text
 
     try:
-        return [(style or "", text) for style, text in to_formatted_text(ANSI(block))]
+        # 片段可能是 (style, text) 或 (style, text, location) 三元组 — 用下标取前两个。
+        return [(frag[0] or "", frag[1]) for frag in to_formatted_text(ANSI(block))]
     except Exception:
         return [("", block)]
 
@@ -440,7 +441,7 @@ class TuiRepl:
 
         transcript_window = Window(
             FormattedTextControl(
-                self._transcript_control, show_cursor=False, focusable=False,
+                cast(Any, self._transcript_control), show_cursor=False, focusable=False,
             ),
             wrap_lines=True,
             style="",
@@ -459,24 +460,28 @@ class TuiRepl:
         # 补全下拉菜单（prompt_toolkit 默认提示布局的一部分，裸 BufferControl
         # 不会自带 —— 用 FloatContainer 挂上）。
         try:
-            from prompt_toolkit.layout import FloatContainer
+            from prompt_toolkit.layout import Float, FloatContainer
             from prompt_toolkit.layout.menus import (
-                CompletionMenu,
-                MultiColumnCompletionMenu,
+                CompletionsMenu,
+                MultiColumnCompletionsMenu,
             )
 
             input_area: Any = FloatContainer(
                 VSplit([label_window, input_window]),
                 floats=[
-                    CompletionMenu(),
-                    MultiColumnCompletionMenu(),
+                    Float(xcursor=True, ycursor=True, content=CompletionsMenu()),
+                    Float(
+                        xcursor=True,
+                        ycursor=True,
+                        content=MultiColumnCompletionsMenu(),
+                    ),
                 ],
             )
         except Exception:
             input_area = VSplit([label_window, input_window])
         rail_window = Window(
             FormattedTextControl(
-                self._rail_control, show_cursor=False, focusable=False,
+                cast(Any, self._rail_control), show_cursor=False, focusable=False,
             ),
             width=lambda: rail_width(self._term_w),
             wrap_lines=True,
@@ -494,7 +499,7 @@ class TuiRepl:
         columns = [left] + ([sep_window] if sep_window is not None else []) + [rail_window]
         root = VSplit(columns)
 
-        app = Application(
+        app: Application[Any] = Application(
             layout=Layout(root, focused_element=input_window),
             key_bindings=kb,
             full_screen=True,

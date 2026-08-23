@@ -187,13 +187,20 @@ def test_cache_stats_atomic_write_without_fsync(home):
 # ---------------------------------------------------------------------------
 
 def test_pricing_cache_sees_external_edit(home):
+    import os
+
     from modelbridge.cost.estimator import load_pricing_overrides
 
-    _write(home / "pricing.yaml", {"pricing": {"m": {
+    pfile = home / "pricing.yaml"
+    _write(pfile, {"pricing": {"m": {
         "currency": "CNY", "input_per_1m": 1.0, "output_per_1m": 2.0}}})
     assert "m" in load_pricing_overrides()
-    _write(home / "pricing.yaml", {"pricing": {"n": {
+    # 两次写入可能落在文件系统的同一 mtime 时间片里（Windows 尤其明显），
+    # 缓存会误判"没变过"。显式拉开 mtime，保证测试不受时序影响。
+    _write(pfile, {"pricing": {"n": {
         "currency": "CNY", "input_per_1m": 1.0, "output_per_1m": 2.0}}})
+    st = pfile.stat()
+    os.utime(pfile, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
     assert "m" not in load_pricing_overrides()
     assert "n" in load_pricing_overrides()
 
