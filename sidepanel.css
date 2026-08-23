@@ -219,6 +219,16 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* 宿主系统提示 (压缩/上下文回收等) — 一行弱化小字 */
+.notice {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 8px;
+  margin: 4px 0;
+  border-left: 2px solid var(--muted);
+  overflow-wrap: anywhere;
+}
+
 /* 输入中动画 */
 .typing { display: inline-flex; gap: 4px; padding: 6px 2px; }
 .typing i {

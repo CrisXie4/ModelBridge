@@ -88,9 +88,37 @@ function handleFrame(msg) {
     case "approval":
       onApproval(msg);
       break;
+    case "notice":
+      addNotice(msg.text || "");
+      break;
+    case "state":
+      applyState(msg);
+      break;
     default:
       console.warn("unknown frame", msg);
   }
+}
+
+// 宿主的系统提示 (压缩/溢出恢复等) — 一行灰色小字，不进对话气泡。
+function addNotice(text) {
+  if (!text) return;
+  const div = document.createElement("div");
+  div.className = "notice";
+  div.textContent = text;
+  el.messages.appendChild(div);
+  scrollToBottom();
+}
+
+// 状态快照 → 顶栏 tooltip (缓存命中率 / 任务进度，不占面板空间)。
+function applyState(msg) {
+  const bits = [];
+  if (msg.cacheSession) bits.push("缓存命中 " + msg.cacheSession);
+  const todos = msg.todos || [];
+  if (todos.length) {
+    const done = todos.filter((t) => t && t.status === "completed").length;
+    bits.push("任务 " + done + "/" + todos.length);
+  }
+  if (bits.length) el.status.title = (el.status.title.split("·")[0] || "").trim() + " · " + bits.join(" · ");
 }
 
 function onReady(msg) {
@@ -472,8 +500,15 @@ async function onToolCall(msg) {
       // tabs.update 不需要脚本注入 (chrome:// 新标签页也能跳走)，并且
       // 等新页面加载完成后才回复 — 模型下一步可以直接 read_page。
       result = await navigateAndWait(tab, msg.args || {});
+    } else if (msg.name === "get_cookies") {
+      // chrome.cookies 不需要页面注入，浏览器内部页也能查 (只要 URL 是 http(s))。
+      result = await getCookies(tab, msg.args || {});
+    } else if (msg.name === "net_start" || msg.name === "net_log" || msg.name === "net_stop") {
+      result = await netTool(tab, msg.name, msg.args || {});
     } else if (isRestricted(tab.url)) {
       result = { ok: false, content: "当前页面不允许脚本注入 (浏览器内部页/商店页)。请切换到普通网页。" };
+    } else if ((msg.name === "click" || msg.name === "press_key") && (msg.args || {}).trusted) {
+      result = await trustedInputTool(tab, msg.name, msg.args || {});
     } else {
       result = await runPageTool(tab, msg.name, msg.args || {});
     }
@@ -524,6 +559,340 @@ async function navigateAndWait(tab, args) {
       `已打开 ${url}，但等待 ${LOAD_WAIT_MS / 1000} 秒后页面仍在加载 (可能卡住)。` +
       "可用 read_page 读取当前已渲染的内容。",
   };
+}
+
+// ---------------------------------------------------------------------------
+// Cookies — chrome.cookies (面板上下文，无需页面注入)
+// ---------------------------------------------------------------------------
+
+async function getCookies(tab, args) {
+  const url = tab.url || "";
+  if (!/^https?:/i.test(url)) {
+    return { ok: false, content: "当前页面不是 http(s) 地址，无法查询 Cookie。" };
+  }
+  let items = [];
+  if (args.include_domain) {
+    try {
+      const host = new URL(url).hostname;
+      items = await chrome.cookies.getAll({ domain: host });
+    } catch (e) {
+      items = await chrome.cookies.getAll({ url });
+    }
+  } else {
+    items = await chrome.cookies.getAll({ url });
+  }
+  const word = String(args.name || "").toLowerCase();
+  if (word) {
+    items = items.filter((c) => c.name.toLowerCase().includes(word));
+  }
+  if (!items.length) {
+    return {
+      ok: true,
+      content: word ? `(没有名字里含 ${args.name} 的 Cookie)` : "(当前站点没有 Cookie)",
+    };
+  }
+  const lines = items.map((c) => {
+    const flags = [c.httpOnly ? "httpOnly" : "", c.secure ? "secure" : "", c.sameSite || ""]
+      .filter(Boolean)
+      .join(" ");
+    const exp = c.expirationDate
+      ? new Date(c.expirationDate * 1000).toLocaleString()
+      : "会话结束";
+    return (
+      `${c.name} = ${c.value}\n` +
+      `    domain=${c.domain} path=${c.path} 过期=${exp}${flags ? " " + flags : ""}`
+    );
+  });
+  return { ok: true, content: `当前站点共 ${items.length} 条 Cookie:\n` + lines.join("\n") };
+}
+
+// ---------------------------------------------------------------------------
+// Network capture — chrome.webRequest observers keyed by tab id
+// ---------------------------------------------------------------------------
+
+const NET_BUFFER_CAP = 500;
+const netMonitors = new Map(); // tabId -> {entries, byReq, listeners}
+
+function fmtSize(n) {
+  if (!n) return "-";
+  return n >= 1024 ? (n / 1024).toFixed(1) + "KB" : n + "B";
+}
+
+function fmtClock(ts) {
+  const t = new Date(ts);
+  return [t.getHours(), t.getMinutes(), t.getSeconds()]
+    .map((x) => String(x).padStart(2, "0"))
+    .join(":");
+}
+
+async function netTool(tab, name, args) {
+  if (name === "net_start") {
+    if (netMonitors.has(tab.id)) {
+      return { ok: true, content: "本标签页已在记录中。操作页面后用 net_log 查看。" };
+    }
+    const filter = { urls: ["<all_urls>"], tabId: tab.id };
+    const mon = { entries: [], byReq: new Map(), listeners: [] };
+    const record = (e) => {
+      mon.byReq.set(e.rid, e);
+      mon.entries.push(e);
+      if (mon.entries.length > NET_BUFFER_CAP) {
+        const dropped = mon.entries.splice(0, mon.entries.length - NET_BUFFER_CAP);
+        for (const d of dropped) mon.byReq.delete(d.rid);
+      }
+    };
+    const onBefore = (d) => {
+      const e = {
+        rid: d.requestId,
+        ts: Date.now(),
+        method: d.method,
+        url: d.url,
+        type: d.type,
+        status: 0,
+        size: 0,
+        dur: 0,
+        err: "",
+      };
+      record(e);
+    };
+    const onDone = (d) => {
+      const e = mon.byReq.get(d.requestId);
+      if (!e) return;
+      e.status = d.statusCode;
+      e.dur = Date.now() - e.ts;
+      const cl = (d.responseHeaders || []).find(
+        (h) => h.name.toLowerCase() === "content-length"
+      );
+      if (cl) e.size = parseInt(cl.value, 10) || 0;
+    };
+    const onErr = (d) => {
+      const e = mon.byReq.get(d.requestId);
+      if (!e) return;
+      e.err = d.error || "failed";
+      e.dur = Date.now() - e.ts;
+    };
+    try {
+      chrome.webRequest.onBeforeRequest.addListener(onBefore, filter);
+      chrome.webRequest.onCompleted.addListener(onDone, filter, ["responseHeaders"]);
+      chrome.webRequest.onErrorOccurred.addListener(onErr, filter);
+    } catch (e) {
+      return { ok: false, content: "webRequest 监听注册失败: " + (e && e.message ? e.message : String(e)) };
+    }
+    mon.listeners = [
+      [chrome.webRequest.onBeforeRequest, onBefore],
+      [chrome.webRequest.onCompleted, onDone],
+      [chrome.webRequest.onErrorOccurred, onErr],
+    ];
+    netMonitors.set(tab.id, mon);
+    return {
+      ok: true,
+      content: `开始记录本标签页的网络请求 (上限 ${NET_BUFFER_CAP} 条，跨页面跳转继续记录)。` +
+        "接下来点击/提交/跳转后用 net_log 查看。",
+    };
+  }
+  if (name === "net_log") {
+    const mon = netMonitors.get(tab.id);
+    if (!mon) {
+      return { ok: false, content: "本标签页还没有开始记录 — 先调用 net_start。" };
+    }
+    let entries = mon.entries;
+    const word = String(args.filter || "").toLowerCase();
+    if (word) {
+      entries = entries.filter(
+        (e) => e.url.toLowerCase().includes(word) || e.method.toLowerCase().includes(word)
+      );
+    }
+    const total = entries.length;
+    let limit = parseInt(args.limit, 10) || 30;
+    limit = Math.min(Math.max(limit, 1), 200);
+    const shown = entries.slice(-limit);
+    if (!shown.length) {
+      return {
+        ok: true,
+        content: word ? `(没有匹配 ${args.filter} 的请求，共 ${total} 条)` : "(还没有记录到请求)",
+      };
+    }
+    const lines = shown.map((e) => {
+      const st = e.err ? "ERR " + e.err : e.status || "…";
+      const dur = e.dur ? e.dur + "ms" : "-";
+      return `[${fmtClock(e.ts)}] ${e.method} ${st} ${fmtSize(e.size)} ${dur} ${e.url}`;
+    });
+    return {
+      ok: true,
+      content: `最近 ${shown.length}/${total} 条请求 (net_start 之后):\n` + lines.join("\n"),
+    };
+  }
+  if (name === "net_stop") {
+    const mon = netMonitors.get(tab.id);
+    if (!mon) return { ok: true, content: "本标签页本就没有在记录。" };
+    for (const [ev, cb] of mon.listeners) {
+      try {
+        ev.removeListener(cb);
+      } catch (e) {
+        /* listener 可能已被浏览器清理 */
+      }
+    }
+    netMonitors.delete(tab.id);
+    return { ok: true, content: `已停止记录并清空 (共记录过 ${mon.entries.length} 条)。` };
+  }
+  return { ok: false, content: "未知的网络工具: " + name };
+}
+
+// ---------------------------------------------------------------------------
+// Trusted input — CDP real input events (isTrusted=true) via chrome.debugger
+// ---------------------------------------------------------------------------
+
+// 回调式 chrome API → Promise
+function cdpCall(obj, method, ...args) {
+  return new Promise((resolve, reject) => {
+    obj[method](...args, (r) => {
+      const err = chrome.runtime.lastError;
+      if (err) reject(new Error(err.message));
+      else resolve(r);
+    });
+  });
+}
+
+const CDP_KEY_MAP = {
+  enter: { key: "Enter", code: "Enter", vk: 13, text: "\r" },
+  tab: { key: "Tab", code: "Tab", vk: 9 },
+  escape: { key: "Escape", code: "Escape", vk: 27 },
+  backspace: { key: "Backspace", code: "Backspace", vk: 8 },
+  delete: { key: "Delete", code: "Delete", vk: 46 },
+  arrowleft: { key: "ArrowLeft", code: "ArrowLeft", vk: 37 },
+  arrowright: { key: "ArrowRight", code: "ArrowRight", vk: 39 },
+  arrowup: { key: "ArrowUp", code: "ArrowUp", vk: 38 },
+  arrowdown: { key: "ArrowDown", code: "ArrowDown", vk: 40 },
+  home: { key: "Home", code: "Home", vk: 36 },
+  end: { key: "End", code: "End", vk: 35 },
+  pageup: { key: "PageUp", code: "PageUp", vk: 33 },
+  pagedown: { key: "PageDown", code: "PageDown", vk: 34 },
+  " ": { key: " ", code: "Space", vk: 32, text: " " },
+};
+
+function cdpKeyInfo(key) {
+  const k = String(key || "");
+  if (k.length === 1) {
+    const upper = k.toUpperCase();
+    const code = /^[A-Z]$/i.test(k)
+      ? "Key" + upper
+      : /^[0-9]$/.test(k)
+        ? "Digit" + k
+        : k;
+    return { key: k, code, vk: upper.charCodeAt(0), text: k };
+  }
+  return CDP_KEY_MAP[k.toLowerCase()] || null;
+}
+
+// 序列化进页面：定位元素 → 滚到视野中央 → 返回视口坐标 (中心点)。
+function cdpLocateElement(selector) {
+  const el = document.querySelector(selector);
+  if (!el) return { error: "找不到元素: " + selector };
+  el.scrollIntoView({ block: "center", inline: "center" });
+  return new Promise((resolve) =>
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const r = el.getBoundingClientRect();
+        resolve({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });
+      })
+    )
+  );
+}
+
+async function trustedInputTool(tab, name, args) {
+  // 定位目标 (click 必需；press_key 只在有 selector 时定位)
+  let point = null;
+  if (name === "click" || args.selector) {
+    let injected;
+    try {
+      injected = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: cdpLocateElement,
+        args: [args.selector || ""],
+      });
+    } catch (e) {
+      return { ok: false, content: "定位元素失败: " + (e && e.message ? e.message : String(e)) };
+    }
+    const r = injected && injected[0] && injected[0].result;
+    if (!r) return { ok: false, content: "页面无返回。" };
+    if (r.error) return { ok: false, content: r.error };
+    point = r;
+    await sleep(150); // 等滚动落位
+  }
+
+  let attached = true;
+  try {
+    await cdpCall(chrome.debugger, "attach", { tabId: tab.id }, "1.3");
+  } catch (e) {
+    // DevTools 正在调试该标签页 / 浏览器策略禁止 → 降级到软模拟。
+    addToolLine("⚠ CDP 附加失败，已回退模拟输入 (" + (e && e.message ? e.message : e) + ")");
+    attached = false;
+  }
+  if (!attached) return runPageTool(tab, name, args);
+
+  try {
+    if (name === "click") {
+      const p = { x: point.x, y: point.y, button: "left", buttons: 1, clickCount: 1 };
+      await cdpCall(chrome.debugger, "sendCommand", "Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: point.x,
+        y: point.y,
+      });
+      await sleep(80 + Math.random() * 120);
+      await cdpCall(chrome.debugger, "sendCommand", "Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        ...p,
+      });
+      await sleep(60 + Math.random() * 80);
+      await cdpCall(chrome.debugger, "sendCommand", "Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        ...p,
+      });
+      await sleep(500);
+      // 点击可能触发跳转：与软点击一致，等新页面加载完成再回复。
+      let after = null;
+      try {
+        after = await chrome.tabs.get(tab.id);
+      } catch (e) {
+        /* 标签页可能已关闭 */
+      }
+      if (after && after.status === "loading") {
+        addToolLine("⏳ 点击触发页面跳转，等待加载…");
+        await waitForTabLoad(tab.id, LOAD_WAIT_MS);
+      }
+      return { ok: true, content: "已用 CDP 真实输入点击: " + (args.selector || `(${point.x},${point.y})`) };
+    }
+
+    // press_key
+    const ki = cdpKeyInfo(args.key);
+    if (!ki) return { ok: false, content: "无法识别的 key: " + args.key };
+    const base = {
+      key: ki.key,
+      code: ki.code,
+      windowsVirtualKeyCode: ki.vk,
+      nativeVirtualKeyCode: ki.vk,
+    };
+    const down = { type: "keyDown", ...base };
+    if (ki.text) down.text = ki.text;
+    await cdpCall(chrome.debugger, "sendCommand", "Input.dispatchKeyEvent", down);
+    if (ki.text) {
+      await cdpCall(chrome.debugger, "sendCommand", "Input.dispatchKeyEvent", {
+        type: "char",
+        text: ki.text,
+      });
+    }
+    await sleep(40 + Math.random() * 60);
+    await cdpCall(chrome.debugger, "sendCommand", "Input.dispatchKeyEvent", {
+      type: "keyUp",
+      ...base,
+    });
+    return { ok: true, content: "已用 CDP 真实输入按下 " + ki.key };
+  } finally {
+    try {
+      await cdpCall(chrome.debugger, "detach", { tabId: tab.id });
+    } catch (e) {
+      /* 可能已随页面跳转自动分离 */
+    }
+  }
 }
 
 async function runPageTool(tab, name, args) {
@@ -582,6 +951,12 @@ async function runPageTool(tab, name, args) {
 function toolSummary(name, args) {
   args = args || {};
   if (name === "fill") return `fill ${args.selector} = ${truncate(args.value, 40)}`;
+  if (name === "press_key") return `press_key ${args.key}${args.trusted ? " (CDP)" : ""}`;
+  if (name === "get_cookies")
+    return `get_cookies${args.name ? " " + args.name : ""}${args.include_domain ? " (整站)" : ""}`;
+  if (name === "net_start") return "net_start 开始记录网络请求";
+  if (name === "net_log") return `net_log${args.filter ? " " + args.filter : ""}`;
+  if (name === "net_stop") return "net_stop 停止记录";
   if (args.selector) return `${name} ${args.selector}`;
   if (args.url) return `${name} ${args.url}`;
   return name;
@@ -671,6 +1046,102 @@ function pageToolDispatcher(name, args) {
       el.scrollIntoView({ block: "center" });
       el.click();
       return ok("已点击: " + args.selector);
+    }
+    if (name === "page_scroll") {
+      const doc = document.scrollingElement || document.documentElement;
+      if (args.selector) {
+        const el = document.querySelector(args.selector);
+        if (!el) return fail("找不到元素: " + args.selector);
+        const block = args.block === "start" || args.block === "end" ? args.block : "center";
+        el.scrollIntoView({ block });
+      } else if (args.to === "top") {
+        window.scrollTo(0, 0);
+      } else if (args.to === "bottom") {
+        window.scrollTo(0, doc.scrollHeight);
+      } else {
+        const dy = parseInt(args.dy, 10);
+        window.scrollBy(0, Number.isFinite(dy) ? dy : 600);
+      }
+      return ok(
+        "已滚动。当前滚动位置 " +
+          Math.round(window.scrollY) +
+          " / 总高 " +
+          doc.scrollHeight +
+          " (视口高 " +
+          window.innerHeight +
+          ")"
+      );
+    }
+    if (name === "press_key") {
+      const key = String(args.key || "Enter");
+      let el = null;
+      if (args.selector) {
+        el = document.querySelector(args.selector);
+        if (!el) return fail("找不到元素: " + args.selector);
+      } else {
+        el =
+          document.activeElement && document.activeElement !== document.body
+            ? document.activeElement
+            : document.body;
+      }
+      let code, vk, text;
+      if (key.length === 1) {
+        vk = key.toUpperCase().charCodeAt(0);
+        code = /^[a-z]$/i.test(key)
+          ? "Key" + key.toUpperCase()
+          : /^[0-9]$/.test(key)
+            ? "Digit" + key
+            : key;
+        text = key;
+      } else {
+        const M = {
+          Enter: [13, "\r", "Enter"],
+          Tab: [9, "", "Tab"],
+          Escape: [27, "", "Escape"],
+          Backspace: [8, "", "Backspace"],
+          Delete: [46, "", "Delete"],
+          ArrowLeft: [37, "", "ArrowLeft"],
+          ArrowRight: [39, "", "ArrowRight"],
+          ArrowUp: [38, "", "ArrowUp"],
+          ArrowDown: [40, "", "ArrowDown"],
+          Home: [36, "", "Home"],
+          End: [35, "", "End"],
+          PageUp: [33, "", "PageUp"],
+          PageDown: [34, "", "PageDown"],
+          Space: [32, " ", "Space"],
+        };
+        const m = M[key] || M[key === " " ? "Space" : key];
+        if (!m) return fail("无法识别的 key: " + key);
+        vk = m[0];
+        text = m[1];
+        code = m[2];
+      }
+      const dispKey = key === "Space" ? " " : key;
+      const fire = (type, charCode) => {
+        const ev = new KeyboardEvent(type, {
+          key: dispKey,
+          code,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(ev, "keyCode", { get: () => vk });
+        Object.defineProperty(ev, "which", { get: () => vk });
+        if (charCode) Object.defineProperty(ev, "charCode", { get: () => charCode });
+        el.dispatchEvent(ev);
+      };
+      fire("keydown");
+      fire("keypress", text ? vk : 0);
+      fire("keyup");
+      // 模拟事件不触发浏览器默认行为：Enter 在表单里手动补一次提交。
+      if (key === "Enter" && el.form) {
+        if (typeof el.form.requestSubmit === "function") {
+          el.form.requestSubmit();
+          return ok("已按键 Enter 并提交所在表单 (requestSubmit)。");
+        }
+        el.form.submit();
+        return ok("已按键 Enter 并提交所在表单。");
+      }
+      return ok("已按键: " + key);
     }
     if (name === "fill") {
       if (!args.selector) return fail("缺少 selector");
