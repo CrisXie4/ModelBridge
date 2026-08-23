@@ -122,12 +122,45 @@ def test_remote_bridge_available_precheck(tmp_path, monkeypatch):
     assert ok is False  # disabled by default
 
 
-def test_disabled_host_does_not_start_server(tmp_path, monkeypatch):
+def test_disabled_host_listens_but_rejects_auth(tmp_path, monkeypatch):
+    """The control socket is always bound while the panel is open; the
+    ``bridge on`` opt-in is enforced per connection at auth time — flipping
+    the flag needs no host restart (2026-08-22 change)."""
+    import socket
+
+    from modelbridge.bridge import protocol as P
+
     monkeypatch.setenv("MBRIDGE_HOME", str(tmp_path))
     host = Host(io.BytesIO(), io.BytesIO())
     host._start_control_server()
-    assert host._control is None
-    assert not endpoint_path().exists()
+    deadline = time.time() + 3
+    while time.time() < deadline and not endpoint_path().exists():
+        time.sleep(0.02)
+    assert endpoint_path().exists(), "endpoint always published while panel open"
+
+    import json
+
+    port = json.loads(endpoint_path().read_text(encoding="utf-8"))["port"]
+    with socket.create_connection(("127.0.0.1", port), timeout=3) as conn:
+        stream = conn.makefile("rwb")
+        P.write_message(stream, {"type": P.T_AUTH, "token": "anything"})
+        reply = P.read_message(stream)
+        assert reply is not None and reply.get("type") == P.T_ERROR
+        assert "未启用" in reply.get("message", "")
+    if host._control is not None:
+        host._control.stop()
+
+
+def test_auth_gates_read_config_per_connection(tmp_path, monkeypatch):
+    """Enabling control mid-host-lifetime takes effect on the next connect."""
+    from modelbridge.bridge.control import load_control_config, set_control
+
+    monkeypatch.setenv("MBRIDGE_HOME", str(tmp_path))
+    set_control(enabled=True, token="tok")
+    assert load_control_config()["enabled"] is True
+    # The server reads this fresh per connection (no token captured at start)
+    set_control(enabled=False)
+    assert load_control_config()["enabled"] is False
 
 
 def test_endpoint_does_not_leak_token(server):

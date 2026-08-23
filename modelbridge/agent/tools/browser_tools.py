@@ -115,6 +115,76 @@ class ExtractTool(_BrowserTool):
         }
 
 
+class PageScrollTool(_BrowserTool):
+    name = "page_scroll"
+    description = (
+        "滚动当前网页：默认向下滚 600px (dy 可为负值向上)；to=top/bottom 滚到顶部/底部；"
+        "传 selector 则把该元素滚进视野中央。返回当前滚动位置，方便继续读取长页面。"
+        "不需要确认。"
+    )
+
+    def json_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "dy": {"type": "integer", "description": "相对滚动的像素 (默认 600，负值向上)。"},
+                "to": {
+                    "type": "string",
+                    "enum": ["top", "bottom"],
+                    "description": "直接滚到顶部 / 底部。",
+                },
+                "selector": {
+                    "type": "string",
+                    "description": "把匹配元素滚进视野 (block 默认 center)。",
+                },
+                "block": {
+                    "type": "string",
+                    "enum": ["start", "center", "end"],
+                    "description": "配合 selector 时的对齐方式，默认 center。",
+                },
+            },
+            "additionalProperties": False,
+        }
+
+
+class NetStartTool(_BrowserTool):
+    name = "net_start"
+    description = (
+        "开始记录当前标签页的所有网络请求 (XHR/fetch/图片/脚本等，跨页面跳转继续记录)。"
+        "必须在触发请求的动作 (click / fill 后提交 / navigate) 之前调用，"
+        "之后用 net_log 查看。不需要确认。"
+    )
+
+    def json_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}, "additionalProperties": False}
+
+
+class NetLogTool(_BrowserTool):
+    name = "net_log"
+    description = (
+        "查看 net_start 之后记录到的网络请求 (时间/方法/状态码/大小/耗时/URL)。"
+        "filter 按子串过滤 URL 或方法，limit 控制最多返回最近多少条 (默认 30)。"
+    )
+
+    def json_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "filter": {"type": "string", "description": "只返回 URL 或方法包含该子串的请求。"},
+                "limit": {"type": "integer", "description": "最多返回最近多少条 (默认 30，上限 200)。"},
+            },
+            "additionalProperties": False,
+        }
+
+
+class NetStopTool(_BrowserTool):
+    name = "net_stop"
+    description = "停止记录当前标签页的网络请求并清空缓存。不需要确认。"
+
+    def json_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}, "additionalProperties": False}
+
+
 def build_browser_registry(*, include_write: bool = False) -> ToolRegistry:
     """Registry of browser tools. Read tools always; write tools opt-in (Stage 3)."""
     reg = ToolRegistry()
@@ -122,12 +192,22 @@ def build_browser_registry(*, include_write: bool = False) -> ToolRegistry:
     reg.register(GetSelectionTool())
     reg.register(QueryDomTool())
     reg.register(ExtractTool())
+    reg.register(PageScrollTool())
+    reg.register(NetStartTool())
+    reg.register(NetLogTool())
+    reg.register(NetStopTool())
     if include_write:
+        from .browser_cookie_tool import GetCookiesTool
+        from .browser_extra_tools import PressKeyTool
         from .browser_write_tools import ClickTool, FillTool, NavigateTool
+        from .computer_control_tools import InjectJsTool
 
         reg.register(ClickTool())
         reg.register(FillTool())
         reg.register(NavigateTool())
+        reg.register(PressKeyTool())
+        reg.register(InjectJsTool())
+        reg.register(GetCookiesTool())
     return reg
 
 
@@ -136,5 +216,9 @@ __all__ = [
     "GetSelectionTool",
     "QueryDomTool",
     "ExtractTool",
+    "PageScrollTool",
+    "NetStartTool",
+    "NetLogTool",
+    "NetStopTool",
     "build_browser_registry",
 ]

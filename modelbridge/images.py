@@ -21,6 +21,9 @@ ContentBlock = dict[str, Any]
 #: 原始字节体积上限（base64 之前）。base64 约膨胀 33%。
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
+#: 视频原始字节上限 — base64 后 ~66MB，贴多数 vision 接口请求体的实际上限。
+MAX_VIDEO_BYTES = 50 * 1024 * 1024
+
 _EXT_MIME = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -30,6 +33,15 @@ _EXT_MIME = {
     ".bmp": "image/bmp",
 }
 IMAGE_EXTS = frozenset(_EXT_MIME)
+
+_VIDEO_MIME = {
+    ".mp4": "video/mp4",
+    ".m4v": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".mkv": "video/x-matroska",
+}
+VIDEO_EXTS = frozenset(_VIDEO_MIME)
 
 # (magic prefix, mime) — 用于扩展名缺失/错误时兜底探测。
 _MAGIC: list[tuple[bytes, str]] = [
@@ -121,6 +133,53 @@ def is_image_path(relpath: str) -> bool:
     return Path(relpath).suffix.lower() in IMAGE_EXTS
 
 
+# ---------------------------------------------------------------------------
+# 视频 — OpenAI 风格 ``video_url`` 块（GLM-4V / qwen-vl 系列等接受该形式）
+# ---------------------------------------------------------------------------
+
+def is_video_path(relpath: str) -> bool:
+    return Path(relpath).suffix.lower() in VIDEO_EXTS
+
+
+def video_block_from_path(path: str) -> ContentBlock:
+    p = Path(path).expanduser()
+    if not p.is_file():
+        raise ImageError(f"视频文件不存在: {path}")
+    raw = p.read_bytes()
+    if len(raw) > MAX_VIDEO_BYTES:
+        raise ImageError(
+            f"视频过大 ({len(raw) // (1024 * 1024)} MB > {MAX_VIDEO_BYTES // (1024 * 1024)} MB)，"
+            "请裁剪/压缩后再发。"
+        )
+    mime = _VIDEO_MIME.get(p.suffix.lower())
+    if mime is None:
+        raise ImageError(f"不支持的视频格式: {p.name}（支持 mp4/webm/mov/mkv）")
+    return {"type": "video_url", "video_url": {"url": _data_url(raw, mime)}}
+
+
+def ensure_video(
+    *,
+    has_videos: bool,
+    model_is_vision: bool,
+    model_is_video: bool,
+    model_name: str,
+) -> None:
+    """带视频但模型不支持时抛 :class:`ImageError`，给出可操作的提示。"""
+    if not has_videos:
+        return
+    if not model_is_vision:
+        raise ImageError(
+            f"模型 '{model_name}' 未标记 vision，无法识别图像/视频。"
+            "请在 models.yaml 给该模型加 capabilities.vision=true，或换一个 vision 模型。"
+        )
+    if not model_is_video:
+        raise ImageError(
+            f"模型 '{model_name}' 支持图片但不支持视频输入。"
+            "请在 models.yaml 给该模型加 capabilities.video=true（仅对接受 video_url 的模型，"
+            "如 GLM-4V / qwen-vl 系列），或换一个支持视频的模型。"
+        )
+
+
 def ensure_vision(
     *,
     has_images: bool,
@@ -142,12 +201,17 @@ __all__ = [
     "ContentBlock",
     "ImageError",
     "MAX_IMAGE_BYTES",
+    "MAX_VIDEO_BYTES",
     "IMAGE_EXTS",
+    "VIDEO_EXTS",
     "text_block",
     "block_from_path",
     "block_from_url",
     "block_from_clipboard",
     "resolve_image_arg",
     "is_image_path",
+    "is_video_path",
+    "video_block_from_path",
     "ensure_vision",
+    "ensure_video",
 ]

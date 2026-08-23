@@ -86,6 +86,9 @@ class Capabilities(BaseModel):
     # method — it's a capability flag exposed in configs as ``capabilities.json``.
     json: bool = False  # type: ignore[assignment]
     vision: bool = False
+    # Video input on top of vision: the provider accepts ``video_url`` content
+    # blocks (GLM-4V 系列 / qwen-vl 系列等). Only meaningful with vision=True.
+    video: bool = False
     reasoning: bool = False
     reasoning_content_back: bool = False
     cache: bool = False
@@ -300,6 +303,11 @@ class PromptConfig(BaseModel):
     auto_compact_threshold_pct: int = 80
     auto_compact_keep_turns: int = 6
     auto_compact_min_messages: int = 20
+    # Model-free pruning of oversized *historical* tool results during
+    # compaction: text longer than this many chars is rewritten to
+    # head+marker+tail before summarization (recent tail stays verbatim).
+    # 0 disables pruning. Mirrors the DeepSeek harness's tool-result pruner.
+    auto_compact_prune_chars: int = 4000
 
 
 # Current config.yaml schema version. Bump when a breaking structural change

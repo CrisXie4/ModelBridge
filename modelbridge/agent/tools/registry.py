@@ -9,7 +9,13 @@ from typing import Any
 from ..context import AgentContext
 from .base import Tool, ToolCall, ToolResult
 from .bash_tool import RunBashTool
-from .file_tools import ListDirTool, ReadFileTool, StrReplaceTool, WriteFileTool
+from .file_tools import (
+    GrepTool,
+    ListDirTool,
+    ReadFileTool,
+    StrReplaceTool,
+    WriteFileTool,
+)
 
 
 @dataclass
@@ -72,6 +78,7 @@ def build_default_registry(*, include_bash: bool = False) -> ToolRegistry:
     reg = ToolRegistry()
     reg.register(ReadFileTool())
     reg.register(ListDirTool())
+    reg.register(GrepTool())
     reg.register(WriteFileTool())
     reg.register(StrReplaceTool())
     if include_bash:

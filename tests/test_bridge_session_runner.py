@@ -72,10 +72,14 @@ def test_chat_emits_delta_then_assistant_then_done(monkeypatch, patched):
     runner.run({"type": "chat", "id": "t1", "text": "hi"})
 
     kinds = [f["type"] for f in frames]
-    assert kinds == ["delta", "delta", "assistant", "done"]
+    # state (rail status refresh) follows done — the panel's rail updates
+    # cache/todos after every turn.
+    assert kinds == ["delta", "delta", "assistant", "done", "state"]
     assert frames[0] == {"type": "delta", "id": "t1", "kind": "content", "text": "你好"}
     assert frames[2] == {"type": "assistant", "id": "t1", "content": "你好，世界"}
     assert frames[3]["stopped"] == "stop"
+    assert frames[4]["type"] == "state"
+    assert "cwd" in frames[4]
 
 
 def test_session_persists_across_turns(monkeypatch, patched):

@@ -99,18 +99,14 @@ class Host:
     def _start_control_server(self) -> None:
         """Bind the local control socket so the CLI can drive the browser.
 
-        Opt-in: only starts when the user has run ``mbridge bridge on``.
-        Off by default — no port is opened and no endpoint is published.
+        The socket is always bound while the panel is open and the endpoint is
+        always published — the ``mbridge bridge on`` opt-in is enforced per
+        connection at auth time (a fresh config read), so flipping the flag
+        never requires closing and reopening the sidebar.
         """
         try:
-            from .control import ControlServer, load_control_config
+            from .control import ControlServer
 
-            if not load_control_config().get("enabled"):
-                self._log.info(
-                    "bridge.control disabled (run `mbridge bridge on` to enable)"
-                )
-                self._control = None
-                return
             self._control = ControlServer(self)
             self._control.start()
         except Exception as e:
@@ -127,7 +123,12 @@ class Host:
             default_model = load_app_config().default_model
         except Exception as e:
             self._log.warning("bridge.ready model discovery failed: %s", e)
-        return P.ready(version=__version__, models=models, default_model=default_model)
+        import os
+
+        return P.ready(
+            version=__version__, models=models, default_model=default_model,
+            cwd=os.getcwd(),
+        )
 
     # ------------------------------------------------------------------
     # Routing

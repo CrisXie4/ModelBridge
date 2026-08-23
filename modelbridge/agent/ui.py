@@ -13,13 +13,15 @@ and easy to swap for a future web UI.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Callable, Iterable
 
+from rich import box
 from rich.align import Align
-from rich.console import Console, Group
+from rich.console import Console, Group, RenderableType
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.padding import Padding
+from rich.panel import Panel as RichPanel
 from rich.text import Text
 
 from ..context.windows import (
@@ -78,10 +80,295 @@ def _bubble_width(console: Console) -> int:
 _BAR = "▎"
 
 
+# ---------------------------------------------------------------------------
+# Right-side status panel (opencode style — cwd / ctx / cache / todos / bg / tools)
+# ---------------------------------------------------------------------------
+
+class SidePanel:
+    """Mutable state behind the right-side status panel.
+
+    The REPL's callbacks feed it (tool calls, cache outcomes, todos come from
+    the store, background tasks from the manager); :meth:`render` snapshots it
+    into a fixed-width panel. Updated live during each turn (the streaming
+    bubble carries it as a right column) and printed once after the turn.
+    """
+
+    def __init__(self, *, cwd: str, todo_store=None, bg_manager=None) -> None:
+        self.cwd = cwd
+        self.todo_store = todo_store
+        self.bg_manager = bg_manager
+        self.model_name: str = ""
+        self.ctx_line: str = ""            # "4% 35.0k/1.0M"
+        self.cache_last: str = ""          # "27% 12.3k/45.6k"
+        self.cache_session = ""            # "45% 89/197 (轮)"
+        self.tools: list[tuple[str, str, bool]] = []   # (name, preview, is_error)
+        self._cache_hits = 0
+        self._cache_misses = 0
+
+    # -- feeders (called from REPL callbacks) -------------------------------
+
+    def begin_turn(self, model_name: str) -> None:
+        self.tools = []
+        self.model_name = model_name
+
+    def add_tool(self, name: str, preview: str, is_error: bool) -> None:
+        self.tools.append((name, preview, is_error))
+        if len(self.tools) > 30:
+            self.tools = self.tools[-30:]
+
+    def update_ctx(self, *, used_pct: float, used_tokens: int, window: int) -> None:
+        self.ctx_line = f"{used_pct:.0f}% {_fmt_tokens(used_tokens)}/{_fmt_tokens(window)}"
+
+    def update_cache(self, hit: int, miss: int) -> None:
+        total = hit + miss
+        if total > 0:
+            self.cache_last = f"{hit * 100 // total}% ({_fmt_tokens(hit)})"
+        self._cache_hits += hit
+        self._cache_misses += miss
+        s_total = self._cache_hits + self._cache_misses
+        if s_total > 0:
+            self.cache_session = (
+                f"{self._cache_hits * 100 // s_total}% ({_fmt_tokens(s_total)})"
+            )
+
+    # -- rendering -----------------------------------------------------------
+
+    def status_items(self) -> list[tuple[str, str]]:
+        """(style, text) segments for the persistent BOTTOM status bar.
+
+        Plain text only (no emoji) — each segment is self-contained so the
+        bottom bar can join them with " · " and the TUI rail can stack them.
+        """
+        segs: list[tuple[str, str]] = []
+        cwd_disp = self.cwd
+        if len(cwd_disp) > 32:
+            cwd_disp = "…" + cwd_disp[-31:]
+        segs.append(("#8a8f98", f"目录 {cwd_disp}"))
+        if self.model_name:
+            pct_val = 0.0
+            if self.ctx_line:
+                try:
+                    pct_val = float(self.ctx_line.split("%", 1)[0])
+                except ValueError:
+                    pass
+            ctx_color = "#3fb950" if pct_val < 60 else ("#d29922" if pct_val < 85 else "#f85149")
+            segs.append(("#58a6ff bold", f"模型 {self.model_name}"))
+            if self.ctx_line:
+                segs.append((ctx_color, self.ctx_line))
+        if self.cache_last:
+            segs.append(("#d29922", f"缓存 {self.cache_last}"))
+            if self.cache_session:
+                segs.append(("#8a8f98", f"会话 {self.cache_session}"))
+        todos = self._todos()
+        if todos:
+            done = sum(1 for m, _c, s in todos if s == "green")
+            segs.append(("#58a6ff", f"计划 {done}/{len(todos)}"))
+        bgs = self._bg_tasks()
+        if bgs:
+            running = sum(1 for m, _t, s in bgs if s == "cyan")
+            failed = sum(1 for m, _t, s in bgs if s == "red")
+            segs.append(
+                ("#f85149" if failed and not running else "#58a6ff", f"后台 {running}")
+            )
+        return segs
+
+    def render_rail(self, console: Console) -> RenderableType | None:
+        """The RAIL-only panel: todos / background tasks / this turn's tools.
+
+        The status trio (cwd / model+ctx / cache) lives in the persistent
+        BOTTOM status bar (see :meth:`status_items`), so the after-turn
+        transcript print carries only the task rail — matching opencode's
+        split. Returns None when the rail is empty (nothing to print).
+        """
+        width = max(30, min(48, console.width // 3))
+        try:
+            max_lines = max(8, console.size.height - 6)
+        except Exception:
+            max_lines = 16
+
+        lines: list[Text] = []
+        todos = self._todos()
+        if todos:
+            lines.append(Text("任务", style="bold"))
+            shown = todos[: max(4, (max_lines - len(lines) - 6))]
+            for mark, content, style in shown:
+                lines.append(Text.assemble((f"[{mark}] ", style), (content, "")))
+            hidden = len(todos) - len(shown)
+            if hidden > 0:
+                lines.append(Text(f"… 还有 {hidden} 项", style="dim"))
+
+        bgs = self._bg_tasks()
+        if bgs:
+            lines.append(Text("后台", style="bold"))
+            for mark, txt, style in bgs[:6]:
+                lines.append(Text.assemble((f"{mark} ", style), (txt, "")))
+
+        if self.tools:
+            lines.append(Text("本轮", style="bold"))
+            for name, preview, is_error in self.tools[-8:]:
+                mark = "!" if is_error else "+"
+                style = "red" if is_error else "green"
+                label = f"{name} {preview}".strip()
+                if len(label) > width - 6:
+                    label = label[: width - 7] + "…"
+                lines.append(Text.assemble((mark + " ", style), (label, "")))
+            if len(self.tools) > 8:
+                lines.append(Text(f"… 共 {len(self.tools)} 次调用", style="dim"))
+
+        if not lines:
+            return None
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            lines.append(Text("…", style="dim"))
+        return RichPanel(
+            Group(*lines),
+            title="活动",
+            border_style="dim",
+            width=width,
+            box=box.ROUNDED,
+        )
+
+    def render(self, console: Console) -> RenderableType:
+        """Snapshot the current state into a fixed-width panel (~1/3 screen)."""
+        width = max(30, min(48, console.width // 3))
+        # Height budget: never let the panel exceed the live region's budget.
+        try:
+            max_lines = max(8, console.size.height - 6)
+        except Exception:
+            max_lines = 16
+
+        lines: list[Text] = []
+
+        cwd_disp = self.cwd
+        if len(cwd_disp) > width - 8:
+            cwd_disp = "…" + cwd_disp[-(width - 9):]
+        lines.append(Text.assemble(("目录  ", "dim"), (cwd_disp, "")))
+
+        if self.model_name:
+            ctx = f"  {self.ctx_line}" if self.ctx_line else ""
+            lines.append(Text.assemble(("模型  ", "dim"), (self.model_name, "bold cyan"), (ctx, "dim")))
+        if self.cache_last:
+            lines.append(Text.assemble(
+                ("缓存  ", "dim"),
+                (self.cache_last, "yellow" if self.cache_last.startswith(("0%", "1", "2", "3")) else "green"),
+                (f"  会话 {self.cache_session}", "dim"),
+            ))
+        if len(self.cache_last) + len(self.cache_session) > width - 10:
+            # 窄面板：缓存行拆两行，避免折行错位。
+            lines = lines[:-1] + [
+                Text.assemble(("缓存  ", "dim"), (self.cache_last, "green")),
+                Text.assemble(("      会话 ", "dim"), (self.cache_session, "dim")),
+            ]
+
+        # Todos as checkboxes — the panel's centrepiece.
+        todos = self._todos()
+        if todos:
+            lines.append(Text("任务", style="bold"))
+            shown = todos[: max(4, (max_lines - len(lines) - 6))]
+            for mark, content, style in shown:
+                lines.append(Text.assemble((f"[{mark}] ", style), (content, "")))
+            hidden = len(todos) - len(shown)
+            if hidden > 0:
+                lines.append(Text(f"… 还有 {hidden} 项", style="dim"))
+
+        # Background tasks.
+        bgs = self._bg_tasks()
+        if bgs:
+            lines.append(Text("后台", style="bold"))
+            for mark, txt, style in bgs[:6]:
+                lines.append(Text.assemble((f"{mark} ", style), (txt, "")))
+
+        # This turn's tool activity.
+        if self.tools:
+            lines.append(Text("本轮", style="bold"))
+            for name, preview, is_error in self.tools[-8:]:
+                mark = "!" if is_error else "+"
+                style = "red" if is_error else "green"
+                label = f"{name} {preview}".strip()
+                if len(label) > width - 6:
+                    label = label[: width - 7] + "…"
+                lines.append(Text.assemble((mark + " ", style), (label, "")))
+            if len(self.tools) > 8:
+                lines.append(Text(f"… 共 {len(self.tools)} 次调用", style="dim"))
+
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            lines.append(Text("…", style="dim"))
+        return RichPanel(
+            Group(*lines) if lines else Text("(空)", style="dim"),
+            title="状态",
+            border_style="dim",
+            width=width,
+            box=box.ROUNDED,
+        )
+
+    def _todos(self) -> list[tuple[str, str, str]]:
+        if self.todo_store is None:
+            return []
+        try:
+            items = self.todo_store.to_list()
+        except Exception:
+            return []
+        out = []
+        for it in items:
+            if it.get("status") == "done":
+                out.append(("x", it.get("content", ""), "green"))
+            elif it.get("status") == "in_progress":
+                out.append(("~", it.get("content", ""), "cyan"))
+            else:
+                out.append((" ", it.get("content", ""), "dim"))
+        return out
+
+    def _bg_tasks(self) -> list[tuple[str, str, str]]:
+        if self.bg_manager is None:
+            return []
+        try:
+            snaps = self.bg_manager.snapshot_for_panel()
+        except Exception:
+            return []
+        out = []
+        for t in snaps:
+            cmd = t["command"]
+            if len(cmd) > 24:
+                cmd = cmd[:24] + "…"
+            if t["status"] == "running":
+                out.append((">", f"{t['id']} {t['duration_s']}s {cmd}", "cyan"))
+            elif t["status"] == "done":
+                out.append(("+", f"{t['id']} {t['duration_s']}s {cmd}", "green"))
+            else:
+                out.append(("!", f"{t['id']} {t['duration_s']}s {cmd}", "red"))
+        return out
+
+    def render_provider(self, console: Console) -> Callable[[], RenderableType]:
+        """Zero-arg callable for AssistantStream's live right column."""
+        return lambda: self.render(console)
+
+
+def render_side_panel(console: Console, panel: SidePanel) -> None:
+    """Print the task rail into the transcript (after each turn).
+
+    Rail-only (任务/后台/本轮): the status trio lives in the persistent
+    bottom status bar, so it is NOT duplicated here. Empty rail → no output
+    (the bottom bar already tells the story).
+    """
+    try:
+        rail = panel.render_rail(console)
+        if rail is not None:
+            console.print(rail)
+    except Exception:
+        pass  # the panel must never break the REPL
+
+
 def render_user_bubble(console: Console, text: str) -> None:
     """Print the user's message — right-aligned, green color bar, no border."""
     body = Text.assemble((_BAR, "green"), (" " + text, ""))
     console.print(Align(body, align="right"))
+
+
+#: Tool bodies at or below this length stay visible as a second dim line;
+#: anything longer collapses to a size hint (the model still gets the full
+#: body — it lives in the session; this is display-side only).
+_TOOL_BODY_INLINE_CHARS = 160
 
 
 def render_tool_bubble(
@@ -90,23 +377,32 @@ def render_tool_bubble(
     tool_name: str,
     args_preview: str,
     body: str,
+    is_error: bool = False,
 ) -> None:
-    """Print a tool call/result — label line + indented body.
+    """Print a compact right-aligned tool-call entry (opencode style).
 
-    Body is indented 2 (same geometry as assistant content, which also sits
-    under the bar) instead of a single ``▎`` on the first line only — with
-    multi-line results that half-bar looked like stray output from the
-    assistant rather than part of the tool call.
+    One line per call — ``✓ tool args · size`` — keeps the transcript
+    readable when a turn makes dozens of calls; a short body rides inline,
+    an error shows its first line. The full body always reaches the model
+    (it lives in the session history), so display-side folding loses
+    nothing the user can't re-ask for.
     """
-    label = Text.assemble(
-        ("▸ ", "magenta"),
-        (tool_name, "bold magenta"),
-    )
+    line = Text(no_wrap=True, overflow="ellipsis")
+    line.append("✗ " if is_error else "✓ ", style="red" if is_error else "green")
+    line.append(tool_name, style="bold magenta")
     if args_preview:
-        label.append(f"  {args_preview}", style="dim")
-    capped = body if len(body) <= 1200 else body[:1200] + "\n…"
-    console.print(label)
-    console.print(Padding(Text(capped), (0, 0, 0, 2)))
+        line.append(f" {args_preview}", style="dim")
+    body = (body or "").strip()
+    if body:
+        if is_error:
+            first = body.splitlines()[0][:100]
+            line.append(f" — {first}", style="red")
+        elif len(body) <= _TOOL_BODY_INLINE_CHARS:
+            one = body.replace("\n", " ⏎ ")
+            line.append(f" · {one}", style="dim")
+        else:
+            line.append(f" · {len(body)} 字符", style="dim")
+    console.print(Align(line, align="right"))
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +481,7 @@ class AssistantStream:
         show_full: bool = False,
         collapse_threshold: int = 800,
         refresh_per_second: int = 8,
+        side_panel: Callable[[], RenderableType] | None = None,
     ) -> None:
         self.console = console
         self.model_name = model_name
@@ -196,6 +493,10 @@ class AssistantStream:
         self.show_full = show_full
         self.collapse_threshold = collapse_threshold
         self.refresh_per_second = refresh_per_second
+        # Live right column (the SidePanel): during streaming the live region
+        # becomes a two-column layout — conversation tail left, status panel
+        # right (~1/3 width). None = plain single-column streaming.
+        self.side_panel = side_panel
         self._content_parts: list[str] = []
         self._reasoning_parts: list[str] = []
         self._live: Live | None = None
@@ -385,7 +686,23 @@ class AssistantStream:
         elif not reasoning_text:
             items.append(Text(f"{_BAR} …", style="dim"))
 
-        return Group(*items)
+        body = Group(*items)
+        if live_view and self.side_panel is not None:
+            # Two-column live view: conversation tail left, status panel
+            # right (~1/3). The final (post-exit) deposit stays single-column;
+            # the panel is printed separately by the turn-end hook.
+            try:
+                from rich.layout import Layout
+
+                layout = Layout()
+                layout.split_row(
+                    Layout(body, name="left"),
+                    Layout(self.side_panel(), name="side", minimum=30),
+                )
+                return layout
+            except Exception:
+                pass
+        return body
 
 
 # ---------------------------------------------------------------------------
@@ -467,11 +784,8 @@ def status_bar_text(stats: TurnStats, *, model_name: str) -> Text:
 
 
 # ---------------------------------------------------------------------------
-# Multi-line context panel (full width, always on)
+# End-of-turn context line (right-aligned, one line — opencode style)
 # ---------------------------------------------------------------------------
-
-#: Width (in cells) at or below which the panel collapses to the compact form.
-_PANEL_NARROW_THRESHOLD = 70
 
 
 def _progress_bar(pct: float, width: int = 20) -> tuple[str, str]:
@@ -496,110 +810,51 @@ def render_context_panel(
     todo_summary: dict[str, int] | None = None,
     current_todo: str | None = None,
 ) -> None:
-    """Print the multi-line context info panel after each turn.
+    """Print the one-line context summary after each turn — right-aligned.
 
-    Full width, always on. Collapses to a compact two-segment form on narrow
-    terminals (< 70 cols). Falls back to the legacy single-line
+    Replaced the former full-width multi-line panel: the transcript stays
+    clean and the status hugs the right edge above the next prompt, the way
+    opencode's status line reads. Everything the old panel showed is still
+    here, just packed: model, context usage, the two volatile role buckets
+    (reasoning / tool), todo progress, and turn timing. ``/context`` prints
+    the detailed multi-line breakdown on demand. Falls back to the legacy
     :func:`status_bar_text` on any rendering error so the REPL never breaks.
 
-    Layout (wide, ≥ 70 cols)::
+    Layout::
 
-        ─ context ──── <hline to console.width> ────
-          [██░░░░░░░░░░░░░░░░░░] 12%  12.3k / 1.0M  剩余 987.7k
-          前缀 3.1k · 推理 2.1k · 工具 4.8k · 对话 2.3k
-          计划 ▸ 2/5  进行中:优化气泡宽度   耗时 3420ms · 1 轮
+        deepseek-v4-pro  ctx 12% 12.3k/1.0M · 推理2.1k 工具4.8k · 计划 2/5 ▸修复登录 · 3420ms
     """
     try:
-        width = console.width
-        compact = width < _PANEL_NARROW_THRESHOLD
         pct = stats.used_pct
-
-        # --- line 1: title separator across the full width -----------------
-        title = " ctx " if compact else " context "
-        title_cell_w = len(title)  # ASCII-only title, cell count == char count
-        remaining = max(0, width - title_cell_w)
-        # Split the dashes so the title sits roughly 1/4 from the left edge,
-        # matching the spec mockup ("─ context ───────…").
-        left_dash = min(remaining, 2)
-        right_dash = remaining - left_dash
-        console.print(
-            Text("─" * left_dash + title + "─" * right_dash, style="dim")
+        color = "green" if pct < 60 else ("yellow" if pct < 85 else "red")
+        line = Text(no_wrap=True, overflow="ellipsis")
+        line.append(model_name, style="bold cyan")
+        line.append("  ctx ", style="dim")
+        line.append(f"{pct:.0f}%", style=color)
+        line.append(
+            f" {_fmt_tokens(stats.used_tokens)}/{_fmt_tokens(stats.context_window)}",
+            style="dim",
         )
-
-        # --- line 2: progress bar + totals ---------------------------------
-        bar_cells = 12 if compact else 20
-        bar, color = _progress_bar(pct, width=bar_cells)
-        line2 = Text(no_wrap=True, overflow="ellipsis")
-        line2.append("[", style="dim")
-        line2.append(bar, style=color)
-        line2.append("] ", style="dim")
-        line2.append(f"{pct:.0f}% ", style=color)
-        line2.append(
-            f"{_fmt_tokens(stats.used_tokens)}/{_fmt_tokens(stats.context_window)}",
-        )
-        if not compact:
-            line2.append(f"  剩余 {_fmt_tokens(stats.free_tokens)}", style="dim")
-        console.print(line2)
-
-        # --- line 3: role breakdown ----------------------------------------
-        rb = role_breakdown or {"prefix": 0, "reasoning": 0, "tool": 0, "conversation": 0}
-        line3 = Text(no_wrap=True, overflow="ellipsis")
-        if compact:
-            line3.append(
-                f"前缀{_fmt_tokens(rb.get('prefix', 0))} "
-                f"推理{_fmt_tokens(rb.get('reasoning', 0))} "
-                f"工具{_fmt_tokens(rb.get('tool', 0))} "
-                f"对话{_fmt_tokens(rb.get('conversation', 0))}",
+        if role_breakdown:
+            line.append(
+                " · "
+                f"推理{_fmt_tokens(role_breakdown.get('reasoning', 0))} "
+                f"工具{_fmt_tokens(role_breakdown.get('tool', 0))}",
                 style="dim",
             )
-        else:
-            line3.append("前缀 ", style="dim")
-            line3.append(_fmt_tokens(rb.get("prefix", 0)))
-            line3.append(" · 推理 ", style="dim")
-            line3.append(_fmt_tokens(rb.get("reasoning", 0)))
-            line3.append(" · 工具 ", style="dim")
-            line3.append(_fmt_tokens(rb.get("tool", 0)))
-            line3.append(" · 对话 ", style="dim")
-            line3.append(_fmt_tokens(rb.get("conversation", 0)))
-        console.print(line3)
-
-        # --- line 4 (optional): todo progress + timing ---------------------
-        # Spacing convention: Chinese label + space + value, sections joined
-        # by " · ". This keeps CJK/ASCII mixing visually balanced.
-        has_todo = bool(todo_summary and todo_summary.get("total", 0) > 0)
-        if has_todo or stats.last_response_ms:
-            line4 = Text(no_wrap=True, overflow="ellipsis")
-            sections: list[Text] = []
-            if has_todo:
-                done = todo_summary.get("done", 0)  # type: ignore[union-attr]
-                total = todo_summary.get("total", 0)  # type: ignore[union-attr]
-                in_prog = todo_summary.get("in_progress", 0)  # type: ignore[union-attr]
-                todo_txt = Text()
-                todo_txt.append("计划 ", style="dim")
-                todo_txt.append(f"{done}/{total}", style="bold cyan")
-                if current_todo:
-                    label = current_todo
-                    if len(label) > 20:
-                        label = label[:20] + "…"
-                    todo_txt.append("  ▸ ", style="cyan")
-                    todo_txt.append(label, style="cyan")
-                elif in_prog:
-                    todo_txt.append(f"  ({in_prog} 进行中)", style="dim cyan")
-                sections.append(todo_txt)
-            if stats.last_response_ms:
-                time_txt = Text()
-                time_txt.append(f"{stats.last_response_ms}ms", style="dim")
-                if not compact:
-                    time_txt.append(f" · {stats.iterations} 轮", style="dim")
-                sections.append(time_txt)
-            # Join sections with " · " separator.
-            for i, sec in enumerate(sections):
-                if i > 0:
-                    line4.append(" · ", style="dim")
-                line4.append_text(sec)
-            console.print(line4)
+        if todo_summary and todo_summary.get("total", 0) > 0:
+            done = todo_summary.get("done", 0)
+            total = todo_summary.get("total", 0)
+            line.append(" · 计划 ", style="dim")
+            line.append(f"{done}/{total}", style="cyan")
+            if current_todo:
+                label = current_todo if len(current_todo) <= 16 else current_todo[:16] + "…"
+                line.append(f" ▸{label}", style="cyan")
+        if stats.last_response_ms:
+            line.append(f" · {stats.last_response_ms}ms", style="dim")
+        console.print(Align(line, align="right"))
     except Exception:
-        # Fallback: never let the info panel break the REPL.
+        # Fallback: never let the info line break the REPL.
         try:
             console.print(status_bar_text(stats, model_name=model_name))
         except Exception:
@@ -625,10 +880,12 @@ def render_reasoning_meter(
 
 __all__ = [
     "AssistantStream",
+    "SidePanel",
     "TurnStats",
     "compute_turn_stats",
     "render_user_bubble",
     "render_tool_bubble",
+    "render_side_panel",
     "status_bar_text",
     "render_context_panel",
     "render_reasoning_meter",

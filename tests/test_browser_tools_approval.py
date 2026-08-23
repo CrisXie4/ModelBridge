@@ -1,4 +1,4 @@
-"""Browser write tools share one "always" approval; REPL folds long output."""
+"""Browser write tools share one "always" approval."""
 
 from __future__ import annotations
 
@@ -56,13 +56,6 @@ def test_no_approval_still_blocks_each():
     assert asks["n"] == 2  # each denial re-asks
 
 
-def test_fold_tool_body():
-    from modelbridge.cli import _fold_tool_body
-
-    long = "\n".join(f"line{i}" for i in range(30))
-    folded = _fold_tool_body(long)
-    assert "折叠" in folded and "模型已获取完整内容" in folded
-    assert folded.count("\n") <= 8  # head lines + note, not all 30
-
-    assert _fold_tool_body("hello") == "hello"  # short content untouched
-    assert _fold_tool_body("") == ""
+# (The former ``test_fold_tool_body`` covered cli._fold_tool_body, removed with
+# the 2026-08-22 compact tool-line change — long-body folding now lives in
+# render_tool_bubble and is covered by tests/test_repl_display.py.)

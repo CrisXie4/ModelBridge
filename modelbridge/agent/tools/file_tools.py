@@ -10,6 +10,7 @@ window — they return a clear "truncated" notice when that happens.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -69,9 +70,13 @@ class ReadFileTool(Tool):
         # Images: read them as *pictures*, not garbled text. A vision model
         # gets the image as an image block (injected as a follow-up user
         # message, since role=tool can't carry images); a non-vision model
-        # gets a clear note instead of decoded bytes.
+        # gets a clear note instead of decoded bytes. Videos (mp4/webm/…)
+        # follow the same pattern via ``video_url`` blocks for models that
+        # declare capabilities.video.
         if images.is_image_path(resolved.name):
             return self._read_image(resolved, ctx)
+        if images.is_video_path(resolved.name):
+            return self._read_video(resolved, ctx)
 
         try:
             data = resolved.read_bytes()
@@ -88,6 +93,38 @@ class ReadFileTool(Tool):
             )
 
         return self.ok(text, structured={"path": str(resolved), "bytes": len(data)})
+
+    def _read_video(self, resolved: Path, ctx: AgentContext) -> ToolResult:
+        caps_video = getattr(ctx, "model_is_video", False)
+        caps_vision = getattr(ctx, "model_is_vision", False)
+        if not caps_vision:
+            return self.ok(
+                f"[{resolved.name} 是视频文件，当前模型不支持 vision，无法识别。"
+                f"换一个 capabilities.vision=true 的模型再读。]",
+                structured={"path": str(resolved), "video": True, "vision": False},
+            )
+        if not caps_video:
+            return self.ok(
+                f"[{resolved.name} 是视频文件，当前模型支持图片但不支持视频输入"
+                "（需要 capabilities.video=true 的模型，如 GLM-4V / qwen-vl 系列）。]",
+                structured={"path": str(resolved), "video": True, "video_ok": False},
+            )
+        try:
+            block = images.video_block_from_path(str(resolved))
+        except images.ImageError as e:
+            return self.err(str(e))
+        msg = ChatMessage(
+            role="user",
+            content=[
+                {"type": "text", "text": f"[read_file 加载的视频: {resolved.name}]"},
+                block,
+            ],
+        )
+        return ToolResult(
+            content=f"已加载视频 {resolved.name}，见下一条消息。",
+            structured={"path": str(resolved), "video": True, "video_ok": True},
+            extra_messages=[msg],
+        )
 
     def _read_image(self, resolved: Path, ctx: AgentContext) -> ToolResult:
         if not getattr(ctx, "model_is_vision", False):
@@ -227,6 +264,9 @@ class WriteFileTool(Tool):
             tool=self.name,
             summary=f"write_file → {resolved}  ({len(content)} 字符, {'覆盖' if exists else '新建'})",
             detail=preview,
+            # 与 str_replace 共享一个 "always" 决定：批准一次文件写，
+            # 本会话内两种写法都不再问。
+            group="file_write",
         ):
             return self.err("用户拒绝写入。")
 
@@ -239,6 +279,143 @@ class WriteFileTool(Tool):
         return self.ok(
             f"已{'覆盖' if exists else '创建'} {resolved} ({len(content)} 字符)",
             structured={"path": str(resolved), "bytes": len(content.encode('utf-8')), "created": not exists},
+        )
+
+
+# ---------------------------------------------------------------------------
+# grep — content search (read-only)
+# ---------------------------------------------------------------------------
+
+#: Dirs never worth searching (build output / deps / VCS internals).
+_GREP_SKIP_DIRS = {
+    ".git", ".hg", ".svn", "__pycache__", "node_modules", ".venv", "venv",
+    "dist", "build", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    ".modelbridge", ".idea", ".vs",
+}
+_GREP_MAX_FILE_BYTES = 2 * 1024 * 1024  # skip huge blobs; grep targets source
+
+
+class GrepTool(Tool):
+    name = "grep"
+    description = (
+        "在项目文件内容里按正则搜索，返回 ``文件:行号: 行文本`` 的匹配列表。"
+        "只读工具；自动跳过 .git/node_modules/__pycache__ 等目录和二进制文件。"
+        "找代码、找符号、找配置项都用它，定位后用 read_file 精读。"
+    )
+
+    def json_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "正则表达式（Python re 语法）。",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "搜索根目录（默认当前目录）。超出 allowed_dirs 会被拒绝。",
+                },
+                "include": {
+                    "type": "string",
+                    "description": "只搜索匹配该通配符的文件，如 '*.py'。",
+                },
+                "ignore_case": {
+                    "type": "boolean",
+                    "description": "忽略大小写（默认 false）。",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "最多返回匹配数（默认 100，上限 300）。",
+                },
+            },
+            "required": ["pattern"],
+            "additionalProperties": False,
+        }
+
+    def execute(self, args: dict[str, Any], ctx: AgentContext) -> ToolResult:
+        import fnmatch
+        import re
+
+        pattern_arg = args.get("pattern")
+        if not isinstance(pattern_arg, str) or not pattern_arg:
+            return self.err("缺少必填参数 pattern")
+        try:
+            flags = re.IGNORECASE if args.get("ignore_case") else 0
+            rx = re.compile(pattern_arg, flags)
+        except re.error as e:
+            return self.err(f"无效的正则: {e}")
+
+        try:
+            max_results = min(int(args.get("max_results", 100) or 100), 300)
+        except (TypeError, ValueError):
+            max_results = 100
+        include = args.get("include") or None
+        root_arg = args.get("path") or "."
+        try:
+            root = ctx.resolve(root_arg)
+        except PathDenied as e:
+            return self.err(str(e))
+        if not root.exists():
+            return self.err(f"目录不存在: {root}")
+        if not root.is_dir():
+            return self.err(f"{root} 不是目录")
+
+        matches: list[str] = []
+        files_hit = 0
+        files_scanned = 0
+        truncated = False
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if d not in _GREP_SKIP_DIRS)
+            for fname in sorted(filenames):
+                if fname.startswith(".") and fname != ".env.example":
+                    continue
+                if include and not fnmatch.fnmatch(fname, include):
+                    continue
+                fpath = Path(dirpath) / fname
+                try:
+                    if fpath.stat().st_size > _GREP_MAX_FILE_BYTES:
+                        continue
+                    data = fpath.read_bytes()
+                except OSError:
+                    continue
+                try:
+                    text = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue  # non-utf8 — grep targets source text
+                if "\x00" in text:
+                    continue  # NUL byte = binary even when technically utf-8
+                files_scanned += 1
+                hit_in_file = False
+                for lineno, line in enumerate(text.splitlines(), 1):
+                    if rx.search(line):
+                        if not hit_in_file:
+                            files_hit += 1
+                            hit_in_file = True
+                        if len(matches) < max_results:
+                            rel = fpath.relative_to(root) if fpath.is_relative_to(root) else fpath
+                            preview = line.strip()
+                            if len(preview) > 200:
+                                preview = preview[:200] + "…"
+                            matches.append(f"{rel}:{lineno}: {preview}")
+                        else:
+                            truncated = True
+                            break
+                if truncated:
+                    break
+            if truncated:
+                break
+
+        if not matches:
+            return self.ok(
+                f"在 {root} 下扫描 {files_scanned} 个文件，没有匹配 {pattern_arg!r}。",
+                structured={"pattern": pattern_arg, "files_scanned": files_scanned},
+            )
+        body = "\n".join(matches)
+        if truncated:
+            body += f"\n\n[超过 {max_results} 处匹配，已截断 — 收窄 pattern/路径或提高 max_results]"
+        return self.ok(
+            f"{files_hit} 个文件命中（扫描 {files_scanned} 个）：\n\n{body}",
+            structured={"pattern": pattern_arg, "files_hit": files_hit},
         )
 
 
@@ -326,6 +503,8 @@ class StrReplaceTool(Tool):
             tool=self.name,
             summary=f"str_replace → {resolved}  ({len(old_str)}→{len(new_str)} 字符)",
             detail=f"- {old_str.splitlines()[0][:120]}\n+ {new_str.splitlines()[0][:120] if new_str else '(empty)'}",
+            # 与 write_file 共享 "always"（见 WriteFileTool）。
+            group="file_write",
         ):
             return self.err("用户拒绝写入。")
 
@@ -338,4 +517,4 @@ class StrReplaceTool(Tool):
         return self.ok(diff_summary, structured={"path": str(resolved), "old_len": len(old_str), "new_len": len(new_str)})
 
 
-__all__ = ["ReadFileTool", "ListDirTool", "WriteFileTool", "StrReplaceTool"]
+__all__ = ["ReadFileTool", "ListDirTool", "WriteFileTool", "StrReplaceTool", "GrepTool"]

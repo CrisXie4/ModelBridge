@@ -22,30 +22,42 @@ def _capture(fn) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Tool bubble
+# Tool bubble — compact right-aligned entry (2026-08-22 opencode-style change)
 # ---------------------------------------------------------------------------
 
-def test_tool_bubble_label_and_indented_body():
+def test_tool_bubble_one_line_with_inline_short_body():
     out = _capture(lambda c: render_tool_bubble(
         c,
         tool_name="hotkey",
         args_preview="keys=['ctrl', 'c']",
         body="pyautogui 未安装。运行: pip install pyautogui\n（注意：管理员权限）",
     ))
-    # Label line: ▸ + bold name + dim args.
-    assert "▸" in out and "hotkey" in out and "keys=['ctrl', 'c']" in out
-    # Body lines are indented consistently — the old single leading `▎` on
-    # the first line only made multi-line results look like stray output.
+    # Single compact line: ✓ + name + dim args + inline body (newlines folded).
+    assert "✓" in out and "hotkey" in out and "keys=['ctrl', 'c']" in out
     assert "pyautogui 未安装" in out
+    assert out.count("\n") <= 2  # one rendered line (+ possible wrap artifacts)
     assert "▎" not in out
 
 
-def test_tool_bubble_caps_long_body():
+def test_tool_bubble_long_body_shows_size_hint():
     out = _capture(lambda c: render_tool_bubble(
         c, tool_name="read_file", args_preview="p=a", body="x" * 2000
     ))
-    assert "…" in out
-    assert len(out) < 2000  # capped
+    assert "2000 字符" in out
+    assert len(out) < 200  # compact — the body itself never prints
+
+
+def test_tool_bubble_error_shows_first_line():
+    out = _capture(lambda c: render_tool_bubble(
+        c,
+        tool_name="str_replace",
+        args_preview="p=a",
+        body="old_str 未在文件中找到。\n第二行不该出现",
+        is_error=True,
+    ))
+    assert "✗" in out
+    assert "old_str 未在文件中找到" in out
+    assert "第二行不该出现" not in out
 
 
 # ---------------------------------------------------------------------------

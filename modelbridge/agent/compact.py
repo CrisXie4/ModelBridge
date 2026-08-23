@@ -1,11 +1,30 @@
-"""Auto context compression for long REPL sessions.
+"""Auto context compression for long sessions — seamless checkpoint compaction.
 
 When session token usage approaches the model's context window, older
-history is summarized into a compact form so the conversation can continue
-without a manual ``/clear``. Image-bearing messages and tool-call groups
-are preserved verbatim; only pure-text runs are summarized.
+history is condensed into a structured *checkpoint* so the conversation can
+continue without a manual ``/clear``. The design follows the DeepSeek
+harness's compaction (``dsh-compaction-basic``), adapted to ModelBridge's
+plain message-list session:
 
-Invariants honoured here (enforced elsewhere by tests + provider behaviour):
+* **Checkpoint summary** — the summarizer prompt asks for a fixed 8-section
+  Markdown structure (Primary Request / Key Concepts / Files and Code /
+  Errors and Fixes / Pending Jobs / Current Work / Next Step / Critical
+  Context), framed with ``<compacted-summary>`` tags so later compactions
+  recognise prior checkpoints and merge instead of copying them forward.
+* **Prefix-cache reuse** — the default summarizer *replays* the
+  conversation's own system prefix plus the shadowed messages and appends
+  the compaction instruction as the final user message. That request is a
+  genuine prefix-extension of the previous routed request, so the
+  provider's KV cache stays warm (see the harness's cache-reuse rule).
+* **Model-free tool-result pruning** — before any model call, oversized
+  *historical* tool results are deterministically rewritten to
+  head+marker+tail (the harness's tool-result pruner). This alone often
+  relieves enough pressure to skip summarization entirely.
+* **Non-shrinking rejection** — a checkpoint whose framed size is not
+  smaller than the run it replaces is discarded and the run is kept
+  verbatim.
+
+Invariants honoured here (enforced by tests + provider behaviour):
 
 * The leading system prefix (``messages[0..prefix_end)``) is never touched —
   it's the provider's cache-stable prefix.
@@ -22,9 +41,11 @@ Invariants honoured here (enforced elsewhere by tests + provider behaviour):
 The module is split into:
 
 * Pure helpers + :func:`compact_session` (no config/network imports at
-  module top — the default summarizer calls :func:`client.chat_once`).
-* :func:`maybe_auto_compact` — the orchestration entry point the REPL loop
-  calls once per turn; it reads config, measures usage, and decides.
+  module top — the default summarizer calls the provider directly).
+* :func:`maybe_auto_compact` — the orchestration entry point called at
+  every step boundary; it reads config, measures usage, and decides.
+* :func:`is_context_overflow` — provider-error classification used by the
+  agent loop for overflow recovery (compact + retry once).
 """
 
 from __future__ import annotations
@@ -33,14 +54,14 @@ import json
 from dataclasses import dataclass
 from typing import Callable
 
-from ..client import chat_once, get_model_entry
+from ..client import get_model_entry
 from ..context.windows import (
     context_window_for,
     estimate_message_tokens,
     estimate_session_tokens,
 )
 from ..models import ModelEntry
-from ..schemas import ChatMessage, text_of
+from ..schemas import ChatMessage, ProviderError, text_of
 from .session import Session
 
 
@@ -48,19 +69,59 @@ from .session import Session
 # Prompt scaffolding for the summarizer
 # ---------------------------------------------------------------------------
 
-_SUMMARY_SYSTEM = (
-    "你是 ModelBridge 的上下文压缩助手。\n"
-    "下面是早期对话的逐条记录（每条以 [role] 开头）。"
-    "请把它压缩成一份**按重要性整理**的摘要，供模型继续这次会话时参考。\n\n"
-    "要求：\n"
-    "- 重要的决定、约束、用户意图、关键代码 / 文件 / 命令、错误与教训 —— 保留细节。\n"
-    "- 闲聊、重复、中间探索、已被推翻的尝试 —— 压缩成一句话或直接省略。\n"
-    "- 保持时间顺序，用简短分条或短段落，不要逐条复述。\n"
-    "- 不要解释你在做什么；直接输出摘要正文。\n"
-    "- 用与原文相同的语言（中文或英文）。"
+_SUMMARY_HEADER = "[以下是早期对话的自动摘要 — 视为既定背景，直接继续任务]"
+
+#: Tags marking the checkpoint body. Later compactions see prior checkpoints
+#: through these tags and merge them instead of copying forward.
+_SUMMARY_OPEN_TAG = "<compacted-summary>"
+_SUMMARY_CLOSE_TAG = "</compacted-summary>"
+
+#: The compaction directive, delivered as the FINAL user message after the
+#: replayed conversation rather than as a distinct summarizer system prompt.
+#: Keeping the conversation's own system prompt and message prefix in front
+#: of it makes the auxiliary call a genuine prefix of the last routed
+#: request, so the provider's KV cache is reused instead of invalidated.
+_COMPACTION_INSTRUCTION = (
+    "You are now acting as a compaction engine for this AI coding assistant. "
+    "Condense the conversation ABOVE into a structured checkpoint that lets "
+    "another model resume the work with no loss of essential context.\n\n"
+    "Output EXACTLY the Markdown structure below: keep every section, in "
+    "order. Use terse bullets, not prose paragraphs. Write \"(none)\" for an "
+    "empty section — never drop a section.\n\n"
+    "## Primary Request and Intent\n"
+    "- [the user's original and evolving goals; quote verbatim where the exact wording matters]\n\n"
+    "## Key Technical Concepts\n"
+    "- [technologies, frameworks, patterns, and conventions in play]\n\n"
+    "## Files and Code\n"
+    "- [exact path: why it matters, key changes or snippets]\n\n"
+    "## Errors and Fixes\n"
+    "- [error: how it was resolved, plus any related user feedback]\n\n"
+    "## Pending Jobs\n"
+    "- [explicitly requested work not yet completed]\n\n"
+    "## Current Work\n"
+    "- [precisely what was in progress at this checkpoint]\n\n"
+    "## Next Step\n"
+    "- [the single next action, directly in line with the most recent request, or \"(none)\"]\n\n"
+    "## Critical Context\n"
+    "- [decisions and their rationale, constraints, user preferences, open questions]\n\n"
+    "Rules:\n"
+    "- Write in the same language as the conversation (中文对话用中文，英文对话用英文).\n"
+    "- Preserve exact file paths, commands, error strings, identifiers, numeric values, and function signatures.\n"
+    "- Capture user feedback and explicit instructions faithfully, especially corrections.\n"
+    "- Do NOT mention this summarization request or that the context was compacted.\n"
+    "- Output only the checkpoint text: do not call any tool or take any other action.\n"
+    f"- If the conversation already contains a {_SUMMARY_OPEN_TAG} block, it is a PRIOR "
+    "checkpoint. Do not copy it forward verbatim: preserve still-true facts, "
+    "drop stale ones, and merge newer information into one consolidated summary."
 )
 
-_SUMMARY_HEADER = "[以下是早期对话的自动摘要，按重要性整理]"
+#: Cap on the summary generation — checkpoints are terse by construction.
+_SUMMARY_MAX_TOKENS = 4096
+
+#: Pruning budgets (chars) for oversized historical tool results — the
+#: model-free first pass, mirroring dsh-compaction-tool-result-pruner.
+_PRUNE_HEAD_CHARS = 1500
+_PRUNE_TAIL_CHARS = 400
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +137,8 @@ class CompactResult:
     reason: str = ""
     removed_count: int = 0       # messages replaced by summaries
     added_count: int = 0         # summary messages inserted
-    saved_tokens: int = 0        # net token reduction (removed − added)
+    saved_tokens: int = 0        # net token reduction (removed − added + pruned)
+    pruned_count: int = 0        # tool results shrunk by model-free pruning
 
 
 # A summarizer maps a rendered conversation chunk to a summary string.
@@ -100,6 +162,44 @@ def should_compact(
     if message_count < min_messages:
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# Overflow classification (agent-loop recovery)
+# ---------------------------------------------------------------------------
+
+#: Lowercased substrings providers use when the *prompt* exceeds the window.
+_OVERFLOW_MARKERS = (
+    "context length",
+    "context window",
+    "context_window",
+    "maximum context",
+    "max context",
+    "too many tokens",
+    "prompt is too long",
+    "prompt too long",
+    "input tokens",
+    "input too long",
+    "exceeds the context",
+    "reduce the length",
+    "reduce your prompt",
+    "上下文长度",
+    "超过上下文",
+    "输入过长",
+    "超出上下文",
+)
+
+
+def is_context_overflow(err: BaseException) -> bool:
+    """True when a provider error means the request exceeded the context window.
+
+    Used by the agent loop for overflow recovery: compact once, then retry.
+    Deliberately narrow — a generic 400 must NOT trigger a compaction retry.
+    """
+    if not isinstance(err, ProviderError):
+        return False
+    text = f"{err.message or ''} {err.hint or ''}".lower()
+    return any(m in text for m in _OVERFLOW_MARKERS)
 
 
 # ---------------------------------------------------------------------------
@@ -188,23 +288,89 @@ def _render_run(run: list[ChatMessage]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Model-free tool-result pruning
+# ---------------------------------------------------------------------------
+
+def prune_tool_results(
+    messages: list[ChatMessage],
+    *,
+    threshold_chars: int,
+) -> int:
+    """Replace oversized ``role=tool`` text results with head+marker+tail.
+
+    Deterministic and model-free — the cheapest pressure relief available
+    (mirrors the harness's tool-result pruner). Only *historical* results
+    should be passed in: the caller compacts the middle region while the
+    recent tail stays verbatim. Entries are *replaced* in the list (never
+    mutated in place) so a caller's earlier snapshot stays a valid rollback
+    state. Returns the number of characters removed.
+    """
+    if threshold_chars <= 0:
+        return 0
+    removed = 0
+    for i, m in enumerate(messages):
+        if m.role != "tool" or not isinstance(m.content, str):
+            continue
+        if len(m.content) <= threshold_chars:
+            continue
+        before = len(m.content)
+        head = m.content[:_PRUNE_HEAD_CHARS]
+        tail = m.content[-_PRUNE_TAIL_CHARS:]
+        cut = before - _PRUNE_HEAD_CHARS - _PRUNE_TAIL_CHARS
+        messages[i] = ChatMessage(
+            role="tool",
+            tool_call_id=m.tool_call_id,
+            name=m.name,
+            content=(
+                f"{head}\n[…中间已剪裁 {cut} 字符，如仍需要请重新调用工具…]\n{tail}"
+            ),
+        )
+        removed += before - len(messages[i].content)
+    return removed
+
+
+# ---------------------------------------------------------------------------
 # Core operation
 # ---------------------------------------------------------------------------
 
-def _make_default_summarizer(model_name: str) -> SummarizerFn:
-    """Build a summarizer that calls the current model via :func:`chat_once`."""
+def _replay_summarize(
+    model_name: str,
+    *,
+    system_messages: list[ChatMessage],
+    run: list[ChatMessage],
+) -> str:
+    """Default summarizer: replay prefix + run, append the directive.
 
-    def _summarize(text: str) -> str:
-        _, resp = chat_once(
-            text,
-            model_name=model_name,
-            system=_SUMMARY_SYSTEM,
-            timeout=60.0,
-            verbose_label="compact",
-        )
-        return resp.content or ""
+    The request reuses the conversation's own system prefix and the shadowed
+    messages verbatim, so it is a prefix-extension of the previous routed
+    request — the provider's prefix cache stays warm (byte-stable prefix
+    rule; see cache.affinity and the harness's compaction summarizer).
+    """
+    from ..providers import get_provider
+    from ..schemas import ChatRequest
 
-    return _summarize
+    entry = get_model_entry(model_name)
+    provider = get_provider(entry)
+    messages = [
+        *system_messages,
+        *run,
+        ChatMessage(role="user", content=_COMPACTION_INSTRUCTION),
+    ]
+    request = ChatRequest(
+        model=entry.model,
+        messages=messages,
+        max_tokens=_SUMMARY_MAX_TOKENS,
+    )
+    resp = provider.chat(request, timeout=120.0, verbose_label="compact")
+    return (resp.content or "").strip()
+
+
+def _frame_checkpoint(summary_text: str) -> str:
+    """Wrap a summary body in the durable checkpoint framing."""
+    return (
+        f"{_SUMMARY_HEADER}\n"
+        f"{_SUMMARY_OPEN_TAG}\n{summary_text.strip()}\n{_SUMMARY_CLOSE_TAG}"
+    )
 
 
 def compact_session(
@@ -213,11 +379,15 @@ def compact_session(
     keep_turns: int,
     model_name: str,
     summarize_fn: SummarizerFn | None = None,
+    prune_chars: int = 0,
 ) -> CompactResult:
-    """Summarize older history in place.
+    """Condense older history in place.
 
     See module docstring for the invariants. On any failure returns
     ``ok=False`` and leaves ``session.messages`` exactly as it was.
+    ``prune_chars > 0`` first rewrites oversized historical tool results
+    (model-free) — that pass is part of the same atomic operation and rolls
+    back with everything else.
     """
     msgs = session.messages
     if len(msgs) < 2:
@@ -229,15 +399,33 @@ def compact_session(
         return CompactResult(skipped=True, reason="无可压缩的中段")
 
     middle = msgs[prefix_end:tail_start]
+
+    # Pass 0 — model-free pruning of bulky historical tool results.
+    pruned_chars = prune_tool_results(middle, threshold_chars=prune_chars)
+    pruned_tokens = max(0, pruned_chars // 3)  # rough CJK/ASCII mix
+
     runs = _compressible_runs(middle)
     # Only runs with >= 2 messages are worth a model call.
     big_runs = [(s, e) for (s, e) in runs if e - s >= 2]
     if not big_runs:
+        if pruned_chars:
+            # Pruning alone relieved pressure — commit the pruned middle.
+            msgs[prefix_end:tail_start] = middle
+            return CompactResult(
+                ok=True,
+                removed_count=0,
+                added_count=0,
+                saved_tokens=pruned_tokens,
+                pruned_count=sum(
+                    1 for m in middle
+                    if m.role == "tool" and "已剪裁" in (m.content or "")
+                ),
+            )
         return CompactResult(skipped=True, reason="中段无可压缩的文本片段")
 
-    original = list(msgs)  # snapshot for rollback
-    summarizer = summarize_fn or _make_default_summarizer(model_name)
+    original = list(msgs)  # snapshot for rollback (includes pre-prune state)
     big_starts = {s: (s, e) for (s, e) in big_runs}
+    system_messages = msgs[:prefix_end]
 
     removed_count = 0
     removed_tokens = 0
@@ -252,19 +440,28 @@ def compact_session(
             if i in big_starts:
                 s, e = big_starts[i]
                 run = middle[s:e]
-                before = sum(estimate_message_tokens(m) for m in run)
-                summary_text = summarizer(_render_run(run))
-                stripped = (summary_text or "").strip()
-                if stripped:
-                    sm = ChatMessage(
-                        role="user",
-                        content=f"{_SUMMARY_HEADER}\n{stripped}",
+                run_tokens = sum(estimate_message_tokens(m) for m in run)
+                if summarize_fn is not None:
+                    summary_text = summarize_fn(_render_run(run))
+                else:
+                    summary_text = _replay_summarize(
+                        model_name, system_messages=system_messages, run=run
                     )
-                    new_middle.append(sm)
-                    removed_count += len(run)
-                    removed_tokens += before
-                    added_count += 1
-                    added_tokens += estimate_message_tokens(sm)
+                stripped = (summary_text or "").strip()
+                framed = _frame_checkpoint(stripped) if stripped else ""
+                if framed:
+                    sm = ChatMessage(role="user", content=framed)
+                    framed_tokens = estimate_message_tokens(sm)
+                    if framed_tokens >= run_tokens:
+                        # Non-shrinking summary — keep the run verbatim
+                        # rather than replace content with something bigger.
+                        new_middle.extend(run)
+                    else:
+                        new_middle.append(sm)
+                        removed_count += len(run)
+                        removed_tokens += run_tokens
+                        added_count += 1
+                        added_tokens += framed_tokens
                 else:
                     # Empty summary — keep the run verbatim rather than lose it.
                     new_middle.extend(run)
@@ -276,15 +473,19 @@ def compact_session(
         session.messages = original
         return CompactResult(ok=False, reason=str(e) or e.__class__.__name__)
 
-    if removed_count == 0:
-        return CompactResult(skipped=True, reason="摘要为空，未改动")
+    if removed_count == 0 and pruned_chars == 0:
+        return CompactResult(skipped=True, reason="摘要未变小，未改动")
 
     msgs[prefix_end:tail_start] = new_middle
     return CompactResult(
         ok=True,
         removed_count=removed_count,
         added_count=added_count,
-        saved_tokens=max(0, removed_tokens - added_tokens),
+        saved_tokens=max(0, removed_tokens - added_tokens) + pruned_tokens,
+        pruned_count=sum(
+            1 for m in new_middle
+            if m.role == "tool" and "已剪裁" in (m.content or "")
+        ),
     )
 
 
@@ -307,14 +508,17 @@ def format_notice(result: CompactResult, *, auto: bool = False) -> str:
         return f"[{verb}：已跳过 — {result.reason}]"
     if not result.ok:
         return f"[{verb}失败：{result.reason}；历史未改动]"
-    return (
-        f"[已{verb}：移除 {result.removed_count} 条历史，"
-        f"净节省约 {_fmt_tokens(result.saved_tokens)} tokens]"
-    )
+    bits = []
+    if result.removed_count:
+        bits.append(f"摘要替代 {result.removed_count} 条历史")
+    if result.pruned_count:
+        bits.append(f"剪裁 {result.pruned_count} 条工具输出")
+    detail = "，".join(bits) if bits else "仅剪裁"
+    return f"[已{verb}：{detail}，净节省约 {_fmt_tokens(result.saved_tokens)} tokens]"
 
 
 # ---------------------------------------------------------------------------
-# Orchestration entry point (used by the REPL loop)
+# Orchestration entry point (used at every step boundary)
 # ---------------------------------------------------------------------------
 
 def maybe_auto_compact(
@@ -322,12 +526,16 @@ def maybe_auto_compact(
     *,
     model_name: str,
     on_system: Callable[[str], None] | None = None,
-) -> None:
-    """Check config + usage once per turn; compact when the threshold is crossed.
+    force: bool = False,
+) -> CompactResult | None:
+    """Check config + usage; compact when the threshold is crossed.
 
-    Self-contained entry point for :func:`agent.loop.run_interactive`. Reads
-    config, measures current usage against the active model's window, and
-    calls :func:`compact_session` when warranted. Never raises — any failure
+    Self-contained entry point used by :func:`agent.loop.run_agent_turn`
+    (every step boundary) and the REPL (after each turn). Reads config,
+    measures current usage against the active model's window, and calls
+    :func:`compact_session` when warranted. ``force=True`` (overflow
+    recovery) bypasses the threshold / min-message gates but still respects
+    ``auto_compact`` as the master switch. Never raises — any failure
     surfaces as a notice via ``on_system`` and the session is left intact.
     """
     try:
@@ -335,33 +543,44 @@ def maybe_auto_compact(
 
         cfg = load_app_config().prompt
         if not cfg.auto_compact:
-            return
+            return None
+        # Cheap gate first — a session under the minimum message count can
+        # never compact, and skipping here avoids both the model lookup and
+        # any spurious failure notice on tiny sessions.
+        if not force and len(session.messages) < cfg.auto_compact_min_messages:
+            return None
         entry: ModelEntry = get_model_entry(model_name)
         used = estimate_session_tokens(session.messages)
         window = context_window_for(entry)
         pct = (used / window * 100) if window else 0.0
-        if not should_compact(
+        if not force and not should_compact(
             used_pct=pct,
             message_count=len(session.messages),
             threshold_pct=cfg.auto_compact_threshold_pct,
             min_messages=cfg.auto_compact_min_messages,
         ):
-            return
+            return None
         result = compact_session(
             session,
             keep_turns=cfg.auto_compact_keep_turns,
             model_name=model_name,
+            prune_chars=cfg.auto_compact_prune_chars,
         )
         if on_system is not None and not result.skipped:
             on_system(format_notice(result, auto=True))
+        return result
     except Exception as e:
         if on_system is not None:
             on_system(f"[自动压缩失败：{e}；历史未改动]")
+        return None
 
 
 __all__ = [
     "CompactResult",
+    "SummarizerFn",
     "should_compact",
+    "is_context_overflow",
+    "prune_tool_results",
     "compact_session",
     "maybe_auto_compact",
     "format_notice",

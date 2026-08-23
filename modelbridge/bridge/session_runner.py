@@ -38,10 +38,13 @@ SendFn = Callable[[dict[str, Any]], None]
 _SYSTEM_PROMPT = (
     "你是 ModelBridge 的浏览器侧边栏助手。用简洁的中文回答。"
     "你能读取和操作用户当前正在看的网页：\n"
-    "- read_page: 读页面标题/URL/正文 (总结、问答前先调用)\n"
-    "- get_selection: 读用户选中的文本\n"
-    "- query_dom / extract: 用 CSS 选择器定位元素、提取文本或属性\n"
-    "- click / fill / navigate: 操作页面 (这些会向用户请求确认)\n"
+    "- read_page / get_selection / query_dom / extract: 读正文、选区、定位元素、提取内容\n"
+    "- page_scroll: 滚动页面 (长页面分段读取)\n"
+    "- click / fill / press_key / navigate: 点击、填写、按键 (Enter 提交等)、跳转 (需确认)\n"
+    "- inject_js: 在页面里执行 JS 并取回结果 (需确认)\n"
+    "- get_cookies: 查看当前站点 Cookie (敏感，每次都需用户确认)\n"
+    "- net_start / net_log / net_stop: 记录并查看页面网络请求——想看接口数据时"
+    "先 net_start，再触发操作 (click / press_key / navigate)，然后 net_log 查看\n"
     "需要页面信息时主动调用工具，不要凭空猜测页面内容。回答要直接、可执行。\n"
     "页面正在加载时，工具会自动等到加载完成后再执行；navigate / click 触发跳转后"
     "也会等新页面加载完再返回。所以遇到加载慢的页面，继续调用工具完成任务即可，"
@@ -78,6 +81,50 @@ class SessionRunner:
         # each turn, so this set must live here (not on the per-turn ctx) for
         # ApprovalDecision.ALWAYS to persist across messages.
         self._approved_tools: set[str] = set()
+        # Session-scoped auto mode (approval card's 自动 button): every
+        # confirmation is AI-safety-judged instead of carded.
+        self._auto_mode: bool = False
+        # The panel's own todo list (the todo tool writes here; the state
+        # frame publishes it to the rail).
+        from ..agent.live_state import TodoStore
+
+        self._todos = TodoStore()
+        self._cache_hits = 0
+        self._cache_misses = 0
+
+    # ------------------------------------------------------------------
+    # Status snapshot → panel rail (cwd / cache / todos)
+    # ------------------------------------------------------------------
+
+    def _fmt_cache(self, hit: int, total: int) -> str:
+        if total <= 0:
+            return ""
+        return f"{hit * 100 // total}% ({hit})"
+
+    def _send_state(self, turn_id: str = "") -> None:
+        s_total = self._cache_hits + self._cache_misses
+        self._send(P.state(
+            id=turn_id,
+            cwd=str(Path.cwd()),
+            cache_last=self._fmt_cache(self._last_hit, self._last_hit + self._last_miss),
+            cache_session=self._fmt_cache(self._cache_hits, s_total),
+            todos=self._todos.to_list(),
+        ))
+
+    _last_hit: int = 0
+    _last_miss: int = 0
+
+    def _record_usage(self, resp: Any) -> None:
+        try:
+            from ..cache.manager import extract_cache_tokens
+
+            hit, miss = extract_cache_tokens(getattr(resp, "usage", None))
+        except Exception:
+            return
+        if hit or miss:
+            self._last_hit, self._last_miss = hit, miss
+            self._cache_hits += hit
+            self._cache_misses += miss
 
     def _ensure_session(self, model_name: str) -> Session:
         if self.session is None:
@@ -93,12 +140,13 @@ class SessionRunner:
             _ = save_pattern
             # ── Context-aware auto-approval (LLM safety judge) ─────────────
             # When ``auto`` is set (browser write tools pass auto=True, or the
-            # user enabled /auto mode), ask a tiny model whether this action
-            # is safe given the model's stated ``reason`` + target. Safe →
-            # auto-approve without bugging the user. Unsafe → fall through to
-            # the side-panel card. Failures (no model / network) also fall
-            # through to the panel — never block on the judge.
-            if auto:
+            # user enabled auto mode via the approval card's 自动 button), ask
+            # a tiny model whether this action is safe given the model's
+            # stated ``reason`` + target. Safe → auto-approve without bugging
+            # the user. Unsafe → fall through to the side-panel card.
+            # Failures (no model / network) also fall through to the panel —
+            # never block on the judge.
+            if auto or self._auto_mode:
                 is_safe, judge_reason = _llm_safety_judge(
                     tool=tool, summary=summary, detail=detail, reason=reason,
                 )
@@ -112,6 +160,11 @@ class SessionRunner:
             decision = bridge.request_approval(
                 tool=tool, summary=summary, detail=detail, reason=reason,
             )
+            if decision == "auto":
+                # 自动 button: this session's confirmations go through the
+                # AI safety judge from now on; the current one is approved.
+                self._auto_mode = True
+                return ApprovalDecision.YES
             return {
                 "yes": ApprovalDecision.YES,
                 "always": ApprovalDecision.ALWAYS,
@@ -128,11 +181,17 @@ class SessionRunner:
             browser_bridge=bridge,
             # Share the session-scoped set so "approve always" sticks across turns.
             _auto_approved=self._approved_tools,
+            _auto_mode=self._auto_mode,
         )
 
     def build_registry(self):
-        """Browser tools (read tools always; write tools added in Stage 3)."""
+        """Browser tools + the todo tool (rail 任务 section)."""
         registry = build_browser_registry(include_write=True)
+        from ..agent.tools import TodoTool
+
+        registry.register(TodoTool(self._todos))
+        # Todo changes republish the rail state immediately.
+        self._todos._on_change = lambda: self._send_state()
         return registry
 
     def run(
@@ -189,7 +248,12 @@ class SessionRunner:
                 on_reasoning_delta=lambda t: reply_send(
                     P.delta(id=turn_id, kind="reasoning", text=t)
                 ),
-                on_tool_call=lambda call, out: self._log.info("bridge.turn tool=%s", call.name),
+                on_tool_call=lambda call, out, is_err=False: self._log.info(
+                    "bridge.turn tool=%s%s", call.name, " (error)" if is_err else ""
+                ),
+                # Seamless compaction notices (context pressure / overflow
+                # recovery) surface in the panel's activity rail, not the chat.
+                on_system=lambda t: reply_send(P.notice(id=turn_id, text=t)),
             )
         finally:
             self._host.pending_router = None
@@ -200,9 +264,12 @@ class SessionRunner:
             return
 
         final = result.final_response
+        self._record_usage(final)
         content = (final.content if final else "") or ""
         reply_send(P.assistant(id=turn_id, content=content))
         reply_send(P.done(id=turn_id, stopped=result.stopped_reason))
+        # Rail state refresh after every turn: cache hit rate + todos.
+        self._send_state(turn_id)
 
 
 def _format_provider_error(e: ProviderError) -> str:

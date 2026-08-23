@@ -94,22 +94,37 @@ def cmd_on(
         None, "--token", "-t", help="自定义 token；省略则自动生成一串随机值。"
     ),
 ) -> None:
-    """开启命令行联动 (生成/设置 token)。开启后需重新打开侧边栏让宿主生效。"""
-    data = installer_control().set_control(enabled=True, token=token)
+    """开启命令行联动 (生成/设置 token)。"""
+    ctrl = installer_control()
+    data = ctrl.set_control(enabled=True, token=token)
     console.print("[green]✓ 命令行联动已开启[/green]")
     console.print(f"  token : {data['token']}")
-    console.print(
-        "\n[yellow]下一步[/yellow]：到 chrome://extensions [bold]重新打开/刷新[/bold] 侧边栏"
-        "让宿主带着这个开关重启，然后即可在侧边栏里让 AI 操作当前网页。\n"
-        "\n关闭：mbridge bridge off"
-    )
+    # Live post-check: with the always-on control socket, a running host picks
+    # the flag up on the next connection — tell the user which case they're in
+    # instead of the old blanket "reopen the sidebar" advice.
+    try:
+        st = ctrl.control_status()
+    except Exception:
+        st = None
+    if st and st.get("host_alive"):
+        console.print(
+            "\n[green]✓ 检测到宿主正在运行[/green] — 无需重开侧边栏，现在就能用"
+            " (read_page / click / fill / navigate…)。"
+        )
+    else:
+        console.print(
+            "\n[yellow]下一步[/yellow]：打开浏览器侧边栏（宿主随它启动）后即可使用。\n"
+            "已打开过侧边栏？在 chrome://extensions 里 [bold]重新加载[/bold] 扩展，"
+            "或关掉侧边栏再打开。\n"
+            "\n关闭：mbridge bridge off"
+        )
 
 
 @bridge_app.command("off")
 def cmd_off() -> None:
-    """关闭命令行联动 (宿主下次启动不再监听本地端口)。"""
+    """关闭命令行联动 (宿主将拒绝新的控制连接)。"""
     installer_control().set_control(enabled=False)
-    console.print("[green]✓ 命令行联动已关闭[/green] (重开侧边栏后宿主不再监听)。")
+    console.print("[green]✓ 命令行联动已关闭[/green] (对已运行的宿主立即生效)。")
 
 
 def installer_control():
@@ -142,6 +157,36 @@ def _status_impl() -> None:
                   f"({'存在' if installer.launcher_path().exists() else '未安装'})")
     saved = installer.load_saved_extension_id()
     console.print(f"  扩展 ID  : {saved or '(未保存，运行 install --extension-id)'}")
+
+    # Control-link diagnostics — the part users actually need when the REPL
+    # banner says 未连接. Shows the resolved app dir so an MBRIDGE_HOME /
+    # different-user divergence (bridge on wrote a different
+    # bridge_control.json than the REPL reads) is visible immediately.
+    try:
+        from .control import control_status
+
+        st = control_status()
+    except Exception as e:
+        console.print(f"  命令行联动 : [yellow]状态读取失败: {e}[/yellow]")
+        return
+    if st["enabled"]:
+        link = "[green]已开启[/green]"
+    else:
+        link = "[red]未开启[/red] (mbridge bridge on)"
+    console.print(f"  命令行联动 : {link} · token {'✓' if st['token_present'] else '✗'}")
+    console.print(f"  配置目录   : {st['app_dir']}")
+    ep = st.get("endpoint")
+    if st["host_alive"]:
+        console.print(
+            f"  宿主       : [green]运行中[/green] (port {ep.get('port')} · pid {ep.get('pid')})"
+        )
+    elif ep:
+        console.print(
+            f"  宿主       : [yellow]未运行[/yellow] (端点残留 port {ep.get('port')})"
+            " — 打开侧边栏即可"
+        )
+    else:
+        console.print("  宿主       : [yellow]未运行[/yellow] — 打开侧边栏即可 (无需重开)")
 
 
 __all__ = ["bridge_app"]

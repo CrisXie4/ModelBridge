@@ -101,9 +101,9 @@ class ControlServer(threading.Thread):
         super().__init__(daemon=True, name="bridge-control")
         self._host = host
         self._log = host._log
-        # Token comes from the opt-in config (the host only starts this server
-        # when control is enabled, so a token is guaranteed present).
-        self._token = load_control_config().get("token") or secrets.token_hex(16)
+        # NOTE: the auth token is intentionally NOT captured here. The opt-in
+        # config is read fresh on every connection so ``mbridge bridge on`` /
+        # ``off`` takes effect immediately, without restarting this host.
         self._sock: socket.socket | None = None
         self._stopped = threading.Event()
 
@@ -169,15 +169,21 @@ class ControlServer(threading.Thread):
                 first = P.read_message(stream)
             except P.ProtocolError:
                 return
+            # Fresh opt-in read per connection: ``bridge on``/``off`` applies
+            # without a host restart. Disabled → same auth-failed close as a
+            # bad token (loopback-only; no side channel is needed).
+            cfg = load_control_config()
+            token = str(cfg.get("token") or "")
+            if not cfg.get("enabled") or not token:
+                send(P.error(id=None, message="命令行联动未启用 (mbridge bridge on)"))
+                return
             # Constant-time token compare (defence-in-depth; the server is
             # loopback-only). str(...) coercion keeps both operands str so
             # compare_digest can't raise on a missing/non-string token.
             if (
                 not first
                 or first.get("type") != P.T_AUTH
-                or not secrets.compare_digest(
-                    str(first.get("token") or ""), str(self._token)
-                )
+                or not secrets.compare_digest(str(first.get("token") or ""), token)
             ):
                 send(P.error(id=None, message="auth failed"))
                 return
@@ -246,6 +252,48 @@ def _read_endpoint() -> dict[str, Any]:
         raise ControlConnectionError(f"读取宿主端点失败: {e}") from e
 
 
+def probe_endpoint(*, timeout: float = 0.35) -> bool:
+    """True when the published control port accepts connections.
+
+    Distinguishes a live host from a stale ``bridge_endpoint.json`` left by a
+    crashed/closed host — the file's presence alone used to report "connected".
+    """
+    try:
+        ep = _read_endpoint()
+    except ControlConnectionError:
+        return False
+    try:
+        with socket.create_connection(("127.0.0.1", int(ep["port"])), timeout=timeout):
+            return True
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def control_status() -> dict[str, Any]:
+    """Full diagnostic snapshot for ``mbridge bridge status`` / ``bridge on``.
+
+    Includes the app dir so an ``MBRIDGE_HOME`` / different-user mismatch
+    (``bridge on`` and the REPL disagreeing on where ``bridge_control.json``
+    lives — the classic "已开启却显示未启用" cause) is visible at a glance.
+    """
+    cfg = load_control_config()
+    ep: dict[str, Any] | None = None
+    alive = False
+    try:
+        ep = _read_endpoint()
+        alive = probe_endpoint()
+    except ControlConnectionError:
+        pass
+    return {
+        "enabled": bool(cfg.get("enabled")),
+        "token_present": bool(cfg.get("token")),
+        "app_dir": str(get_app_dir()),
+        "config_path": str(control_config_path()),
+        "endpoint": ep,
+        "host_alive": alive,
+    }
+
+
 class RemoteBrowserBridge:
     """Client-side BrowserBridge: relays each browser tool call to the host.
 
@@ -266,11 +314,15 @@ class RemoteBrowserBridge:
         self._seq = 0
 
     def available(self) -> tuple[bool, str]:
-        """Cheap precheck for a friendly startup message. (enabled, reason)."""
+        """Precheck for a friendly startup message. (enabled, reason).
+
+        Probes the actual port so a stale endpoint file (host crashed or
+        panel closed) doesn't report "connected".
+        """
         cfg = load_control_config()
         if not cfg.get("enabled") or not cfg.get("token"):
             return False, "命令行联动未启用 (mbridge bridge on)"
-        if not endpoint_path().exists():
+        if not probe_endpoint():
             return False, "宿主未运行 (请打开浏览器侧边栏)"
         return True, "已连接"
 
@@ -388,4 +440,6 @@ __all__ = [
     "control_config_path",
     "load_control_config",
     "set_control",
+    "probe_endpoint",
+    "control_status",
 ]

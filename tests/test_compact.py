@@ -1,4 +1,4 @@
-"""Auto context compression — partitioning, summarization, and rollback.
+"""Auto context compression — partitioning, checkpointing, pruning, rollback.
 
 Covers the invariants documented in :mod:`modelbridge.agent.compact`:
 
@@ -8,25 +8,39 @@ Covers the invariants documented in :mod:`modelbridge.agent.compact`:
 * Image-bearing (multimodal) messages pass through unchanged.
 * A summarizer failure leaves the session byte-for-byte intact.
 * ``should_compact`` honours the threshold + min-messages gates.
+* The checkpoint framing wraps summaries in ``<compacted-summary>`` tags.
+* A summary that isn't smaller than the run it replaces is rejected
+  (the run is kept verbatim).
+* Model-free tool-result pruning rewrites oversized historical results.
+* ``is_context_overflow`` classifies provider errors for retry recovery.
 """
 
 from __future__ import annotations
 
 from modelbridge.agent.compact import (
     _compressible_runs,
+    _frame_checkpoint,
     _is_protected,
     _prefix_end,
     _tail_start,
     compact_session,
+    is_context_overflow,
+    prune_tool_results,
     should_compact,
 )
 from modelbridge.agent.session import Session
-from modelbridge.schemas import ChatMessage
+from modelbridge.schemas import ChatMessage, ProviderError
 
 
 # ---------------------------------------------------------------------------
 # Helpers for building message lists
 # ---------------------------------------------------------------------------
+
+#: Realistic filler so a run's token estimate comfortably exceeds the framed
+#: checkpoint (whose preamble costs a fixed ~70 tokens). Tiny "u1"/"a1"
+#: strings are *supposed* to fail the shrink check now — that's the guard.
+_BIG = "关于项目结构的说明。" * 40  # ~400 CJK chars ≈ 400+ heuristic tokens
+
 
 def _sys(content: str = "SYSTEM") -> ChatMessage:
     return ChatMessage(role="system", content=content)
@@ -151,31 +165,32 @@ def test_tail_start_not_enough_turns_returns_prefix_end():
 
 
 def test_tail_start_snaps_off_tool_message():
-    # A tool group straddling what would be the boundary.
     msgs = [
         _sys(),
         _user("u1"), _asst("a1"),
         _asst_tc(["c1"]), _tool("c1"),   # assistant(tool_calls) + tool response
         _user("u2"),
     ]
-    # keep_turns=1 → boundary lands on u2 normally; but build a case where the
-    # naive boundary would be the tool message by using keep_turns that lands
-    # right after the assistant with tool_calls.
-    # Here we force the snap path: keep_turns=0 makes boundary=prefix_end, and
-    # we then construct a middle starting with a tool message to verify snap.
-    # Easier: directly verify the snap moves the boundary left off a tool msg.
     msgs2 = [
         _sys(),
         _asst_tc(["c1"]), _tool("c1"),  # group right after prefix
         _user("u1"),
     ]
-    # keep_turns=1: naive backward count stops at u1 (index 3) — not a tool,
-    # so no snap. Instead test keep_turns=0 → boundary=prefix_end=1 (asst_tc),
-    # which is not a tool, so still 1. The snap only fires when boundary is ON
-    # a tool message; construct that explicitly by counting into the middle.
     assert _tail_start(msgs2, prefix_end=1, keep_turns=1) == 3
     # And confirm the real straddle case keeps the group in the tail:
     assert _tail_start(msgs, prefix_end=1, keep_turns=1) == 5  # u2 stays the boundary
+
+
+# ---------------------------------------------------------------------------
+# checkpoint framing
+# ---------------------------------------------------------------------------
+
+def test_frame_checkpoint_wraps_tags_and_header():
+    framed = _frame_checkpoint("第一段摘要")
+    assert "<compacted-summary>" in framed
+    assert "</compacted-summary>" in framed
+    assert "第一段摘要" in framed
+    assert "自动摘要" in framed
 
 
 # ---------------------------------------------------------------------------
@@ -186,8 +201,8 @@ def test_compact_session_replaces_middle_with_summary():
     session = Session(model_name="fake")
     session.messages = [
         _sys(),
-        _user("u1"), _asst("a1"),
-        _user("u2"), _asst("a2"),
+        _user(_BIG + " u1"), _asst(_BIG + " a1"),
+        _user(_BIG + " u2"), _asst(_BIG + " a2"),
         _user("u3"), _asst("a3"),   # tail (keep_turns=1)
     ]
     result = compact_session(
@@ -203,13 +218,15 @@ def test_compact_session_replaces_middle_with_summary():
     assert roles == ["system", "user", "user", "assistant"]
     assert "EARLY TALK" in session.messages[1].content
     assert "自动摘要" in session.messages[1].content
+    assert "<compacted-summary>" in session.messages[1].content
+    assert result.saved_tokens > 0
 
 
 def test_compact_session_preserves_system_prefix_verbatim():
     session = Session(model_name="fake")
     session.messages = [
         _sys("MY PREFIX"),
-        _user("u1"), _asst("a1"),
+        _user(_BIG + " u1"), _asst(_BIG + " a1"),
         _user("u2"), _asst("a2"),
     ]
     compact_session(
@@ -223,7 +240,7 @@ def test_compact_session_keeps_tail_tool_group_intact():
     session = Session(model_name="fake")
     session.messages = [
         _sys(),
-        _user("u1"), _asst("a1"),
+        _user(_BIG + " u1"), _asst(_BIG + " a1"),
         _user("u2"), _asst_tc(["c1", "c2"]), _tool("c1", "r1"), _tool("c2", "r2"),
     ]
     compact_session(
@@ -243,9 +260,9 @@ def test_compact_session_preserves_image_messages_in_place():
     session = Session(model_name="fake")
     session.messages = [
         _sys(),
-        _user("u1"), _asst("a1"),
+        _user(_BIG + " u1"), _asst(_BIG + " a1"),
         _user_img("pic1"),              # protected — stays verbatim
-        _user("u2"), _asst("a2"),
+        _user(_BIG + " u2"), _asst(_BIG + " a2"),
         _user("u3"), _asst("a3"),       # tail
     ]
     result = compact_session(
@@ -289,13 +306,16 @@ def test_compact_session_summarizer_failure_rolls_back():
     session = Session(model_name="fake")
     original = [
         _sys(),
-        _user("u1"), _asst("a1"),
-        _user("u2"), _asst("a2"),
+        _user(_BIG + " u1"), _asst(_BIG + " a1"),
+        _user(_BIG + " u2"), _asst(_BIG + " a2"),
         _user("u3"), _asst("a3"),
     ]
     session.messages = list(original)
+    # Deep-copy-free rollback check: mutate the middle with pruning too, so
+    # the rollback of the pruning pass is exercised in the same test.
     result = compact_session(
-        session, keep_turns=1, model_name="fake", summarize_fn=_explode_summarizer()
+        session, keep_turns=1, model_name="fake", summarize_fn=_explode_summarizer(),
+        prune_chars=100,
     )
     assert not result.ok
     # Session is byte-for-byte unchanged.
@@ -306,8 +326,8 @@ def test_compact_session_empty_summary_keeps_run_verbatim():
     session = Session(model_name="fake")
     session.messages = [
         _sys(),
-        _user("u1"), _asst("a1"),
-        _user("u2"), _asst("a2"),
+        _user(_BIG + " u1"), _asst(_BIG + " a1"),
+        _user(_BIG + " u2"), _asst(_BIG + " a2"),
         _user("u3"), _asst("a3"),
     ]
     result = compact_session(
@@ -315,3 +335,135 @@ def test_compact_session_empty_summary_keeps_run_verbatim():
     )
     # Empty summary → nothing removed → skipped.
     assert result.skipped
+
+
+def test_compact_session_nonshrinking_summary_keeps_run_verbatim():
+    # A "summary" that's longer than the tiny run it replaces must NOT land.
+    session = Session(model_name="fake")
+    session.messages = [
+        _sys(),
+        _user("u1"), _asst("a1"),            # tiny run (~10 tokens)
+        _user("u3"), _asst("a3"),            # tail
+    ]
+    result = compact_session(
+        session, keep_turns=1, model_name="fake",
+        summarize_fn=lambda _t: _BIG + _BIG,  # huge "summary"
+    )
+    assert result.skipped
+    assert "u1" in session.messages[1].content  # run kept verbatim
+
+
+# ---------------------------------------------------------------------------
+# model-free tool-result pruning
+# ---------------------------------------------------------------------------
+
+def test_prune_tool_results_rewrites_oversized_only():
+    big = "x" * 10_000
+    msgs = [
+        _user("q"),
+        _tool("c1", big),
+        _tool("c2", "small"),
+    ]
+    removed = prune_tool_results(msgs, threshold_chars=4000)
+    assert removed > 8000
+    assert len(msgs[1].content) < 2500
+    assert "已剪裁" in msgs[1].content
+    assert msgs[1].content.startswith("x" * 100)
+    assert msgs[1].content.endswith("x" * 100)
+    assert msgs[2].content == "small"      # under threshold — untouched
+    assert msgs[0].content == "q"          # non-tool — untouched
+
+
+def test_prune_tool_results_zero_threshold_disables():
+    msgs = [_tool("c1", "x" * 10_000)]
+    assert prune_tool_results(msgs, threshold_chars=0) == 0
+    assert len(msgs[0].content) == 10_000
+
+
+def test_compact_session_prune_only_relief_commits():
+    # A middle whose only compressible run is a single message (below the
+    # 2-message model-call floor) but carries a huge tool result: pruning
+    # alone commits and reports savings, with no summarizer call.
+    session = Session(model_name="fake")
+    session.messages = [
+        _sys(),
+        _tool("c0", "z" * 12_000),      # single-message middle
+        _user("u"), _asst("a"),         # tail
+    ]
+    result = compact_session(
+        session, keep_turns=1, model_name="fake",
+        summarize_fn=_explode_summarizer(),  # must NOT be called
+        prune_chars=4000,
+    )
+    assert result.ok and result.pruned_count == 1
+    assert result.saved_tokens > 0
+    assert len(session.messages[1].content) < 2500
+
+
+def test_compact_session_pruning_rolls_back_with_summary_failure():
+    session = Session(model_name="fake")
+    session.messages = [
+        _sys(),
+        _user("q1"), _asst_tc(["c1"]), _tool("c1", "y" * 12_000),
+        _user("u"), _asst("a"),         # tail
+    ]
+    result = compact_session(
+        session, keep_turns=1, model_name="fake",
+        summarize_fn=_explode_summarizer(),
+        prune_chars=4000,
+    )
+    assert not result.ok
+    # The pruned tool result is restored byte-for-byte with the rest.
+    assert len(session.messages[3].content) == 12_000
+
+
+# ---------------------------------------------------------------------------
+# overflow classification
+# ---------------------------------------------------------------------------
+
+def _perr(msg: str) -> ProviderError:
+    return ProviderError(msg, provider="p")
+
+
+def test_is_context_overflow_matches_provider_wordings():
+    assert is_context_overflow(_perr(
+        "This model's maximum context length is 65536 tokens. "
+        "However, you requested 100000 tokens"
+    ))
+    assert is_context_overflow(_perr("prompt is too long: 9000 tokens > 8000 limit"))
+    assert is_context_overflow(_perr("输入过长：超出上下文窗口"))
+    assert is_context_overflow(_perr("Request too many tokens (8000 > 4096)"))
+
+
+def test_is_context_overflow_rejects_unrelated_errors():
+    assert not is_context_overflow(_perr("401 unauthorized"))
+    assert not is_context_overflow(_perr("connection reset by peer"))
+    assert not is_context_overflow(RuntimeError("context length?"))
+    assert not is_context_overflow(_perr("model overloaded, retry later"))
+
+
+# ---------------------------------------------------------------------------
+# rollback: compaction mid-flight preserves tool groups
+# ---------------------------------------------------------------------------
+
+def test_compact_session_never_splits_tool_group_from_replay():
+    # The compressible middle contains assistant(tool_calls)+tool pairs; the
+    # replacement keeps them inside ONE run so a replay summarizer request
+    # (system + run + instruction) stays provider-legal.
+    session = Session(model_name="fake")
+    session.messages = [
+        _sys(),
+        _user(_BIG + " u1"),
+        _asst_tc(["c1"]), _tool("c1", _BIG),
+        _user(_BIG + " u2"), _asst(_BIG + " a2"),
+        _user("u3"), _asst("a3"),
+    ]
+    def spy_summarizer(text: str) -> str:
+        return "SPY " + text[:50]
+
+    compact_session(
+        session, keep_turns=1, model_name="fake", summarize_fn=spy_summarizer
+    )
+    assert session.messages[1].role == "user"
+    # tail intact
+    assert [m.role for m in session.messages[-2:]] == ["user", "assistant"]

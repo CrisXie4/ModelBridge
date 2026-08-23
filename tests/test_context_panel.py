@@ -95,7 +95,7 @@ def test_tokens_by_role_empty():
 
 
 # ---------------------------------------------------------------------------
-# render_context_panel — layout & folding
+# render_context_panel — single right-aligned status line
 # ---------------------------------------------------------------------------
 
 def _make_stats(**kw) -> TurnStats:
@@ -125,7 +125,7 @@ def _render(stats, *, width, role_breakdown=None, todo_summary=None, current_tod
     return buf.getvalue().splitlines()
 
 
-def test_panel_wide_renders_four_lines():
+def test_panel_is_one_line_with_usage_and_todo():
     lines = _render(
         _make_stats(used_tokens=123_000, context_window=1_000_000),
         width=120,
@@ -133,31 +133,18 @@ def test_panel_wide_renders_four_lines():
         todo_summary={"total": 5, "done": 2, "in_progress": 1, "pending": 2},
         current_todo="优化气泡宽度",
     )
-    # 1 separator + 1 progress + 1 breakdown + 1 todo/timing = 4
-    assert len(lines) == 4
-    assert any("context" in ln for ln in lines)
-    # 123000 / 1000000 = 12.3% → rounds to "12%"
-    assert any("12%" in ln for ln in lines)
-    assert any("前缀" in ln for ln in lines)
-    assert any("计划" in ln and "2/5" in ln for ln in lines)
+    # Exactly one line — the compact opencode-style status.
+    assert len(lines) == 1
+    line = lines[0]
+    assert "m" in line            # model name
+    assert "12%" in line          # 123000 / 1000000
+    assert "123.0k/1.0M" in line
+    assert "推理" in line and "工具" in line
+    assert "计划" in line and "2/5" in line
+    assert "3420ms" in line
 
 
-def test_panel_narrow_folds_to_compact():
-    lines = _render(
-        _make_stats(),
-        width=50,
-        role_breakdown={"prefix": 3100, "reasoning": 2100, "tool": 4800, "conversation": 2300},
-        todo_summary={"total": 5, "done": 2, "in_progress": 1, "pending": 2},
-        current_todo="优化气泡宽度",
-    )
-    # Compact form: " ctx " title instead of " context "
-    assert any("ctx" in ln for ln in lines)
-    # Should still be 4 lines but more compact (no "剩余 ..." suffix).
-    assert len(lines) == 4
-
-
-def test_panel_omits_todo_line_when_empty():
-    # No todo at all.
+def test_panel_omits_todo_when_empty():
     lines = _render(
         _make_stats(),
         width=120,
@@ -165,11 +152,9 @@ def test_panel_omits_todo_line_when_empty():
         todo_summary=None,
         current_todo=None,
     )
-    # No todo summary and no current todo → line 4 still renders because
-    # last_response_ms > 0 (timing alone is enough). Verify the line has
-    # no "计划" marker though.
-    if len(lines) == 4:
-        assert "计划" not in lines[3]
+    assert len(lines) == 1
+    assert "计划" not in lines[0]
+    assert "3420ms" in lines[0]   # timing still present
 
 
 def test_panel_truncates_long_current_todo():
@@ -181,9 +166,10 @@ def test_panel_truncates_long_current_todo():
         todo_summary={"total": 3, "done": 1, "in_progress": 1, "pending": 1},
         current_todo=long_todo,
     )
-    todo_line = next(ln for ln in lines if "1/3" in ln)
-    # Truncation cap is 20 chars + ellipsis.
-    assert "…" in todo_line
+    line = next(ln for ln in lines if "1/3" in ln)
+    # Truncation cap is 16 chars + ellipsis.
+    assert "…" in line
+    assert len(lines) == 1
 
 
 def test_panel_fallback_on_error():
@@ -215,3 +201,42 @@ def test_panel_fallback_on_error():
     good = _make_stats()
     render_context_panel(console2, good, model_name="m")
     assert buf2.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# render_tool_bubble — compact right-aligned entry
+# ---------------------------------------------------------------------------
+
+def test_tool_bubble_compact_one_line():
+    from modelbridge.agent.ui import render_tool_bubble
+
+    buf = io.StringIO()
+    console = Console(file=buf, width=100, force_terminal=True)
+    render_tool_bubble(
+        console,
+        tool_name="read_file",
+        args_preview="path=src/app.py",
+        body="line1\nline2\n" * 200,   # long body → size hint, not inline
+    )
+    lines = [ln for ln in buf.getvalue().splitlines() if ln.strip()]
+    assert len(lines) == 1
+    assert "read_file" in lines[0]
+    assert "字符" in lines[0]
+
+
+def test_tool_bubble_short_body_inline_error_first_line():
+    from modelbridge.agent.ui import render_tool_bubble
+
+    buf = io.StringIO()
+    console = Console(file=buf, width=100, force_terminal=True)
+    render_tool_bubble(
+        console,
+        tool_name="str_replace",
+        args_preview="path=a.py",
+        body="old_str 未在文件中找到。",
+        is_error=True,
+    )
+    out = buf.getvalue()
+    assert "str_replace" in out
+    assert "未在文件中找到" in out
+    assert "✗" in out

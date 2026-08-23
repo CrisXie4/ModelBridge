@@ -23,6 +23,30 @@ from ..utils import get_app_dir, now_filestamp, now_iso
 
 SESSIONS_DIR_NAME = "sessions"
 
+#: Wire keys ``ChatMessage.to_wire()`` already emits. ``raw_message`` from a
+#: provider echoes these back verbatim; keeping them in ``raw`` would double
+#: every assistant turn's memory (content + tool_calls + reasoning_content
+#: all duplicated) for the whole session lifetime.
+_WIRE_KEYS = frozenset(
+    {"role", "content", "name", "tool_calls", "tool_call_id", "reasoning_content"}
+)
+
+
+def _raw_delta(raw_message: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Reduce a provider ``raw_message`` to the keys ``to_wire()`` misses.
+
+    The only consumer of ``ChatMessage.raw`` (the MiMo adapter) merges keys
+    that ``to_wire()`` didn't emit, so the delta preserves its behaviour
+    exactly while dropping the duplicated bulk.
+    """
+    if not isinstance(raw_message, dict):
+        return None
+    delta = {
+        k: v for k, v in raw_message.items()
+        if k not in _WIRE_KEYS and v is not None
+    }
+    return delta or None
+
 
 def get_sessions_dir() -> Path:
     return get_app_dir() / SESSIONS_DIR_NAME
@@ -70,7 +94,7 @@ class Session:
             content=resp.content or "",
             tool_calls=resp.tool_calls,
             reasoning_content=resp.reasoning_content,
-            raw=resp.raw_message or None,
+            raw=_raw_delta(resp.raw_message),
         )
         self.messages.append(msg)
 

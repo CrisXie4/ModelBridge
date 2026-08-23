@@ -96,8 +96,10 @@ def test_browser_tool_round_trip(patched):  # noqa: ARG001
 
     types = [m["type"] for m in sent]
     assert "tool_call" in types
-    assert sent[-2]["type"] == "assistant"
-    assert "ModelBridge" in sent[-2]["content"]
-    assert sent[-1]["type"] == "done"
+    # assistant → done → state (rail refresh follows every turn)
+    assert sent[-3]["type"] == "assistant"
+    assert "ModelBridge" in sent[-3]["content"]
+    assert sent[-2]["type"] == "done"
+    assert sent[-1]["type"] == "state"
     # pending_router is cleared after the turn
     assert host.pending_router is None

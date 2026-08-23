@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -30,6 +31,7 @@ import typer
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
+from rich.text import Text
 
 from . import __version__, updater
 from .cache import (
@@ -105,9 +107,10 @@ from .agent.tools import TodoTool, build_default_registry
 from .skills.wiring import wire_skills
 from .agent.ui import (
     AssistantStream,
+    SidePanel,
     compute_turn_stats,
-    render_context_panel,
     render_reasoning_meter,
+    render_side_panel,
     render_tool_bubble,
 )
 from .utils import (
@@ -139,7 +142,6 @@ from .context import (
     ContextPlan,
     context_window_for,
     estimate_session_tokens,
-    estimate_tokens_by_role,
     plan as plan_context,
 )
 from .editor import (
@@ -488,6 +490,14 @@ def _run_repl(
             thinking_state["enabled"] = False
             thinking_state["level"] = None
             thinking_state["budget"] = None
+        # Re-sync multimodal capability flags — read_file gates image/video
+        # blocks on them, so a /model switch must not leave stale flags.
+        agent_ctx.model_is_vision = bool(
+            getattr(getattr(new_entry, "capabilities", None), "vision", False)
+        )
+        agent_ctx.model_is_video = bool(
+            getattr(getattr(new_entry, "capabilities", None), "video", False)
+        )
         # Cache-domain visibility: prefix caches are per provider+model, so
         # the switch itself (not the history — we keep it) resets cache
         # hits. ``session`` is created later in _run_repl; by the time
@@ -559,13 +569,28 @@ def _run_repl(
         err_console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=2) from e
 
-    approval = _make_approval(yes=yes)
+    # 审批回调需要能开 agent_ctx 的 auto 模式，但 ctx 在 approval 之后才
+    # 构建——先用 holder 桥接（[o]uto 选项触发）。
+    _approval_ctx_holder: dict[str, Any] = {}
+    # TUI 在 approval 之后才启动；审批要改走 TUI 的 y/n/a/o 面板时从这里取。
+    _approval_tui_holder: dict[str, Any] = {"tui": None}
+
+    def _flip_auto_mode() -> None:
+        ctx_ref = _approval_ctx_holder.get("ctx")
+        if ctx_ref is not None:
+            ctx_ref._auto_mode = True
+
+    approval = _make_approval(
+        yes=yes, auto_mode_flip=_flip_auto_mode, tui_holder=_approval_tui_holder
+    )
     _repl_entry = find_model(model_name) if model_name else None
     _model_is_vision = bool(getattr(getattr(_repl_entry, "capabilities", None), "vision", False))
     agent_ctx = AgentContext(
         policy=policy, cwd=cwd_resolved, approve=approval, allow_bash=allow_bash,
         model_is_vision=_model_is_vision,
+        model_is_video=bool(getattr(getattr(_repl_entry, "capabilities", None), "video", False)),
     )
+    _approval_ctx_holder["ctx"] = agent_ctx
     registry = build_default_registry(include_bash=allow_bash)
 
     # Browser tools are always available: the agent can read/operate the active
@@ -612,13 +637,42 @@ def _run_repl(
 
     browser_bridge = RemoteBrowserBridge()
     agent_ctx.browser_bridge = browser_bridge
+    # ── TUI 启动暂存 ─────────────────────────────────────────────────────
+    # 全屏 TUI 接管后，启动期打到真实 stdout 的横幅会在退出时从备用屏幕后
+    # 冒出来（"退出之后一堆旧东西"）。可能走 TUI 时，启动横幅先暂存为
+    # 可渲染对象，TUI 起来后按左栏宽度重放进转录区；TUI 失败则原样输出。
+    _tui_likely = (
+        not os.environ.get("MBRIDGE_CLASSIC")
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+    )
+    try:
+        import prompt_toolkit  # noqa: F401
+
+        _tui_likely = _tui_likely and True
+    except Exception:
+        _tui_likely = False
+    _startup_notes: list[Any] = []
+
+    def _emit_startup(renderable: Any) -> None:
+        if _tui_likely:
+            _startup_notes.append(renderable)
+        else:
+            console.print(renderable)
+    # 网页控制状态：启动时探测一次（横幅）。断开状态只在启动横幅里提醒
+    # 这一次——用户已知情，之后断开/重连不再刷提示（见 _refresh_bridge_banner，
+    # 它只探测"未连接→已连接"的转变，作为 `bridge on` 生效的反馈）。
+    bridge_state: dict[str, Any] = {"connected": None, "last_probe": 0.0}
     ok, reason = browser_bridge.available()
     if ok:
-        console.print("[dim]网页控制: 已连接侧边栏 (read_page / click / fill / navigate…)[/dim]")
+        bridge_state["connected"] = True
+        _emit_startup(
+            "[dim]网页控制: 已连接侧边栏 (read_page / click / fill / navigate…)[/dim]"
+        )
     else:
-        console.print(
+        _emit_startup(
             f"[dim]网页控制: 未连接 ({reason})。"
-            f"开启: `mbridge bridge on` + 打开侧边栏。[/dim]"
+            f"开启: `mbridge bridge on` + 打开侧边栏 — 之后无需重启 mbridge。[/dim]"
         )
 
     # 2b. MCP — connect configured servers and fold their tools into the same
@@ -635,7 +689,7 @@ def _run_repl(
             mcp_manager.start_heartbeat()  # no-op unless mcp.heartbeat_interval > 0
             failed = mcp_manager.connect_errors
             if n:
-                console.print(f"[dim]MCP: 接入 {n} 个工具"
+                _emit_startup(f"[dim]MCP: 接入 {n} 个工具"
                               f"{f'，{len(failed)} 个 server 连接失败' if failed else ''}"
                               f" · /mcp 管理[/dim]")
             for sid, err in failed.items():
@@ -665,6 +719,43 @@ def _run_repl(
         cwd=str(cwd_resolved),
     )
     todo_store._on_change = live_writer.flush
+
+    # ── 后台任务 + 右侧状态面板 ──────────────────────────────────────────
+    # bg_manager: 长命令后台执行；完成通知进队列，由 REPL 主线程在轮末/空回车
+    # 时取出——追加为 user 消息并唤醒 AI 继续处理（会话只在主线程变更）。
+    import queue as _queue
+
+    _bg_notifications: "_queue.Queue[str]" = _queue.Queue()
+
+    def _on_bg_complete(notice_text: str, task) -> None:
+        _bg_notifications.put(notice_text)
+        try:
+            head = notice_text.splitlines()[2] if len(notice_text.splitlines()) > 2 else ""
+            console.print(f"[dim][后台] 任务完成 {head}（AI 将在下一步自动处理；直接回车可立即唤醒）[/dim]")
+        except Exception:
+            pass
+
+    from .agent.tools.background_tool import BackgroundTaskManager
+    from .agent.tools.background_task_tool import BackgroundTaskTool
+
+    bg_manager = BackgroundTaskManager(on_complete=_on_bg_complete)
+    registry.register(BackgroundTaskTool(bg_manager))
+
+    def _pending_wake() -> bool:
+        """Drain one background notification into the session; True = wake."""
+        try:
+            notice = _bg_notifications.get_nowait()
+        except _queue.Empty:
+            return False
+        from .schemas import ChatMessage as _CM
+
+        session.messages.append(_CM(role="user", content=notice))
+        return True
+
+    side_panel = SidePanel(
+        cwd=str(cwd_resolved), todo_store=todo_store, bg_manager=bg_manager,
+    )
+    side_panel.begin_turn(_active_model() or model_name)
 
     sys_prompt_text = system or _default_system_prompt(allow_bash=allow_bash)
     try:
@@ -753,7 +844,7 @@ def _run_repl(
         )
     else:
         budget_line = f"budget    : 前缀 ~{_fmt_tokens_cli(prefix_tokens)} t · 详情 /tokens"
-    console.print(
+    _emit_startup(
         Panel.fit(
             f"[bold]ModelBridge agent REPL[/bold]  [dim]v{__version__}[/dim]\n"
             f"model     : {model_name}\n"
@@ -765,7 +856,7 @@ def _run_repl(
             f"prefix    : {repl_prefix_hash or '(empty)'}\n"
             f"{cache_line}\n"
             f"{budget_line}\n\n"
-            f"[yellow]💛 感谢 [bold]6哥API[/bold] 赞助[/yellow]  [cyan]https://6geapi.com[/cyan]\n"
+            f"[yellow]感谢 [bold]6哥API[/bold] 赞助[/yellow]  [cyan]https://6geapi.com[/cyan]\n"
             f"[dim]   AI 大模型中转站 · 一个 Key 调用 GPT / Claude / Gemini / DeepSeek 等海内外模型 · OpenAI 兼容[/dim]\n\n"
             f"[dim]/help 命令 · @文件名 引用文件(实时补全, 内容注入本轮) · "
             f"输入停顿后 Tab 接受 AI 续写 · /exit 退出 · Ctrl-D[/dim]",
@@ -784,8 +875,8 @@ def _run_repl(
         rel = None
     if rel is not None:
         update_state["release"] = rel
-        console.print(
-            f"[yellow]🔔 发现新版本 [bold]v{rel.version}[/bold]"
+        _emit_startup(
+            f"[yellow][更新] 发现新版本 [bold]v{rel.version}[/bold]"
             f"（当前 v{__version__}）。输入 [bold]同意[/bold] 下载更新，"
             f"或用 [bold]/update[/bold]。[/yellow]"
         )
@@ -811,6 +902,8 @@ def _run_repl(
     # 只在交互式 TTY 且 prompt_toolkit 可用时启用实时下拉补全；否则回退到
     # console.input（提交后再解析 @提及），保证管道 / 哑终端仍可用。
     _pt_session: Any = None
+    _completer: Any = None
+    _pt_bindings: Any = None
     try:
         if sys.stdin.isatty() and sys.stdout.isatty():
             from prompt_toolkit import PromptSession
@@ -919,14 +1012,72 @@ def _run_repl(
     except Exception:
         _pt_session = None
 
+    # ── 全屏 TUI（opencode 式分栏）：右侧竖栏常驻 + 左侧对话流 ──────────
+    # UI 跑独立线程，agent 循环照旧在主线程。任何启动失败 / MBRIDGE_CLASSIC=1
+    # 都回退到经典滚动模式（下面的分支全部跳过）。
+    _tui: Any = None
+    if _pt_session is not None and not os.environ.get("MBRIDGE_CLASSIC"):
+        try:
+            import _thread as _thread_mod
+            import time as _time_mod
+
+            from .agent.tui import TuiRepl
+
+            _tui = TuiRepl(
+                side_panel=side_panel,
+                completer=_completer,
+                bindings=_pt_bindings,
+                on_interrupt=lambda: _thread_mod.interrupt_main(),
+            )
+            _tui.start()
+            _time_mod.sleep(0.5)  # 等 UI 线程起来；没起来就回退并说明原因
+            if not _tui.is_alive():
+                reason = (_tui.start_error or "").strip().splitlines()
+                tail = reason[-1].strip() if reason else "未知原因"
+                err_console.print(
+                    f"[yellow]全屏界面启动失败（{tail}），已回退经典模式。"
+                    "设 MBRIDGE_TUI_DEBUG=1 可查看完整堆栈。[/yellow]"
+                )
+                if os.environ.get("MBRIDGE_TUI_DEBUG") and _tui.start_error:
+                    err_console.print(_tui.start_error)
+                _tui = None
+        except Exception:
+            _tui = None
+    if _tui is not None:
+        # 所有 console 输出（气泡/工具行/斜杠命令/横幅）进 TUI 转录区；
+        # 宽度收窄到左栏，避免被右侧竖栏盖住。
+        _tui.attach_console(console)
+        _approval_tui_holder["tui"] = _tui
+        # 暂存的启动横幅按左栏宽度重放进转录区（退出后滚动区保持干净）。
+        for _note in _startup_notes:
+            try:
+                console.print(_note)
+            except Exception:
+                pass
+    else:
+        # TUI 未启用/启动失败 —— 暂存的横幅原样落到真实终端。
+        for _note in _startup_notes:
+            try:
+                console.print(_note)
+            except Exception:
+                pass
+
     def _read_raw() -> str:
         nonlocal _pt_session
+        if _tui is not None:
+            return _tui.read_input()
         if _pt_session is not None:
             from prompt_toolkit.formatted_text import HTML
+
             # prompt_toolkit 自行管理光标 / 重绘，无需下面 console.input 那套
             # cp936 光标修正；EOFError / KeyboardInterrupt 向上抛给 loop。
+            # 常驻底部状态栏（opencode 风格）：目录 · 模型+上下文 · 缓存 ·
+            # 计划 · 后台——停在输入提示时始终可见，每次渲染自动刷新。
             try:
-                return _pt_session.prompt(HTML("<ansigreen><b>you ❯</b></ansigreen> "))
+                return _pt_session.prompt(
+                    HTML("<ansigreen><b>you ❯</b></ansigreen> "),
+                    bottom_toolbar=side_panel.status_items,
+                )
             except (EOFError, KeyboardInterrupt):
                 raise
             except Exception as e:
@@ -946,6 +1097,16 @@ def _run_repl(
             console.file.flush()
         except Exception:
             pass
+        # 无 prompt_toolkit 时用单行状态栏兜底（没有常驻 toolbar 能力）。
+        try:
+            segs = side_panel.status_items()
+            if segs:
+                console.print(
+                    Text("  ·  ".join(t for _s, t in segs), style="dim"),
+                    no_wrap=True, overflow="ellipsis",
+                )
+        except Exception:
+            pass
         return console.input("[bold green]you ❯[/bold green] ")
 
     # Images staged by @image / @paste / inline-URL for the *next* user turn;
@@ -959,6 +1120,7 @@ def _run_repl(
         """
         from .agent.mentions import (
             collect_image_blocks,
+            collect_video_blocks,
             inject_file_mentions,
             resolve_mentions,
         )
@@ -986,21 +1148,37 @@ def _run_repl(
             console.print(f"[dim]· 未匹配的 @提及（按普通文字处理）: {miss}[/dim]")
 
         img_blocks = collect_image_blocks(resolved)
-        if img_blocks:
+        vid_blocks = collect_video_blocks(resolved)
+        if img_blocks or vid_blocks:
             entry = find_model(model_name)
+            caps = getattr(entry, "capabilities", None) if entry else None
             try:
                 images.ensure_vision(
-                    has_images=True,
-                    model_is_vision=bool(getattr(entry.capabilities, "vision", False)) if entry else False,
+                    has_images=bool(img_blocks),
+                    model_is_vision=bool(getattr(caps, "vision", False)),
                     model_name=_active_model() or "(未指定)",
                     available_vision=_vision_model_names(),
+                )
+                images.ensure_video(
+                    has_videos=bool(vid_blocks),
+                    model_is_vision=bool(getattr(caps, "vision", False)),
+                    model_is_video=bool(getattr(caps, "video", False)),
+                    model_name=_active_model() or "(未指定)",
                 )
             except images.ImageError as e:
                 console.print(f"[red]{e}[/red]")
                 pending_turn["images"] = []
                 return False
-            pending_turn["images"] = img_blocks
-            console.print(f"[dim]🖼 已内联 {len(img_blocks)} 张图片到本轮消息[/dim]")
+            pending_turn["images"] = img_blocks + vid_blocks
+            n_img = len(img_blocks)
+            n_vid = len(vid_blocks)
+            what = "、".join(
+                bits for bits in (
+                    f"{n_img} 张图片" if n_img else "",
+                    f"{n_vid} 个视频" if n_vid else "",
+                ) if bits
+            )
+            console.print(f"[dim][附件] 已内联 {what} 到本轮消息[/dim]")
         return True
 
     def read_input() -> str:
@@ -1045,8 +1223,36 @@ def _run_repl(
         # bubble printed the same text twice every turn.
         live_writer.set_topic(text)
         live_writer.flush(status="working")
+        # New user turn → reset the side panel's per-turn tool list.
+        side_panel.begin_turn(_active_model() or model_name)
+        # 网页控制状态：启动横幅之后不再刷"已断开"（断开只提醒一次，见
+        # bridge_state 初始化处）。这里只探测"未连接 → 已连接"的转变，让
+        # 用户知道 `bridge on` / 打开侧边栏已经生效；连上一次后就不再探测。
+        _refresh_bridge_banner()
+
+    def _refresh_bridge_banner() -> None:
+        if bridge_state["connected"]:
+            return
+        now = time.monotonic()
+        # 探测带着端口连接超时（probe_endpoint 0.35s），节流到 ≥5s 一次，
+        # 免得每次回车都多出可感知的延迟。
+        if now - bridge_state["last_probe"] < 5.0:
+            return
+        bridge_state["last_probe"] = now
+        try:
+            ok, _reason = browser_bridge.available()
+        except Exception:
+            return
+        if ok:
+            bridge_state["connected"] = True
+            console.print("[dim]网页控制: 已连接侧边栏 ✓ (read_page / click / fill / navigate…)[/dim]")
 
     def on_assistant_start() -> None:
+        # TUI 模式：流式文本进转录区的活动区（右侧竖栏同步刷新），不开
+        # rich Live（全屏接管下 Live 的光标操作会破坏布局）。
+        if _tui is not None:
+            _tui.stream_reset()
+            return
         # Open a new live left-side bubble for this iteration's assistant turn.
         if turn_state["stream"] is not None:
             try:
@@ -1058,36 +1264,67 @@ def _run_repl(
             model_name=_active_model(),
             show_full=bool(thinking_state.get("show_full", False)),
             collapse_threshold=int(thinking_state.get("collapse_threshold", 800)),
+            # 右侧状态面板随流式区域实时刷新（本轮工具/缓存/任务/后台）。
+            side_panel=side_panel.render_provider(console),
         )
         s.__enter__()
         turn_state["stream"] = s
         turn_state["saw_reasoning"] = False
 
     def on_content_delta(text: str) -> None:
+        if _tui is not None:
+            _tui.stream_append("content", text)
+            return
         s = turn_state["stream"]
         if s is not None:
             s.append_content(text)
 
     def on_reasoning_delta(text: str) -> None:
+        if _tui is not None:
+            _tui.stream_append("reasoning", text)
+            return
         s = turn_state["stream"]
         if s is not None:
             s.append_reasoning(text)
             turn_state["saw_reasoning"] = True
 
     def on_assistant(resp) -> None:
-        # Close the live bubble (it prints its final static panel).
-        s = turn_state["stream"]
-        if s is not None:
+        # TUI 模式：流式区收尾 → 最终 Markdown 直接打进转录（console 已
+        # 重定向进 TUI）。
+        if _tui is not None:
+            _tui.stream_reset()
+            if resp.reasoning_content:
+                render_reasoning_meter(console, reasoning_text=resp.reasoning_content)
+            console.print(f"[bold cyan]● {_active_model()}[/bold cyan]")
             try:
-                s.__exit__(None, None, None)
+                from rich.markdown import Markdown
+
+                console.print(Markdown(resp.content or "", code_theme="monokai"))
             except Exception:
-                pass
-            turn_state["stream"] = None
+                console.print(resp.content or "")
+        else:
+            # Close the live bubble (it prints its final static panel).
+            s = turn_state["stream"]
+            if s is not None:
+                try:
+                    s.__exit__(None, None, None)
+                except Exception:
+                    pass
+                turn_state["stream"] = None
+            # Reasoning content meter (token count for what we just received).
+            if resp.reasoning_content:
+                render_reasoning_meter(console, reasoning_text=resp.reasoning_content)
         turn_state["iterations"] += 1
         turn_state["last_response"] = resp
-        # Reasoning content meter (token count for what we just received).
-        if resp.reasoning_content:
-            render_reasoning_meter(console, reasoning_text=resp.reasoning_content)
+        # Side panel: provider-reported prefix-cache hit/miss for this call.
+        try:
+            from .cache.manager import extract_cache_tokens
+
+            _hit, _miss = extract_cache_tokens(getattr(resp, "usage", None))
+            if _hit or _miss:
+                side_panel.update_cache(_hit, _miss)
+        except Exception:
+            pass
         # Provider-reported cache hit/miss → ``mbridge cache stats``.
         # Resolve the model FRESH — the closure's `model_name` is the REPL's
         # startup value and goes stale after /model, which would attribute
@@ -1105,7 +1342,7 @@ def _run_repl(
             except Exception:
                 pass
 
-    def on_tool_call(call, result_content: str) -> None:
+    def on_tool_call(call, result_content: str, is_error: bool = False) -> None:
         # The agent's own write tools mutate the tree mid-session; drop the
         # cached file index so a newly created/renamed file is @-mentionable
         # on the next prompt instead of silently failing to resolve.
@@ -1114,11 +1351,13 @@ def _run_repl(
         args_preview = ", ".join(
             f"{k}={_short_repr(v)}" for k, v in call.arguments.items() if not k.startswith("_")
         )
+        side_panel.add_tool(call.name, _short_repr(args_preview), is_error)
         render_tool_bubble(
             console,
             tool_name=call.name,
             args_preview=args_preview,
-            body=_fold_tool_body(result_content),
+            body=result_content,
+            is_error=is_error,
         )
 
     def on_provider_error(err) -> None:
@@ -1133,48 +1372,41 @@ def _run_repl(
         _print_provider_error(err)
 
     def on_system(text: str) -> None:
+        # TUI 模式下那坨 "[REPL ready · model=… · tools=…]" 长横幅毫无必要
+        # ——模型/目录右栏常驻、工具列表太长——换成一行短提示。
+        if _tui is not None and text.startswith("[REPL ready"):
+            console.print("[dim]就绪 · /help 帮助 · PgUp/PgDn 滚动 · Ctrl-D 退出[/dim]")
+            return
         console.print(f"[dim]{text}[/dim]")
 
-    # Multi-line context info panel — printed inline at the end of each turn
-    # (right above the next `you ❯` prompt), replacing the legacy single-line
-    # status bar. Full width, always on, folds to a compact form on narrow
-    # terminals. See render_context_panel for layout. We tried the DECSTBM
-    # sticky-footer approach earlier; it conflicted with the streaming bubble
-    # + console.input cursor on Windows Terminal. Inline print is stable.
+    # Multi-line context info — replaced 2026-08-22 by the right-side status
+    # panel (render_side_panel): cwd / ctx / cache hit rate / todos / bg
+    # tasks / this turn's tools, live during streaming and printed after each
+    # turn. We tried the DECSTBM sticky-footer approach earlier; it conflicted
+    # with the streaming bubble + console.input cursor on Windows Terminal.
+    # Inline print is stable.
     def _print_status_bar() -> None:
-        entry = find_model(model_name)
-        if entry is None:
-            return
-        stats = compute_turn_stats(
-            entry=entry,
-            messages=session.messages,
-            last_response=turn_state["last_response"],
-            iterations=turn_state["iterations"] or 1,
-        )
-        try:
-            role_breakdown = estimate_tokens_by_role(session.messages)
-        except Exception:
-            role_breakdown = None
-        # Best-effort todo snapshot — never break the panel if the store is
-        # unavailable or empty.
-        try:
-            todo_summary = todo_store.summary()
-            items = todo_store.to_list()
-            in_prog = next(
-                (it["content"] for it in items if it.get("status") == "in_progress"),
-                None,
+        entry = find_model(_active_model())
+        if entry is not None:
+            stats = compute_turn_stats(
+                entry=entry,
+                messages=session.messages,
+                last_response=turn_state["last_response"],
+                iterations=turn_state["iterations"] or 1,
             )
-        except Exception:
-            todo_summary = None
-            in_prog = None
-        render_context_panel(
-            console,
-            stats,
-            model_name=_active_model(),
-            role_breakdown=role_breakdown,
-            todo_summary=todo_summary,
-            current_todo=in_prog,
-        )
+            side_panel.update_ctx(
+                used_pct=stats.used_pct,
+                used_tokens=stats.used_tokens,
+                window=stats.context_window,
+            )
+        side_panel.model_name = _active_model() or model_name
+        # 右侧状态面板（工作目录 / 模型+上下文 / 缓存命中率 / 任务勾选清单 /
+        # 后台任务 / 本轮工具调用）——经典模式轮末打进滚动区；TUI 模式右侧
+        # 竖栏常驻刷新，不再重复打印。
+        if _tui is None:
+            render_side_panel(console, side_panel)
+        else:
+            _tui.invalidate(throttle=False)
 
     def on_turn_done() -> None:
         _print_status_bar()
@@ -1230,6 +1462,10 @@ def _run_repl(
 
     # 5. Run
     live_writer.flush(status="idle")  # publish initial state before first turn
+    # 启动时如有任务/后台活动先打一栏；状态三项（目录/模型/缓存）在底部
+    # 常驻状态栏里，第一个输入提示出现即可见。TUI 模式右栏常驻，跳过。
+    if _tui is None:
+        render_side_panel(console, side_panel)
     try:
         run_interactive(
             session=session,
@@ -1253,24 +1489,51 @@ def _run_repl(
             timeout=timeout,
             max_iters_per_turn=max_iters,
             pending_images=pending_turn,
+            pending_wake=_pending_wake,
         )
     finally:
+        if _tui is not None:
+            _tui.stop()  # 先退出全屏、恢复 console，再走收尾输出
         if mcp_manager is not None:
             mcp_manager.shutdown()
         if browser_bridge is not None:
             browser_bridge.close()
         clear_live_state()  # mark the REPL offline in the web UI
+        # ── 退出告别卡：品牌 + 主题 + 对话保存位置 ──────────────────────
+        # 替换以前那行淡色 "session saved → …"——退出时用户要一眼看到这次
+        # 聊了什么、存在哪。
+        _exit_path: str | None = None
         if save_session and len(session.messages) > 1:
-            path = session.save(label=f"repl_{model_name}")
-            if path is not None:
-                console.print(f"[dim]session saved → {path}[/dim]")
+            _exit_path = session.save(label=f"repl_{model_name}")
+        try:
+            _topic = live_writer.topic or "(无主题)"
+            _n_msgs = len(session.messages)
+            _body = (
+                f"[bold]ModelBridge[/bold] [dim]v{__version__} · 会话结束[/dim]\n"
+                f"主题 : {_topic}\n"
+                f"消息 : {_n_msgs} 条 · 模型 {_active_model() or model_name}\n"
+                f"保存 : {_exit_path or '未保存（/save 可手动保存）'}"
+            )
+            console.print(Panel(_body, title="mbridge", border_style="cyan"))
+        except Exception:
+            if _exit_path is not None:
+                console.print(f"[dim]session saved → {_exit_path}[/dim]")
 
 
-def _make_approval(*, yes: bool):
+def _make_approval(*, yes: bool, auto_mode_flip=None, tui_holder=None):
     """Return an approval callback used by tools.
 
     ``--yes`` short-circuits to YES; otherwise we render a small panel and
-    use rich's prompt with y / N / a (always) / o (auto) options.
+    ask with y / N / a (always) / o (auto) options. Full words ("yes",
+    "no", "always", "auto") are accepted too — typos re-ask.
+
+    ``auto_mode_flip`` is an optional callable; picking ``o`` invokes it so
+    the REPL's agent context turns on session-wide auto mode (every future
+    confirmation is AI-safety-judged instead of prompted).
+
+    ``tui_holder`` ({"tui": TuiRepl | None}) — when the full-screen TUI is
+    active the manual prompt is answered from the right rail's y/n/a/o keys
+    via its :class:`ApprovalBroker` instead of a blocking ``Prompt.ask``.
 
     When ``save_pattern`` is passed (non-None), the user picked "always" and
     the callback persists the pattern to disk for permanent approval.
@@ -1358,33 +1621,59 @@ def _make_approval(*, yes: bool):
         body = f"[bold]{summary}[/bold]\n\n{detail}"
         if reason:
             body += f"\n\n[dim]意图：{reason}[/dim]"
-        console.print(Panel(
-            body,
-            title=f"批准 · {tool}",
-            border_style="yellow",
-        ))
-        choices = ["y", "n", "a", "o"] if auto else ["y", "n", "a"]
-        prompt_str = (
-            r"执行?  \[y]es / \[N]o / \[a]lways / \[o]auto(AI判断)"
-            if auto else r"执行?  \[y]es / \[N]o / \[a]lways"
-        )
-        choice = Prompt.ask(
-            prompt_str,
-            choices=choices,
-            default="n",
-            show_choices=False,
-        ).lower()
+        # ── 手动确认：TUI 模式走右栏 y/n/a/o；经典模式走终端提示 ────────
+        tui = (tui_holder or {}).get("tui")
+        if tui is not None:
+            choice = tui.approval.ask(
+                tool=tool, summary=summary, detail=detail, reason=reason,
+            )
+        else:
+            console.print(Panel(
+                body,
+                title=f"批准 · {tool}",
+                border_style="yellow",
+            ))
+            # 接受单字母和全词（y/yes、n/no、a/always、o/auto）——用户常把
+            # "always" 整词打进来，单字母 choices 会把它当非法输入反复重问。
+            choice = Prompt.ask(
+                "执行?  [y]是 / [n]否 / [a]lways 本类不再问 / [o]auto(AI 判定)",
+                choices=["y", "yes", "n", "no", "a", "always", "o", "auto"],
+                default="n",
+                show_choices=False,
+                case_sensitive=False,
+            ).lower()
         if choice == "y":
             return ApprovalDecision.YES
         if choice == "a":
             if save_pattern:
                 _save_pattern_to_disk(save_pattern, summary)
             return ApprovalDecision.ALWAYS
-        if choice == "o" and auto:
-            # user chose to always auto-judge for this class of actions
-            if save_pattern:
-                _save_pattern_to_disk(save_pattern + ":auto", f"{summary} [auto]")
-            return ApprovalDecision.ALWAYS
+        if choice == "o":
+            # 开启本会话 auto 模式：之后的确认先走 AI 安全判定，不再弹问。
+            if auto_mode_flip is not None:
+                try:
+                    auto_mode_flip()
+                    console.print("[green]✓ 已开启 auto 模式（本会话）：后续操作由 AI 安全判定自动放行，不安全才询问[/green]")
+                except Exception:
+                    pass
+            # 本次动作也交给判定：安全直接过，不安全回退到再问一次。
+            console.print("[dim]AI safety check...[/dim]")
+            is_safe, judge_reason = _auto_judge(
+                tool=tool, summary=summary, detail=detail, reason=reason,
+            )
+            console.print(f"[dim]  reason: {judge_reason}[/dim]")
+            if is_safe:
+                console.print("[green]  -> safe, auto-approved[/green]")
+                return ApprovalDecision.YES
+            console.print("[yellow]  -> not safe, requires manual confirm[/yellow]")
+            retry = Prompt.ask(
+                "AI 判定不安全，仍要执行吗?  [y]是 / [n]否",
+                choices=["y", "yes", "n", "no"],
+                default="n",
+                show_choices=False,
+                case_sensitive=False,
+            ).lower()
+            return ApprovalDecision.YES if retry in {"y", "yes"} else ApprovalDecision.NO
         return ApprovalDecision.NO
 
     return _ask
@@ -1395,30 +1684,6 @@ def _short_repr(v) -> str:
     if len(s) > 60:
         s = s[:60] + "…"
     return s
-
-
-def _fold_tool_body(content: str, *, max_lines: int = 6, max_chars: int = 400) -> str:
-    """Fold a long tool result for terminal display.
-
-    The model still receives the full content (it lives in the session); this
-    only keeps the REPL readable when a tool like ``read_page`` returns a whole
-    page of text.
-    """
-    content = content or ""
-    lines = content.splitlines()
-    head_lines = lines[:max_lines]
-    head = "\n".join(head_lines)
-    truncated_chars = len(head) > max_chars
-    if truncated_chars:
-        head = head[:max_chars].rstrip() + "…"
-    hidden = len(lines) - len(head_lines)
-    if hidden > 0 or truncated_chars:
-        note_bits = []
-        if hidden > 0:
-            note_bits.append(f"折叠 {hidden} 行")
-        note_bits.append(f"共 {len(content)} 字符，模型已获取完整内容")
-        head += f"\n[{' · '.join(note_bits)}]"
-    return head
 
 
 def _default_system_prompt(*, allow_bash: bool) -> str:

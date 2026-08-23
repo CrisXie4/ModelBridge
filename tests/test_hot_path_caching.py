@@ -12,6 +12,8 @@ must be picked up on the next load.
 from __future__ import annotations
 
 import json
+import os
+import time
 
 import pytest
 import yaml
@@ -35,6 +37,14 @@ def home(tmp_path, monkeypatch):
 
 def _write(path, data: dict) -> None:
     path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    # 缓存键是 (mtime_ns, size)。同一长度的一次字符改动（a→b）在文件系统
+    # 时间戳粒度内可能拿到完全相同的键 —— 套件时序一变就抖。显式把 mtime
+    # 推进 1ms，保证"外部编辑"对缓存键可见（这是产品契约，不该靠运气）。
+    try:
+        prev = path.stat().st_mtime_ns
+        os.utime(path, ns=(prev + 1_000_000, prev + 1_000_000))
+    except OSError:
+        time.sleep(0.002)
 
 
 def _touch_rewrite(path) -> None:

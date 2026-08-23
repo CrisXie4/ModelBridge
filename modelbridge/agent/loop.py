@@ -55,7 +55,8 @@ def run_agent_turn(
     on_content_delta: Callable[[str], None] | None = None,
     on_reasoning_delta: Callable[[str], None] | None = None,
     on_assistant: Callable[[ChatResponse], None] | None = None,
-    on_tool_call: Callable[[ToolCall, str], None] | None = None,
+    on_tool_call: Callable[[ToolCall, str, bool], None] | None = None,
+    on_system: Callable[[str], None] | None = None,
 ) -> AgentResult:
     """Run inner-loop dispatch until the model stops calling tools.
 
@@ -67,6 +68,15 @@ def run_agent_turn(
     Pass ``stream=True`` to receive ``on_content_delta`` / ``on_reasoning_delta``
     callbacks as the model writes its response. ``on_assistant`` still fires
     once at the end of each iteration with the fully-assembled response.
+
+    Seamless compaction
+    -------------------
+    At every step boundary (each loop iteration, before the request is
+    built) a pressure check runs: when usage crosses the configured
+    threshold, older history is summarized/pruned in place — long tool-heavy
+    turns no longer grow past the window between REPL prompts. When a
+    provider rejects a request for exceeding the context window, one
+    compact-then-retry is attempted before the error surfaces.
     """
     entry = get_model_entry(model_name)
     provider = get_provider(entry)
@@ -74,9 +84,18 @@ def run_agent_turn(
 
     executed: list[ToolCall] = []
     last_response: ChatResponse | None = None
+    overflow_retried = False
 
     i = 0
     while True:
+        # Pressure check at the step boundary — the harness's "after-call
+        # pressure" position: the previous iteration's tool results are all
+        # durable, so compacting here never splits a tool group. Never
+        # raises; notices surface via on_system when wired.
+        from .compact import is_context_overflow, maybe_auto_compact
+
+        maybe_auto_compact(session, model_name=model_name, on_system=on_system)
+
         i += 1
         request = ChatRequest(
             model=entry.model,
@@ -108,6 +127,18 @@ def run_agent_turn(
             else:
                 response = provider.chat(request, timeout=timeout, verbose_label="agent")
         except ProviderError as e:
+            # Overflow recovery: one compact-then-retry, bounded. If
+            # compaction can't help (nothing compressible / still too big)
+            # the retry fails again and the original error surfaces.
+            if not overflow_retried and is_context_overflow(e):
+                overflow_retried = True
+                if on_system is not None:
+                    on_system("[上下文超限 — 自动压缩后重试]")
+                maybe_auto_compact(
+                    session, model_name=model_name, on_system=on_system, force=True
+                )
+                i -= 1  # the retry is the same iteration
+                continue
             return AgentResult(
                 final_response=last_response,
                 iterations=i - 1,
@@ -147,7 +178,7 @@ def run_agent_turn(
                 answered.add(call.id)
                 executed.append(call)
                 if on_tool_call is not None:
-                    on_tool_call(call, result.content)
+                    on_tool_call(call, result.content, result.is_error)
         except KeyboardInterrupt:
             for call in calls:
                 if call.id not in answered:
@@ -188,7 +219,7 @@ def run_interactive(
     on_content_delta: Callable[[str], None] | None = None,
     on_reasoning_delta: Callable[[str], None] | None = None,
     on_assistant: Callable[[ChatResponse], None] | None = None,
-    on_tool_call: Callable[[ToolCall, str], None] | None = None,
+    on_tool_call: Callable[[ToolCall, str, bool], None] | None = None,
     on_user_echo: Callable[[str], None] | None = None,
     on_provider_error: Callable[[ProviderError], None] | None = None,
     on_system: Callable[[str], None] | None = None,
@@ -196,6 +227,7 @@ def run_interactive(
     timeout: float = 120.0,
     max_iters_per_turn: int | None = None,
     pending_images: dict[str, Any] | None = None,
+    pending_wake: Callable[[], bool] | None = None,
 ) -> Session:
     """Run a persistent REPL until ``read_input`` raises EOFError.
 
@@ -225,13 +257,80 @@ def run_interactive(
     :func:`run_agent_turn` so a ``/think on`` mid-session takes effect on
     the *next* request.
 
+    Background-task wake-ups
+    ------------------------
+    ``pending_wake``, when provided, drains background-task notifications:
+    each call pops ONE notification (already appended to the session by the
+    caller) and returns True. The loop then runs a continuation turn — the
+    model "rested" and is woken by the finished task. Drains happen right
+    after every turn and when the user submits an empty line at the prompt
+    (so a bare Enter hands finished tasks to the model immediately).
+
     Special user inputs (without a command handler):
 
     * ``/exit`` / ``/quit`` — leave the loop.
     * ``/clear``           — drop history but keep the system prompt.
-    * empty line           — ignored (just re-prompt).
+    * empty line           — wake pending background tasks, else re-prompt.
     """
     state = thinking_state if thinking_state is not None else {}
+
+    def _run_model_turn() -> None:
+        """One model turn (used by user inputs AND background wake-ups)."""
+        _active_model = model_resolver() if model_resolver is not None else model_name
+        try:
+            result = run_agent_turn(
+                session=session,
+                ctx=ctx,
+                registry=registry,
+                model_name=_active_model,
+                timeout=timeout,
+                max_iters=max_iters_per_turn,
+                stream=stream,
+                thinking=state.get("enabled"),
+                thinking_budget=state.get("budget"),
+                on_assistant_start=on_assistant_start,
+                on_content_delta=on_content_delta,
+                on_reasoning_delta=on_reasoning_delta,
+                on_assistant=on_assistant,
+                on_tool_call=on_tool_call,
+                on_system=on_system,
+            )
+        except KeyboardInterrupt:
+            # Ctrl-C during a turn (e.g. a tool waiting on a slow page load)
+            # aborts just this turn and returns to the prompt — the REPL stays
+            # alive. The model may see a partial turn; the next input continues.
+            if on_system is not None:
+                on_system("[已中断本轮 — 回到输入。如需让 AI 继续，再说一句即可]")
+            if on_turn_done is not None:
+                on_turn_done()
+            return
+
+        if result.stopped_reason == "provider_error" and result.error is not None:
+            if on_provider_error is not None:
+                on_provider_error(result.error)
+        elif result.stopped_reason == "max_iters" and on_system is not None:
+            on_system(f"[到达单轮 tool_call 上限 ({max_iters_per_turn})；模型可能未完成任务]")
+
+        if on_turn_done is not None:
+            on_turn_done()
+
+        # Auto context compression — give the next turn headroom when usage
+        # crosses the configured threshold. Self-contained: reads config,
+        # measures usage, summarises older history, and notifies via
+        # on_system. Never raises (see maybe_auto_compact).
+        from .compact import maybe_auto_compact
+
+        maybe_auto_compact(
+            session, model_name=_active_model, on_system=on_system
+        )
+
+        # Background tasks that finished during this turn wake the model
+        # right away (each drain pops one notification).
+        while pending_wake is not None and pending_wake():
+            if on_system is not None:
+                on_system("[后台任务完成 — AI 继续处理]")
+            _run_model_turn()
+
     if on_system is not None:
         on_system(
             f"[REPL ready · model={model_name} · cwd={ctx.cwd} · "
@@ -247,6 +346,12 @@ def run_interactive(
 
         text = (text or "").strip()
         if not text:
+            # Empty line: hand finished background tasks to the model, else
+            # just re-prompt.
+            if pending_wake is not None and pending_wake():
+                if on_system is not None:
+                    on_system("[后台任务完成 — AI 继续处理]")
+                _run_model_turn()
             continue
 
         # --- slash command interception ---------------------------------
@@ -287,56 +392,7 @@ def run_interactive(
         if pending_images is not None:
             pending_images["images"] = []
 
-        try:
-            # Resolve model name fresh each turn: a /model mid-session
-            # can change the active model. ``model_resolver`` is set by
-            # the CLI wrapper; we fall back to the static ``model_name``
-            # arg if not (e.g. test calls).
-            _active_model = model_resolver() if model_resolver is not None else model_name
-            result = run_agent_turn(
-                session=session,
-                ctx=ctx,
-                registry=registry,
-                model_name=_active_model,
-                timeout=timeout,
-                max_iters=max_iters_per_turn,
-                stream=stream,
-                thinking=state.get("enabled"),
-                thinking_budget=state.get("budget"),
-                on_assistant_start=on_assistant_start,
-                on_content_delta=on_content_delta,
-                on_reasoning_delta=on_reasoning_delta,
-                on_assistant=on_assistant,
-                on_tool_call=on_tool_call,
-            )
-        except KeyboardInterrupt:
-            # Ctrl-C during a turn (e.g. a tool waiting on a slow page load)
-            # aborts just this turn and returns to the prompt — the REPL stays
-            # alive. The model may see a partial turn; the next input continues.
-            if on_system is not None:
-                on_system("[已中断本轮 — 回到输入。如需让 AI 继续，再说一句即可]")
-            if on_turn_done is not None:
-                on_turn_done()
-            continue
-
-        if result.stopped_reason == "provider_error" and result.error is not None:
-            if on_provider_error is not None:
-                on_provider_error(result.error)
-        elif result.stopped_reason == "max_iters" and on_system is not None:
-            on_system(f"[到达单轮 tool_call 上限 ({max_iters_per_turn})；模型可能未完成任务]")
-
-        if on_turn_done is not None:
-            on_turn_done()
-
-        # Auto context compression — give the next turn headroom when usage
-        # crosses the configured threshold. Self-contained: reads config,
-        # measures usage, summarises older history, and notifies via
-        # on_system. Never raises (see maybe_auto_compact).
-        from .compact import maybe_auto_compact
-
-        maybe_auto_compact(
-            session, model_name=_active_model, on_system=on_system
-        )
+        _run_model_turn()
 
 
 def _stream_one(

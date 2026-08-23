@@ -184,24 +184,44 @@ class LiveStateWriter:
         self._cwd = cwd
         self._topic: str | None = None
         self._lock = threading.Lock()
+        # Short-window cache for the O(session) token estimate — flush fires
+        # on every todo mutation and user echo, and re-estimating the whole
+        # history each time wastes CPU as the session grows. Messages are only
+        # ever appended between compactions, so (message count, recent) is a
+        # sound reuse key; the 2s window bounds staleness after in-place
+        # rewrites (pruning) to well under the web UI's poll interval.
+        self._stats_cache: tuple[float, int, dict[str, Any]] | None = None
 
     def set_topic(self, text: str) -> None:
         t = (text or "").strip().replace("\n", " ")
         self._topic = t[:_TOPIC_MAX] + ("…" if len(t) > _TOPIC_MAX else "") or None
 
+    @property
+    def topic(self) -> str | None:
+        """Current conversation topic (first user input, truncated)."""
+        return self._topic
+
     def _context_stats(self, model_name: str) -> dict[str, Any]:
+        import time
+
         messages: list[ChatMessage] = list(getattr(self._session, "messages", []))
+        now = time.monotonic()
+        cached = self._stats_cache
+        if cached is not None and cached[1] == len(messages) and now - cached[0] < 2.0:
+            return cached[2]
         used = estimate_session_tokens(messages) if messages else 0
         entry = self._entry_lookup(model_name)
         window = context_window_for(entry) if entry is not None else 0
         pct = round((used / window) * 100, 1) if window else 0.0
-        return {
+        stats = {
             "used_tokens": used,
             "context_window": window,
             "used_pct": pct,
             "free_tokens": max(0, window - used) if window else 0,
             "message_count": len(messages),
         }
+        self._stats_cache = (now, len(messages), stats)
+        return stats
 
     def snapshot(self) -> dict[str, Any]:
         model_name = self._model_resolver()

@@ -21,6 +21,11 @@ from .browser_tools import _BrowserTool
 
 
 class _WriteBrowserTool(_BrowserTool):
+    # 子类可覆盖的确认策略：get_cookies 用独立确认组 (None = 不共享
+    # "本会话总是" 记忆)、并关掉 AI 自动放行 —— Cookie 属登录态。
+    _confirm_group: str | None = "browser_write"
+    _confirm_auto: bool = True
+
     def _approval(self, args: dict[str, Any]) -> tuple[str, str, str]:
         """Return ``(summary, detail, reason)`` for the approval card.
 
@@ -36,9 +41,11 @@ class _WriteBrowserTool(_BrowserTool):
         summary, detail, reason = self._approval(args)
         # Shared group: choosing ALWAYS on any browser write tool auto-approves
         # all of them this session (web automation chains click/fill/navigate).
+        # Subclasses tune the gate via _confirm_group / _confirm_auto.
         if not ctx.confirm(tool=self.name, summary=summary, detail=detail,
                            reason=reason,
-                           group="browser_write", pattern_key="browser_write", auto=True):
+                           group=self._confirm_group, pattern_key=self._confirm_group,
+                           auto=self._confirm_auto):
             return self.err("用户拒绝了该操作。")
         return self._relay(args, ctx)
 
@@ -135,3 +142,5 @@ class NavigateTool(_WriteBrowserTool):
 
 
 __all__ = ["ClickTool", "FillTool", "NavigateTool"]
+# 2026-08-23: press_key lives in browser_extra_tools.py; get_cookies in
+# browser_cookie_tool.py; InjectJsTool stays in computer_control_tools.

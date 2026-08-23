@@ -167,6 +167,17 @@ def resolve_mentions(
                 result.attachments.append(
                     Attachment(relpath=entry.relpath, kind="file", skipped_reason=str(e))
                 )
+        elif images.is_video_path(entry.relpath):
+            # Video file → inline video_url block (GLM-4V / qwen-vl 系列等)。
+            try:
+                blk = images.video_block_from_path(str(project_root / entry.relpath))
+                result.attachments.append(
+                    Attachment(relpath=entry.relpath, kind="video", block=blk)
+                )
+            except images.ImageError as e:
+                result.attachments.append(
+                    Attachment(relpath=entry.relpath, kind="file", skipped_reason=str(e))
+                )
         else:
             result.attachments.append(_file_attachment(entry, project_root))
     return result
@@ -256,9 +267,10 @@ def build_injection_messages(resolved: ResolvedMentions) -> list[str]:
     """Render each attachment as one anti-injection-wrapped data message."""
     msgs: list[str] = []
     for att in resolved.attachments:
-        if att.kind == "image":
-            # Image attachments ride inline in the user message (see
-            # ``collect_image_blocks``), not as a text data block.
+        if att.kind in ("image", "video"):
+            # Image/video attachments ride inline in the user message (see
+            # ``collect_image_blocks`` / ``collect_video_blocks``), not as a
+            # text data block.
             continue
         if att.skipped_reason:
             msgs.append(
@@ -314,6 +326,12 @@ def collect_image_blocks(resolved: ResolvedMentions) -> list[dict]:
     for m in _IMG_URL_RE.finditer(resolved.text or ""):
         blocks.append(images.block_from_url(m.group(0)))
     return blocks
+
+
+def collect_video_blocks(resolved: ResolvedMentions) -> list[dict]:
+    """Resolved video attachments → inline ``video_url`` blocks (same ride-along
+    pattern as images; the CLI gates them with capabilities.video)."""
+    return [a.block for a in resolved.attachments if a.kind == "video" and a.block]
 
 
 def inject_file_mentions(

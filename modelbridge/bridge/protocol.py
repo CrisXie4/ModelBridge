@@ -56,6 +56,8 @@ T_APPROVAL = "approval"
 T_ASSISTANT = "assistant"
 T_DONE = "done"
 T_ERROR = "error"
+T_NOTICE = "notice"  # host -> panel: transient system note (e.g. compaction)
+T_STATE = "state"    # host -> panel: status snapshot (cwd/cache/todos)
 
 
 # ---------------------------------------------------------------------------
@@ -146,12 +148,14 @@ def write_message(stream: BinaryIO, msg: dict[str, Any]) -> None:
 # Message builders (host -> extension)
 # ---------------------------------------------------------------------------
 
-def ready(*, version: str, models: list[str], default_model: str | None) -> dict[str, Any]:
+def ready(*, version: str, models: list[str], default_model: str | None,
+          cwd: str = "") -> dict[str, Any]:
     return {
         "type": T_READY,
         "version": version,
         "models": models,
         "defaultModel": default_model,
+        "cwd": cwd,
     }
 
 
@@ -197,6 +201,25 @@ def error(*, id: str | None, message: str) -> dict[str, Any]:
     return {"type": T_ERROR, "id": id, "message": message}
 
 
+def notice(*, id: str, text: str) -> dict[str, Any]:
+    """A transient system note for the panel's activity rail (not chat)."""
+    return {"type": T_NOTICE, "id": id, "text": text}
+
+
+def state(*, id: str, cwd: str = "", cache_last: str = "",
+          cache_session: str = "", todos: list[dict[str, Any]] | None = None,
+          ) -> dict[str, Any]:
+    """Status snapshot for the panel's rail: cwd / cache hit rate / todos."""
+    return {
+        "type": T_STATE,
+        "id": id,
+        "cwd": cwd,
+        "cacheLast": cache_last,
+        "cacheSession": cache_session,
+        "todos": todos or [],
+    }
+
+
 __all__ = [
     "MAX_MESSAGE_BYTES",
     "ProtocolError",
@@ -221,6 +244,8 @@ __all__ = [
     "T_ASSISTANT",
     "T_DONE",
     "T_ERROR",
+    "T_NOTICE",
+    "T_STATE",
     # builders
     "ready",
     "delta",
@@ -229,4 +254,6 @@ __all__ = [
     "assistant",
     "done",
     "error",
+    "notice",
+    "state",
 ]
