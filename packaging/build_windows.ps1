@@ -128,7 +128,7 @@ function Invoke-Py([string[]]$PyArgs) {
 }
 
 # ---------------------------------------------------------------------------
-# [1/3] Install build deps.
+# [1/4] Install build deps.
 #
 # We DO NOT run ``pip install -e .`` — that's a dev-environment concern.
 # The PyInstaller spec puts the repo root on sys.path via pathex, so the
@@ -136,7 +136,7 @@ function Invoke-Py([string[]]$PyArgs) {
 # else. Skipping the editable install also dodges WinError 32 when an
 # old mbridge.exe in Scripts\ is still locked by a running process.
 # ---------------------------------------------------------------------------
-Write-Host "=== [1/3] Installing build deps (pyinstaller + runtime deps) ===" -ForegroundColor Cyan
+Write-Host "=== [1/4] Installing build deps (pyinstaller + runtime deps) ===" -ForegroundColor Cyan
 Invoke-Py @("-m", "pip", "install", "--upgrade", "pip", "pyinstaller")
 # Project runtime deps must be importable by the chosen Python so
 # PyInstaller can trace them. ``pip install -r`` would need a
@@ -147,14 +147,43 @@ Invoke-Py @("-m", "pip", "install", "--upgrade",
             "PyYAML>=6.0", "rich>=13.7.0")
 
 # ---------------------------------------------------------------------------
-# [2/3] PyInstaller.
+# [2/4] Build the webui static export. The PyInstaller spec bundles
+# webui\out into the binary (_internal\webui\out); without it the
+# installer ships API-only.
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "=== [2/3] Running PyInstaller ===" -ForegroundColor Cyan
+Write-Host "=== [2/4] Building webui static export ===" -ForegroundColor Cyan
+$BuiltUi = $false
+if (Get-Command npm -ErrorAction SilentlyContinue) {
+    Push-Location webui
+    try {
+        npm ci
+        if ($LASTEXITCODE -ne 0) { Write-Error "npm ci failed."; exit 1 }
+        npm run build:static
+        if ($LASTEXITCODE -ne 0) { Write-Error "webui build:static failed."; exit 1 }
+        $BuiltUi = $true
+    } finally {
+        Pop-Location
+    }
+} else {
+    Write-Host "WARNING: npm not found — this build will be API-only (no admin UI)." -ForegroundColor Yellow
+    Write-Host "         Install Node.js 20+ and re-run to bundle the webui."
+}
+
+# ---------------------------------------------------------------------------
+# [3/4] PyInstaller.
+# ---------------------------------------------------------------------------
+Write-Host ""
+Write-Host "=== [3/4] Running PyInstaller ===" -ForegroundColor Cyan
 Invoke-Py @("-m", "PyInstaller", "packaging\mbridge.spec", "--clean", "--noconfirm")
 
 if (-not (Test-Path "dist\mbridge\mbridge.exe")) {
     Write-Error "PyInstaller did not produce dist\mbridge\mbridge.exe"
+    exit 1
+}
+
+if ($BuiltUi -and -not (Test-Path "dist\mbridge\_internal\webui\out\index.html")) {
+    Write-Error "webui\out 已构建但未被打进 dist\mbridge — 检查 packaging\mbridge.spec 的 datas 段。"
     exit 1
 }
 
@@ -166,10 +195,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ---------------------------------------------------------------------------
-# [3/3] Inno Setup -> installer.
+# [4/4] Inno Setup -> installer.
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "=== [3/3] Building installer with Inno Setup ===" -ForegroundColor Cyan
+Write-Host "=== [4/4] Building installer with Inno Setup ===" -ForegroundColor Cyan
 if (-not $IsccPath) {
     Write-Host ""
     Write-Host "Inno Setup (ISCC.exe) not found." -ForegroundColor Yellow

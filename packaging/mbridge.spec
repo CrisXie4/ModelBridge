@@ -72,6 +72,23 @@ for pkg in ("pydantic", "typer", "rich", "httpx", "click"):
     except Exception:  # noqa: BLE001
         pass
 
+# ---------------------------------------------------------------------------
+# WebUI static export — bundled so the frozen ``mbridge web`` serves the
+# admin UI (API + UI on one port). ``webui/out`` is built by release.yml /
+# ``packaging/build_*.{sh,ps1}`` before PyInstaller runs. Lands in
+# ``_internal/webui/out`` onedir; ``server._find_webui_dir`` finds it via
+# ``sys._MEIPASS``. Missing export → API-only binary (server prints the
+# recovery hint at startup), so warn instead of failing local no-node builds.
+# ---------------------------------------------------------------------------
+WEBUI_OUT = PROJECT_ROOT / "webui" / "out"
+if (WEBUI_OUT / "index.html").is_file():
+    datas.append((str(WEBUI_OUT), "webui/out"))
+else:
+    print(
+        "!! webui/out 缺失 — 该二进制将只有 API 没有 UI。\n"
+        "   构建前端: cd webui && npm ci && npm run build:static"
+    )
+
 
 a = Analysis(
     [str(ENTRY)],

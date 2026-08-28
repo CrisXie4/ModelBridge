@@ -8,6 +8,7 @@ Next.js frontend from ``webui/out`` when present (so a single
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 try:
@@ -125,14 +126,23 @@ def build_app():  # pragma: no cover — integration tested via TestClient
 def _find_webui_dir() -> Path | None:
     """Locate a built frontend (static export) to serve.
 
-    Looks for ``webui/out`` (Next.js static export) relative to the repo
-    root. Returns None during development (the frontend runs separately).
+    Frozen builds (PyInstaller) carry ``webui/out`` inside the bundle via
+    the spec's ``datas`` — it lands under ``sys._MEIPASS``
+    (``_internal/webui/out`` onedir). Source checkouts keep the
+    repo-relative lookup. Returns None during development (the frontend
+    runs separately).
     """
     here = Path(__file__).resolve()
-    for candidate in (
+    candidates: list[Path] = []
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "webui" / "out")
+    candidates += [
         here.parent.parent.parent / "webui" / "out",
         here.parent.parent / "webui" / "out",
-    ):
+    ]
+    for candidate in candidates:
         if candidate.is_dir() and (candidate / "index.html").exists():
             return candidate
     return None

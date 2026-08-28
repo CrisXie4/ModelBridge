@@ -31,6 +31,21 @@ jobs:
         with:
           python-version: "3.11"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      # webui/out 必须在 PyInstaller 之前就绪 — mbridge.spec 把它打进
+      # 二进制（_internal/webui/out），缺失则发出去的安装包没有 UI。
+      - name: Build webui (Next.js static export)
+        shell: pwsh
+        run: |
+          cd webui
+          npm ci
+          npm run build:static
+
       - name: Install project + build deps
         shell: pwsh
         run: |
@@ -44,7 +59,11 @@ jobs:
 
       - name: Smoke-test the frozen exe
         shell: pwsh
-        run: dist/mbridge/mbridge.exe --version
+        run: |
+          dist/mbridge/mbridge.exe --version
+          if (-not (Test-Path "dist/mbridge/_internal/webui/out/index.html")) {
+            throw "webui/out 未被打进 frozen 构建 — 检查 mbridge.spec 的 datas 段"
+          }
 
       # Raw onedir tarball for the npm wrapper (and portable use). The Inno
       # installer below can't be exec'd directly; npm needs the bare binary.
@@ -88,6 +107,12 @@ jobs:
         with:
           python-version: "3.11"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
       - name: Install project + build deps
         run: |
           python -m pip install --upgrade pip
@@ -117,6 +142,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
 
       - name: Install project + build deps
         run: |
