@@ -75,12 +75,14 @@ def test_transcript_stream_commit_replaces_stream():
     assert "before" in text
 
 
-def test_transcript_append_resets_scroll():
+def test_transcript_append_pins_scroll():
+    # 翻阅历史时新块不得把视图拽回底部（流式落盘很频繁）；回到底部靠
+    # PgDn/滚轮/提交输入时的显式归零。
     t = TranscriptBuffer()
     t.append("a\n")
     t.scroll_up = 5
     t.append("b\n")
-    assert t.scroll_up == 0
+    assert t.scroll_up == 5
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +273,7 @@ def test_full_app_boots_and_reads_input():
         finally:
             tui.stop()
     # Transcript got the echo of the submitted line (right-aligned user msg:
-    # a line of leading spaces + the text — the bare-enter echo follows it).
+    # green ▎ bar + text, matching render_user_bubble's bubble language).
     text = "".join(seg for _s, seg in tui.transcript.tail_fragments(50))
     assert "hello" in text
-    assert re.search(r"(?:^|\n) {10,}hello(?:\n|$)", text), "user bubble not right-aligned"
+    assert re.search(r"(?:^|\n) {10,}▎ hello(?:\n|$)", text), "user bubble not right-aligned"

@@ -67,7 +67,7 @@ def activate(name: str) -> Message:
     try:
         activate_profile(name)
     except Exception as e:  # noqa: BLE001 — surface config errors as HTTP 400
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return Message(message=f"已激活 profile '{name}'")
 
 
@@ -79,5 +79,5 @@ def delete_profile(name: str) -> Message:
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001 — surface config errors as HTTP 400
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return Message(message=f"已删除 profile '{name}'")

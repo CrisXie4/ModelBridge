@@ -71,9 +71,10 @@ bash packaging/build_linux.sh
 - `README.md`
 
 ## Coding Rules
-- 代码风格：未知（未提供 linter/格式化配置，推测遵循 PEP 8）
+- 代码风格：**ruff 强制**（E/F/B 三族，见 `[tool.ruff.lint]`；E501 关闭因 Windows 下 CJK 宽度误判；B008 豁免 Typer/FastAPI 默认参数注入惯用法），`ruff check .` 即 CI 门禁
+- 类型：**mypy 全包零 ignore**；新增模块必须从第一天通过检查；如确需豁免必须在同一 PR 写明摘除计划
 - 命名规范：模块名用小写+下划线（如 `error_hints.py`）；类名 PascalCase；函数和变量用 snake_case
-- 提交规范：未知
+- 弃用政策：对外命令 v1.x 内只加不破；删除必须先经历至少一个小版本的 deprecation 警告；已删命令的历史对照表放 README 附录
 
 ## Agent Instructions
 - 修改 Agent 核心逻辑（`modelbridge/agent/`）前，必须理解 `loop.py`、`security.py` 以及工具系统的交互，确保安全确认流程不被意外绕过。
@@ -102,4 +103,4 @@ bash packaging/build_linux.sh
 ## Known Tech Debt
 - **腾讯混元适配器已落地 (2026-08)**：走 OpenAI 兼容端点 `https://api.hunyuan.cloud.tencent.com/v1` (Bearer)，不再需要 TC3 签名。hy3 的 think/no_think 开关尚未映射到 `ChatRequest.thinking`，目前由模型侧行为决定。
 - **`models.py` vs `schemas.py` 双 Schema 模块**：`models.py` 是配置层（`models.yaml` / `config.yaml`）的 Pydantic 模型，`schemas.py` 是 provider 传输层（`ChatRequest` / `ChatResponse`）的模型。两者概念重叠（`Capabilities` vs `ModelCapability`，且都有 `json` 字段触发 `type: ignore[assignment]`）。各有 24/26 处 import，合并需重排所有 provider 与 cli 的导入路径，暂未做。改动任一侧前先确认另一侧是否受影响。
-- **`cli.py` 仍 ~3900 行**：单文件承载所有子命令实现（model / doctor / route / usage / profile / config / edit / patch / project / prompt）。可按命令组拆分到 `cli/` 子包（如 `cli/model.py`、`cli/patch.py`），参照已拆出的 `mcp/cli.py`、`bridge/cli.py`、`skills/cli.py` 模式。
+- **`cli.py` 仍 ~4400 行**：单文件承载所有子命令实现（model / doctor / route / usage / profile / config / edit / patch / project / prompt）。拆分方案已定：按命令组迁入 `modelbridge/cli/` 子包（`cli/model.py`、`cli/patch.py` …），入口 `modelbridge.cli:app` 与注册表结构不变，参照已拆出的 `mcp/cli.py`、`bridge/cli.py`、`skills/cli.py` 模式；700+ 测试作回归兜底。这是下一个大件重构，动手前先起独立分支。

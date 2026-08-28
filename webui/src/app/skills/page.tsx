@@ -9,11 +9,25 @@ export default function SkillsPage() {
   const [active, setActive] = useState<SkillOut | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const load = () => {
     api<{ skills: SkillOut[] }>("/skills")
       .then((r) => setSkills(r.skills))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load();
   }, []);
+
+  // 启停：写入 ~/.modelbridge/skills.json，下一次启动的 REPL 生效。
+  const toggle = (name: string, enabled: boolean) => {
+    api(`/skills/${name}/enabled`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    })
+      .then(() => load())
+      .catch((e) => alert(String((e as Error).message || e)));
+  };
 
   const scopeBadge = (scope: string) => {
     if (scope === "builtin") return <span className="badge badge-accent">内置</span>;
@@ -52,26 +66,43 @@ export default function SkillsPage() {
         </div>
       ) : (
         <div className="skill-grid">
-          {skills.map((s) => (
-            <button
-              key={`${s.scope}/${s.name}`}
-              className="skill-card"
-              onClick={() =>
-                api<SkillOut>(`/skills/${s.name}`).then(setActive)
-              }
-            >
-              <div className="skill-icon">
-                <Cube size={17} />
-              </div>
-              <div className="skill-info">
-                <div className="skill-name-row">
-                  <span className="mono skill-name">{s.name}</span>
-                  {scopeBadge(s.scope)}
+          {skills.map((s) => {
+            const off = s.enabled === false;
+            return (
+              <div
+                key={`${s.scope}/${s.name}`}
+                className={`skill-card skill-toggle-card ${off ? "is-disabled" : ""}`}
+                role="button"
+                tabIndex={0}
+                onClick={() =>
+                  api<SkillOut>(`/skills/${s.name}`).then(setActive)
+                }
+              >
+                <div className="skill-icon">
+                  <Cube size={17} />
                 </div>
-                <div className="skill-desc">{s.description}</div>
+                <div className="skill-info">
+                  <div className="skill-name-row">
+                    <span className="mono skill-name">{s.name}</span>
+                    {scopeBadge(s.scope)}
+                  </div>
+                  <div className="skill-desc">{s.description}</div>
+                </div>
+                <label
+                  className="switch"
+                  title={off ? "已禁用 — 点击启用" : "启用中 — 点击禁用"}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="checkbox"
+                    checked={!off}
+                    onChange={(e) => toggle(s.name, e.target.checked)}
+                  />
+                  <span className="switch-slider" />
+                </label>
               </div>
-            </button>
-          ))}
+            );
+          })}
         </div>
       )}
 

@@ -51,12 +51,15 @@ def build_app():  # pragma: no cover — integration tested via TestClient
     from fastapi.responses import JSONResponse
 
     from .routers import (
+        chat_router,
         config_router,
         doctor_router,
+        mcp_router,
         models_router,
         prompts_router,
         session_router,
         skills_router,
+        ui_prefs_router,
         usage_router,
     )
 
@@ -85,6 +88,9 @@ def build_app():  # pragma: no cover — integration tested via TestClient
     app.include_router(doctor_router, prefix=api_prefix)
     app.include_router(usage_router, prefix=api_prefix)
     app.include_router(session_router, prefix=api_prefix)
+    app.include_router(ui_prefs_router, prefix=api_prefix)
+    app.include_router(chat_router, prefix=api_prefix)
+    app.include_router(mcp_router, prefix=api_prefix)
 
     @app.get(api_prefix + "/health")
     def _health() -> dict:

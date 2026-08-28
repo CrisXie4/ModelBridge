@@ -47,6 +47,10 @@ T_EXEC = "exec"  # CLI control-socket: relay ONE browser tool to the extension
 T_EXEC_RESULT = "exec_result"  # host -> CLI: that tool's result
 T_INJECT_JS = "inject_js"  # host -> extension: inject JS with auto-remove
 T_INJECT_RESULT = "inject_result"  # extension -> host: inject result
+# UI preferences (the ~/.modelbridge/ui.json bag shared with the terminal TUI)
+T_UI_PREFS_GET = "ui_prefs_get"  # extension -> host
+T_UI_PREFS_SET = "ui_prefs_set"  # extension -> host {values: {key: value}}
+T_UI_PREFS = "ui_prefs"          # host -> extension: reply/push with full bag
 
 # host -> extension
 T_READY = "ready"
@@ -149,13 +153,16 @@ def write_message(stream: BinaryIO, msg: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 def ready(*, version: str, models: list[str], default_model: str | None,
-          cwd: str = "") -> dict[str, Any]:
+          cwd: str = "", prefs: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Handshake frame. ``prefs`` carries the initial UiPrefs bag so the panel
+    can render its settings form without an extra round-trip."""
     return {
         "type": T_READY,
         "version": version,
         "models": models,
         "defaultModel": default_model,
         "cwd": cwd,
+        "uiPrefs": prefs or {},
     }
 
 
@@ -208,8 +215,9 @@ def notice(*, id: str, text: str) -> dict[str, Any]:
 
 def state(*, id: str, cwd: str = "", cache_last: str = "",
           cache_session: str = "", todos: list[dict[str, Any]] | None = None,
+          bgs: list[dict[str, Any]] | None = None,
           ) -> dict[str, Any]:
-    """Status snapshot for the panel's rail: cwd / cache hit rate / todos."""
+    """Status snapshot for the panel's rail: cwd / cache / todos / bg tasks."""
     return {
         "type": T_STATE,
         "id": id,
@@ -217,6 +225,34 @@ def state(*, id: str, cwd: str = "", cache_last: str = "",
         "cacheLast": cache_last,
         "cacheSession": cache_session,
         "todos": todos or [],
+        "bgs": bgs or [],
+    }
+
+
+def ui_prefs_get(*, id: str = "") -> dict[str, Any]:
+    """Panel asks for the full UiPrefs bag (host replies with :func:`ui_prefs`)."""
+    return {"type": T_UI_PREFS_GET, "id": id}
+
+
+def ui_prefs_set(*, id: str = "", values: dict[str, Any] | None = None,
+                 reset: bool = False) -> dict[str, Any]:
+    """Panel sets knobs ({key: value}); ``reset`` restores factory defaults."""
+    return {"type": T_UI_PREFS_SET, "id": id, "values": values or {}, "reset": reset}
+
+
+def ui_prefs(*, id: str = "", prefs: dict[str, Any] | None = None,
+             saved: bool = False, errors: dict[str, str] | None = None) -> dict[str, Any]:
+    """Reply/push frame carrying the (possibly updated) preference bag.
+
+    ``errors`` maps rejected keys to a 中文 reason so the form can mark only
+    the offending fields.
+    """
+    return {
+        "type": T_UI_PREFS,
+        "id": id,
+        "prefs": prefs or {},
+        "saved": saved,
+        "errors": errors or {},
     }
 
 
@@ -246,6 +282,9 @@ __all__ = [
     "T_ERROR",
     "T_NOTICE",
     "T_STATE",
+    "T_UI_PREFS_GET",
+    "T_UI_PREFS_SET",
+    "T_UI_PREFS",
     # builders
     "ready",
     "delta",
@@ -256,4 +295,7 @@ __all__ = [
     "error",
     "notice",
     "state",
+    "ui_prefs_get",
+    "ui_prefs_set",
+    "ui_prefs",
 ]

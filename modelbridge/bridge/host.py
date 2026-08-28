@@ -57,6 +57,17 @@ class Host:
         self._turn_lock = threading.Lock()
         # Local control server for CLI-initiated turns (started in serve()).
         self._control: Any | None = None
+        # Shared UiPrefs bag (lazily loaded; owned here so the panel, the CLI
+        # control server and future clients all read/mutate the same instance).
+        self._ui_prefs: Any = None
+
+    @property
+    def ui_prefs(self) -> Any:
+        if self._ui_prefs is None:
+            from ..agent.ui_prefs import UiPrefs
+
+            self._ui_prefs = UiPrefs.load()
+        return self._ui_prefs
 
     # ------------------------------------------------------------------
     # Output
@@ -128,7 +139,64 @@ class Host:
         return P.ready(
             version=__version__, models=models, default_model=default_model,
             cwd=os.getcwd(),
+            prefs=self._prefs_payload(),
         )
+
+    def _prefs_payload(self) -> dict[str, Any]:
+        """Serializable snapshot of the UiPrefs bag for wire frames."""
+        try:
+            from dataclasses import fields as dc_fields
+
+            p = self.ui_prefs
+            return {
+                f.name: getattr(p, f.name)
+                for f in dc_fields(type(p))
+                if f.name != "path"
+            }
+        except Exception:
+            return {}
+
+    def _on_ui_prefs_get(self, msg: dict[str, Any]) -> None:
+        self.send(P.ui_prefs(id=msg.get("id") or "", prefs=self._prefs_payload()))
+
+    def _on_ui_prefs_set(self, msg: dict[str, Any]) -> None:
+        """Apply {key: value} knobs; per-key errors, successful keys persist.
+
+        ``reset`` swaps in a fresh default bag (keeps storage path), mirroring
+        the ``/ui reset`` slash command.
+        """
+        current = self.ui_prefs
+        errors: dict[str, str] = {}
+        if msg.get("reset"):
+            from ..agent.ui_prefs import UiPrefs
+
+            fresh = UiPrefs(path=current.path)
+            self._ui_prefs = fresh
+            try:
+                fresh.save()
+                current = fresh
+            except Exception as e:
+                errors["__save__"] = str(e)
+        else:
+            p = current
+            for key, raw in dict(msg.get("values") or {}).items():
+                try:
+                    p.set_key(str(key), raw)
+                except KeyError:
+                    errors[str(key)] = "未知配置项"
+                except (ValueError, TypeError) as e:
+                    errors[str(key)] = str(e)
+            if not errors:
+                try:
+                    p.save()
+                except Exception as e:
+                    errors["__save__"] = str(e)
+        self.send(P.ui_prefs(
+            id=msg.get("id") or "",
+            prefs=self._prefs_payload(),
+            saved=not errors,
+            errors=errors,
+        ))
 
     # ------------------------------------------------------------------
     # Routing
@@ -149,6 +217,10 @@ class Host:
             router = self.pending_router
             if router is not None:
                 router.cancel()
+        elif mtype == P.T_UI_PREFS_GET:
+            self._on_ui_prefs_get(msg)
+        elif mtype == P.T_UI_PREFS_SET:
+            self._on_ui_prefs_set(msg)
         else:
             self._log.warning("bridge: unknown message type %r", mtype)
             self.send(P.error(id=msg.get("id"), message=f"unknown message type: {mtype}"))

@@ -10,6 +10,16 @@
 >
 > 支持 DeepSeek / 豆包 / Qwen / Kimi / MiMo / GLM / MiniMax / 腾讯混元 / 百度文心 / 讯飞星火 / 阶跃星辰 / 商汤日日新 / Ollama / vLLM / LM Studio——12 家国产云厂商 + 本地运行时。Provider Adapter 层吸收国产模型字段差异 (`reasoning_content`、`thinking`、`tool_calls`)。
 
+## 这是什么 / 不是什么
+
+| | |
+|---|---|
+| **主线（稳定面）** | `mbridge` REPL、`ask`、`edit`、`doctor`、模型与配置管理、usage 统计、Provider Adapter 层。v1.x 内这些命令的参数只加不破；**废弃先警告至少一个小版本，再物理删除**（已删除的历史别名见[附录](#附录已移除的命令与功能)）。 |
+| **配套体验** | 浏览器侧边栏（扩展）、全屏 TUI 界面、webui 后台（**AI 对话**：流式回复、工具过程、审批卡、多会话；Skills 启停；MCP servers 持久启停；界面样式设置并热同步到终端与侧栏）。随版本演进，界面细节可能调整。 |
+| **实验性 / 周边产品级** | `weixin` 微信机器人、MCP server 模式、skills 生态、webui 后台页面。可用但接口变动更频繁，不建议作为自动化依赖。 |
+
+不是什么：不是多模型网关/代理服务（不做转发计费），也不是 IDE 插件。
+
 ---
 
 ## 💛 赞助 · Sponsor
@@ -62,8 +72,7 @@ mbridge --version / -V             显示版本号 (任意位置)
 mbridge update [--yes]             检查并下载新版本
 ```
 
-> 已物理删除的别名（`No such command`）：`chat`（→ `ask`）、`cost estimate`（→ `usage cost`）、`cache stats/reset/clean`（→ `usage cache ...`）、`profile add/list/use/show/remove`（→ `config profile ...`）、`model test`（→ `doctor model`）、`model add`（→ `model init`）、`bridge control`（→ `bridge on/off/status`）、`project init`（→ `project rules init`）、`mcp serve`（→ `python -m modelbridge.mcp.server`）、`doctor route` / `route test`（路由验证套件，已随 v1.2.5 精简移除）、`weixin test`（→ `weixin status`）、`mcp ping`（→ `mcp list`）。  
-> **预算功能（`mbridge usage budget`）已在 2026-07 移除。**
+> 历史上删除过的命令名不再一一列出——完整清单与迁移对照见文末[附录](#附录已移除的命令与功能)。
 
 > **版本与自动更新**：REPL 启动时会显示当前版本，并在每天检查一次 GitHub
 > Release。发现新版本时会提示 `🔔 发现新版本 vX.Y.Z`，此时直接输入 **同意**
@@ -165,6 +174,18 @@ session saved → ~/.modelbridge/sessions/2026-05-23_153012_repl_deepseek-flash.
 - **y** — 同意这一次
 - **N** — 拒绝 (默认)
 - **a** — 本会话内对该工具始终同意
+
+### 极简模式（`--minimal`）
+
+```bash
+mbridge --minimal          # 或 mbridge -x ；MBRIDGE_MINIMAL=1 等价
+```
+
+把工具裁剪到 **read_file / write_file / run_bash** 三个，同时跳过浏览器、子代理、todo、
+后台任务、computer、skills 与 MCP 的注入——只留一条干净的「读 → 写 → 跑」链路。
+AI 提示词换用寡言版（仿 DeepSeek Harness）："Verify your work by running the code or
+tests. Keep answers brief and factual."——先验证再汇报，只报结果不解释过程。适合脚本化
+驱动、低配模型或不想要任何附加能力的场景。
 
 ### 图片 / 多模态（vision 模型）
 
@@ -851,4 +872,27 @@ CI 见 `.github/workflows/ci.yml`：`test` 是硬门禁 (3.10/3.11/3.12)，`lint
 ## License
 
 Apache-2.0
+
+---
+
+## 附录：已移除的命令与功能
+
+按"废弃先警告一个版本，再物理删除"的政策清理；此表保留历史迁移对照。
+
+| 已删除 | 替代 |
+|---|---|
+| `chat` | `ask` |
+| `cost estimate` | `usage cost` |
+| `cache stats/reset/clean` | `usage cache ...` |
+| `profile add/list/use/show/remove` | `config profile ...` |
+| `model test` / `model add` | `doctor model` / `model init` |
+| `bridge control` | `bridge on/off/status` |
+| `project init` | `project rules init` |
+| `mcp serve` | `python -m modelbridge.mcp.server` |
+| `doctor route` / `route test`（v1.2.5 精简） | — |
+| `weixin test` | `weixin status` |
+| `mcp ping` | `mcp list` |
+| 预算功能 `mbridge usage budget`（2026-07 移除：月度/每日 budget、`hard_stop`、`budget.json`） | REPL 内 `/tokens` 看用量；`mbridge usage cost "..."` 估算单次成本 |
+
+> 找不到命令时先跑 `mbridge --help` 查看当前命令树。
 

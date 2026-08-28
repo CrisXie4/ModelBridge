@@ -89,12 +89,12 @@ class TodoTool(Tool):
                 return self.err(
                     f"update_status 需要 status ∈ {list(TODO_STATUSES)}"
                 )
-            item = self._store.update_status(todo_id, status)
-            if item is None:
+            updated = self._store.update_status(todo_id, status)
+            if updated is None:
                 return self.err(f"找不到 id={todo_id} 的待办")
             return self.ok(
-                f"已更新 #{item.id} → {item.status}：{item.content}",
-                structured=item.to_dict(),
+                f"已更新 #{updated.id} → {updated.status}：{updated.content}",
+                structured=updated.to_dict(),
             )
 
         if action == "remove":
@@ -123,10 +123,12 @@ class TodoTool(Tool):
                 f"待办清单（{s['done']}/{s['total']} 完成，{s['in_progress']} 进行中）："
             ]
             for it in items:
-                mark = {"done": "✓", "in_progress": "▸", "pending": "○"}.get(
-                    it.status, "○"
+                st = str(it.get("status", "pending"))
+                mark = {"done": "✓", "in_progress": "▸", "pending": "○"}.get(st, "○")
+                lines.append(
+                    f"  {mark} #{it.get('id')} [{st}/{it.get('priority')}] "
+                    f"{it.get('content', '')}"
                 )
-                lines.append(f"  {mark} #{it.id} [{it.status}/{it.priority}] {it.content}")
             return self.ok("\n".join(lines), structured={"items": items, "summary": s})
 
         return self.err(f"未知 action: {action}")

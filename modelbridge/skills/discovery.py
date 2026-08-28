@@ -101,11 +101,11 @@ def discover_skills(project_path: Path | str | None = None) -> list[Skill]:
                     continue
             except OSError:
                 continue
-            sk = parse_skill(md, scope=scope)
-            if sk is None:
+            parsed = parse_skill(md, scope=scope)
+            if parsed is None:
                 get_logger().warning("skills: 跳过无效 SKILL.md: %s", md)
                 continue
-            found[sk.name] = sk
+            found[parsed.name] = parsed
     return list(found.values())
 
 

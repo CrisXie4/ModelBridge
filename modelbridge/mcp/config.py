@@ -219,12 +219,53 @@ def load_mcp_settings() -> MCPSettings:
             sampling, "max_tokens", 2048, int, label="mcp.sampling.max_tokens"
         ),
         sampling_max_calls=_coerce_number(
-            sampling, "max_calls", 32, int, label="mcp.sampling.max_calls"
+            sampling, "max_calls", 32, int, label="mcp.sampling.max_tokens"
         ),
     )
 
 
+def set_server_enabled(server_id: str, enabled: bool) -> bool:
+    """Persistently enable/disable one server in ``config.yaml``.
+
+    Edits only the matching ``mcp.servers[].enabled`` flag and writes the
+    file back (other sections, including unrelated ``mcp`` options, are
+    preserved via the extra-allowing :class:`~modelbridge.models.AppConfig`
+    round-trip + this function's raw read). Returns False when the id is
+    unknown. Takes effect on the next REPL / ``mbridge web`` start; a
+    running session's runtime toggle remains independent.
+    """
+    import yaml
+
+    path = get_config_path()
+    raw = _safe_load_yaml(path)
+    if not isinstance(raw, dict):
+        return False
+    block = raw.get("mcp")
+    if not isinstance(block, dict):
+        return False
+    servers = block.get("servers")
+    if not isinstance(servers, list):
+        return False
+
+    hit = False
+    for entry in servers:
+        if isinstance(entry, dict) and entry.get("server_id") == server_id:
+            entry["enabled"] = bool(enabled)
+            hit = True
+            break
+    if not hit:
+        return False
+
+    from ..config import _invalidate_config_cache
+
+    text = yaml.safe_dump(raw, allow_unicode=True, sort_keys=False)
+    path.write_text(text, encoding="utf-8")
+    _invalidate_config_cache()
+    return True
+
+
 __all__ = [
+    "set_server_enabled",
     "TransportKind",
     "ToolPolicyKind",
     "MCPServerConfig",

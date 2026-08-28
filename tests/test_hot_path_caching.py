@@ -35,14 +35,21 @@ def home(tmp_path, monkeypatch):
     return tmp_path
 
 
+_LAST_BUMP: dict[str, int] = {}
+
+
 def _write(path, data: dict) -> None:
     path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
     # 缓存键是 (mtime_ns, size)。同一长度的一次字符改动（a→b）在文件系统
     # 时间戳粒度内可能拿到完全相同的键 —— 套件时序一变就抖。显式把 mtime
     # 推进 1ms，保证"外部编辑"对缓存键可见（这是产品契约，不该靠运气）。
+    # 关键：按路径单调递增——两次快速写入若都落在同一系统时钟刻度，仅
+    # "prev+1ms" 会推出两个相等的值（prev 相同），缓存照样命中旧内容。
     try:
         prev = path.stat().st_mtime_ns
-        os.utime(path, ns=(prev + 1_000_000, prev + 1_000_000))
+        nxt = max(prev + 1_000_000, _LAST_BUMP.get(str(path), 0) + 1_000_000)
+        os.utime(path, ns=(nxt, nxt))
+        _LAST_BUMP[str(path)] = nxt
     except OSError:
         time.sleep(0.002)
 

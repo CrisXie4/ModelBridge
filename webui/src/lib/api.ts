@@ -44,6 +44,16 @@ export interface SkillOut {
   scope: string;
   path: string;
   body?: string;
+  enabled?: boolean;
+}
+
+export interface McpServerOut {
+  server_id: string;
+  transport: string;
+  command: string | null;
+  url: string | null;
+  enabled: boolean;
+  tool_policy?: string;
 }
 
 export interface ConfigOut {

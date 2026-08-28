@@ -77,6 +77,12 @@ class SlashContext:
     # Wired by cli.py to update its model_holder + re-sync thinking_state.
     # Any → Callable[[str], None] | None; kept Any to avoid an import cycle.
     on_model_change: Any = None
+    # UiPrefs | None — shared mutable bag behind /ui (persisted at ui.json).
+    # Typed Any so agent/ doesn't hard-depend on the prefs module shape.
+    ui_prefs: Any = None
+    # Callable[[], None] | None — fired after /ui mutates prefs so a live
+    # full-screen TUI repaints immediately instead of on the next event.
+    on_ui_change: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -683,8 +689,9 @@ def _mcp(sctx: SlashContext, *, args: list[str]) -> CommandResult:
                           str(s.tools), s.error or "")
         sctx.console.print(table)
         sctx.console.print(
-            "[dim]/mcp tools · /mcp on|off <id> · /mcp refresh · "
-            "/mcp read <uri> · /mcp prompt <name> [k=v…][/dim]"
+            "[dim]/mcp tools · /mcp on|off <id> (会话级) · /mcp refresh · "
+            "/mcp read <uri> · /mcp prompt <name> [k=v…][/dim]\n"
+            "[dim]永久启停：config.yaml → mcp.servers → enabled: true/false[/dim]"
         )
         return CommandResult()
 
@@ -849,6 +856,136 @@ def _debug(sctx: SlashContext, *, args: list[str]) -> CommandResult:
     return CommandResult()
 
 
+def _ui(sctx: SlashContext, *, args: list[str]) -> CommandResult:
+    """``/ui`` — view & tweak the TUI look: rail width, sections, colors.
+
+    - ``/ui``          列出全部可调项及当前值
+    - ``/ui <key> <value>``   改一项（即时生效，写入 ~/.modelbridge/ui.json）
+    """
+    prefs = sctx.ui_prefs
+    if prefs is None:
+        sctx.console.print("[yellow]当前界面不支持自定义（经典模式可用 MBRIDGE_TUI 变量微调）。[/yellow]")
+        return CommandResult()
+
+    from .ui_prefs import UiPrefs
+
+    if not args:
+        rows = UiPrefs.spec_items()
+        key_w = max(len(k) for k, _d, _t in rows)
+        lines = ["[bold]界面自定义[/bold] [dim](保存于 ~/.modelbridge/ui.json)[/dim]", ""]
+        last_cat = ""
+        for key, desc, kind in rows:
+            cat = desc.split(" · ", 1)[0]
+            if cat != last_cat:
+                lines.append(f"[bold]{cat}[/bold]")
+                last_cat = cat
+            val = prefs.format_value(key)
+            hint = {"bool": "on/off", "float": "0.22-0.55", "int": "40-96"}.get(kind, kind.split(":")[-1])
+            lines.append(
+                f"  [cyan]{key.ljust(key_w)}[/cyan]  {val}  [dim]— {desc} ({hint})[/dim]"
+            )
+        lines += ["", "[dim]示例: /ui rail_ratio 0.32 · /ui show_tasks off · /ui color_bad #ff7b72[/dim]"]
+        sctx.console.print("\n".join(lines))
+        return CommandResult()
+
+    if len(args) == 1 and args[0].lower() in ("reset", "default"):
+        from dataclasses import fields as dc_fields
+
+        saved = type(prefs)()
+        for fobj in dc_fields(type(prefs)):
+            if fobj.name != "path":
+                setattr(prefs, fobj.name, getattr(saved, fobj.name))
+        prefs.clamp()
+        try:
+            prefs.save()
+        except Exception as e:
+            sctx.console.print(f"[red]已重置但写盘失败: {e}[/red]")
+            return CommandResult()
+        _fire_ui_change(sctx)
+        sctx.console.print("[green]✓ 界面已恢复默认[/green]")
+        return CommandResult()
+
+    if len(args) < 2:
+        sctx.console.print("[dim]用法: /ui <key> <value>  ·  /ui reset  ·  无参数列出全部[/dim]")
+        return CommandResult()
+
+    key, raw = args[0].lower(), args[1]
+    try:
+        msg = prefs.set_key(key, raw)
+    except KeyError:
+        sctx.console.print(f"[red]未知配置项: {key}[/red] [dim]（/ui 查看全部）[/dim]")
+        return CommandResult()
+    except (ValueError, TypeError) as e:
+        sctx.console.print(f"[red]{key}: {e}[/red]")
+        return CommandResult()
+    _fire_ui_change(sctx)
+    sctx.console.print(f"[green]✓ {msg}[/green] [dim](已保存到 ui.json)[/dim]")
+    return CommandResult()
+
+
+def _fire_ui_change(sctx: SlashContext) -> None:
+    cb = getattr(sctx, "on_ui_change", None)
+    if cb is not None:
+        try:
+            cb()
+        except Exception:
+            pass
+
+
+def _skill(sctx: SlashContext, *, args: list[str]) -> CommandResult:
+    """``/skill`` — per-skill enable/disable, persisted at skills.json.
+
+    - ``/skill``                列出已发现的 skill 及启停状态
+    - ``/skill off <name>``     禁用（use_skill 立即拒绝；下次启动不再注入索引）
+    - ``/skill on <name>``      恢复启用
+    """
+    from ..skills.discovery import discover_skills
+    from ..skills.prefs import load_disabled, set_enabled
+
+    project = getattr(sctx, "project_path", None)
+    try:
+        skills = {s.name: s for s in discover_skills(project_path=project)}
+    except Exception as e:
+        sctx.console.print(f"[red]skills 扫描失败: {e}[/red]")
+        return CommandResult()
+
+    sub = args[0].lower() if args else ""
+    if sub in ("on", "off"):
+        if len(args) < 2:
+            sctx.console.print(f"[dim]用法: /skill {sub} <name>[/dim]")
+            return CommandResult()
+        name = args[1]
+        if name not in skills:
+            known = ", ".join(sorted(skills)) or "(无)"
+            sctx.console.print(f"[red]未找到 skill: {name}[/red] [dim]已发现: {known}[/dim]")
+            return CommandResult()
+        set_enabled(name, enabled=(sub == "on"))
+        verb = "[green]✓ 已启用[/green]" if sub == "on" else "[yellow]✓ 已禁用[/yellow]"
+        sctx.console.print(
+            f"{verb} skill [bold]{name}[/bold] · 已写入 ~/.modelbridge/skills.json\n"
+            f"[dim]use_skill 本会话即刻{'放行' if sub == 'on' else '拒绝'}；"
+            "系统提示里的索引在下次启动时更新。[/dim]"
+        )
+        return CommandResult()
+
+    # 默认：列表
+    disabled = load_disabled()
+    if not skills:
+        sctx.console.print("[dim](未发现任何 skill)[/dim]")
+        return CommandResult()
+    lines = ["[bold]Skills[/bold] [dim](~/.modelbridge/skills.json)[/dim]", ""]
+    for name in sorted(skills):
+        entry = skills[name]
+        off = name in disabled
+        state = "[red]已禁用[/red]" if off else "[green]启用中[/green]"
+        name_disp = f"[dim]{name}[/dim]" if off else name
+        desc = (entry.description or "").splitlines()[0][:60]
+        lines.append(f"  {name_disp}  {state}  [dim]{desc}[/dim]")
+    lines += ["", "[dim]/skill on|off <name> 切换；scope 详情见 mbridge skill list[/dim]"]
+    sctx.console.print("\n".join(lines))
+    return CommandResult()
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -886,6 +1023,9 @@ _COMMANDS: dict[str, CommandFn] = {
     "upgrade": _update,
     "debug":   _debug,
     "dbg":     _debug,
+    "ui":      _ui,
+    "skill":   _skill,       # /skill on|off — 启停（区别于 mbridge skill 的文件管理）
+    "skills":  _skill,
 }
 
 _HELP_ROWS: list[tuple[str, str]] = [
@@ -894,6 +1034,8 @@ _HELP_ROWS: list[tuple[str, str]] = [
     ("/model [name]",      "查看 / 切换当前模型 (REPL 实时切换, 自动同步 thinking)"),
     ("/context, /ctx",     "显示会话历史摘要 + 最近 6 条预览"),
     ("/tokens, /t",        "显示当前 token 使用 / 上下文窗口剩余"),
+    ("/ui [key val]",      "自定义界面: 右栏宽度/分组/配色/回显对齐 (/ui reset 恢复默认)"),
+    ("/skill [on/off n]",  "启用 / 禁用某个 skill (写入 skills.json, use_skill 即刻生效)"),
     ("/think on [lvl]",      "开启 thinking 模式 (lvl: 1-10 或 low/med/high/xhigh)"),
     ("/think off",           "关闭 thinking 模式"),
     ("/think level <N>",     "调整 thinking 强度 (1-10 / named)"),

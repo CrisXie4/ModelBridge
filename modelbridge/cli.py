@@ -285,7 +285,7 @@ def cmd_web(
             "[red]未安装 web 依赖。请运行：[/red] "
             "[bold]pip install 'modelbridge[web]'[/bold]"
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     from .web import create_app
 
@@ -417,6 +417,12 @@ def _root(
         None, "--system", "-s", help="可选 system prompt。",
     ),
     timeout: float = typer.Option(120.0, "--timeout", help="每次模型请求的超时秒数。"),
+    minimal: bool = typer.Option(
+        False, "--minimal", "-x",
+        help="极简模式：工具只保留 read_file / write_file / run_bash；"
+             "AI 改用寡言提示词（仿 DeepSeek Harness：先验证、只报结果）。"
+             "也可用环境变量 MBRIDGE_MINIMAL=1。",
+    ),
 ) -> None:
     """无子命令时进入持续会话 (Claude-Code 风格)。"""
     if ctx.invoked_subcommand is not None:
@@ -431,6 +437,7 @@ def _root(
         save_session=save_session,
         system=system,
         timeout=timeout,
+        minimal=minimal or os.environ.get("MBRIDGE_MINIMAL", "") in ("1", "true", "yes"),
     )
 
 
@@ -444,6 +451,7 @@ def _run_repl(
     save_session: bool,
     system: Optional[str],
     timeout: float,
+    minimal: bool = False,
 ) -> None:
     # 1. Resolve model
     try:
@@ -591,7 +599,7 @@ def _run_repl(
         model_is_video=bool(getattr(getattr(_repl_entry, "capabilities", None), "video", False)),
     )
     _approval_ctx_holder["ctx"] = agent_ctx
-    registry = build_default_registry(include_bash=allow_bash)
+    registry = build_default_registry(include_bash=allow_bash, minimal=minimal)
 
     # Browser tools are always available: the agent can read/operate the active
     # web page by relaying to the side-panel extension via the LocalBridge host.
@@ -602,13 +610,15 @@ def _run_repl(
     from .agent.tools.browser_tools import build_browser_registry
     from .bridge.control import RemoteBrowserBridge
 
-    for tool in build_browser_registry(include_write=True).tools.values():
-        registry.register(tool)
+    if not minimal:
+        for tool in build_browser_registry(include_write=True).tools.values():
+            registry.register(tool)
 
     # Sub-agent tool — lets the AI spin up focused sub-agents for complex tasks.
     # User confirmation is required (y / N / a=always); "always" is persisted.
     from .agent.tools.subagent_tool import SpawnSubagentTool
-    registry.register(SpawnSubagentTool())
+    if not minimal:
+        registry.register(SpawnSubagentTool())
 
     # Live state — publishes {model, topic, context usage, todos} to
     # ~/.modelbridge/live.json so the web UI's "Agent 活动" page shows the
@@ -619,21 +629,24 @@ def _run_repl(
     from .agent.live_state import LiveStateWriter, TodoStore, clear_live_state
 
     todo_store = TodoStore()
-    registry.register(TodoTool(todo_store))
+    # 极简模式不注册 todo 工具（live.json 发布照旧，网页端只是看不到清单）。
+    if not minimal:
+        registry.register(TodoTool(todo_store))
 
     # Computer control tools: mouse, keyboard, screenshot, and inject_js.
     # Only offered when pyautogui is actually importable — registering tools
     # that can only fail ("pyautogui 未安装") invites the model to flail with
     # hotkey/click attempts instead of using the tools it really has.
-    try:
-        import pyautogui  # noqa: F401
+    if not minimal:
+        try:
+            import pyautogui  # noqa: F401
 
-        from .agent.tools.computer_control_tools import build_computer_registry
+            from .agent.tools.computer_control_tools import build_computer_registry
 
-        for tool in build_computer_registry().tools.values():
-            registry.register(tool)
-    except Exception:
-        pass
+            for tool in build_computer_registry().tools.values():
+                registry.register(tool)
+        except Exception:
+            pass
 
     browser_bridge = RemoteBrowserBridge()
     agent_ctx.browser_bridge = browser_bridge
@@ -682,7 +695,7 @@ def _run_repl(
     try:
         from .mcp import MCPManager, is_enabled, register_mcp_tools
 
-        if is_enabled():
+        if is_enabled() and not minimal:
             mcp_manager = MCPManager.from_config(verbose=False)
             mcp_manager.connect_all()
             n = register_mcp_tools(registry, mcp_manager)
@@ -739,7 +752,9 @@ def _run_repl(
     from .agent.tools.background_task_tool import BackgroundTaskTool
 
     bg_manager = BackgroundTaskManager(on_complete=_on_bg_complete)
-    registry.register(BackgroundTaskTool(bg_manager))
+    # 极简模式：后台任务工具不注册（manager 保留，回车唤醒通道照常）。
+    if not minimal:
+        registry.register(BackgroundTaskTool(bg_manager))
 
     def _pending_wake() -> bool:
         """Drain one background notification into the session; True = wake."""
@@ -752,14 +767,35 @@ def _run_repl(
         session.messages.append(_CM(role="user", content=notice))
         return True
 
+    # 界面自定义偏好（/ui 命令读写；持久化于 ~/.modelbridge/ui.json）。
+    # 加载失败不该挡 REPL —— UiPrefs.load 已兜底全默认。
+    try:
+        from .agent.ui_prefs import UiPrefs
+
+        _ui_prefs = UiPrefs.load()
+    except Exception:
+        from .agent.ui_prefs import UiPrefs as _UiPrefs
+
+        _ui_prefs = _UiPrefs()
+
+    def _notify_ui_change() -> None:
+        """`/ui` 改动后让常驻右栏立刻重绘（TUI 未启用时是 no-op）。"""
+        if _tui is not None:
+            _tui.invalidate(throttle=False)
+
     side_panel = SidePanel(
         cwd=str(cwd_resolved), todo_store=todo_store, bg_manager=bg_manager,
     )
     side_panel.begin_turn(_active_model() or model_name)
 
-    sys_prompt_text = system or _default_system_prompt(allow_bash=allow_bash)
+    if minimal and not system:
+        sys_prompt_text = _minimal_system_prompt(allow_bash=allow_bash)
+    else:
+        sys_prompt_text = system or _default_system_prompt(allow_bash=allow_bash)
     try:
-        sys_prompt_text = wire_skills(registry, sys_prompt_text, project_path=cwd_resolved)
+        # 极简模式跳过 skills 注入（连 UseSkillTool 一起不注册）。
+        if not minimal:
+            sys_prompt_text = wire_skills(registry, sys_prompt_text, project_path=cwd_resolved)
     except Exception as e:
         err_console.print(f"[yellow]跳过 skills 加载: {e}[/yellow]")
     prompt_builder = PromptBuilder().with_system_prompt(sys_prompt_text).with_project(cwd_resolved)
@@ -1028,6 +1064,7 @@ def _run_repl(
                 completer=_completer,
                 bindings=_pt_bindings,
                 on_interrupt=lambda: _thread_mod.interrupt_main(),
+                prefs=_ui_prefs,
             )
             _tui.start()
             _time_mod.sleep(0.5)  # 等 UI 线程起来；没起来就回退并说明原因
@@ -1293,8 +1330,8 @@ def _run_repl(
         # 重定向进 TUI）。
         if _tui is not None:
             _tui.stream_reset()
-            if resp.reasoning_content:
-                render_reasoning_meter(console, reasoning_text=resp.reasoning_content)
+            # reasoning meter 在 TUI 里是纯噪音（流式区已区分思考/正文），
+            # 直接打印模型标签 + 最终 Markdown。
             console.print(f"[bold cyan]● {_active_model()}[/bold cyan]")
             try:
                 from rich.markdown import Markdown
@@ -1457,6 +1494,8 @@ def _run_repl(
             project_path=cwd_resolved,
             mcp_manager=mcp_manager,
             on_model_change=_set_active_model,
+            ui_prefs=_ui_prefs,
+            on_ui_change=_notify_ui_change,
         )
         return handle_slash(text, sctx)
 
@@ -1684,6 +1723,36 @@ def _short_repr(v) -> str:
     if len(s) > 60:
         s = s[:60] + "…"
     return s
+
+
+def _minimal_system_prompt(*, allow_bash: bool) -> str:
+    """极简模式 persona — tool allowlist is read/write/bash; voice is terse.
+
+    Tone follows the DeepSeek Harness system prompt's two-line contract
+    ("Verify your work by running the code or tests. Keep answers brief and
+    factual.") kept in English because the harness ships those exact words
+    to v-series models; the surrounding rules are 中文 so approval/confirmation
+    behaviour stays unambiguous for Chinese users.
+
+    Like :func:`_default_system_prompt`, this text is part of the stable
+    prompt prefix: no cwd, timestamp, or per-session values.
+    """
+    bash_line = "- run_bash(command): 在工作目录执行 shell 命令（需用户确认）。\n" if allow_bash else ""
+    return (
+        "你是 ModelBridge 极简模式的编程 agent。可用工具只有:\n"
+        "- read_file(path): 读文件。\n"
+        "- write_file(path, content): 创建/整体覆盖文件 (每次需用户确认)。\n"
+        f"{bash_line}"
+        "\n"
+        "行为准则:\n"
+        "1. 先读后写；没有读过的文件绝不覆盖。\n"
+        "2. 改动用 write_file 整体覆盖时保持文件原有无关内容不动；大文件优先说明影响面后再动。\n"
+        "3. Verify your work by running the code or tests.\n"
+        "4. Keep answers brief and factual. 只报结果：先一句结论，再列改动路径与验证输出；\n"
+        "   不复述任务、不解释计划、不寒暄。失败时报错原文一行 + 下一步动作即可。\n"
+        "5. 工具报错或需要确认时停下等结果，不要凭空假设成功。\n"
+        "6. 用中文回复中文用户，术语保留英文。\n"
+    )
 
 
 def _default_system_prompt(*, allow_bash: bool) -> str:

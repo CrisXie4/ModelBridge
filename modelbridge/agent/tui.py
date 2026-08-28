@@ -30,14 +30,33 @@ from queue import Queue
 from typing import Any, Callable, cast
 
 from .ui import SidePanel
+from .ui_prefs import UiPrefs
 
-#: Right rail width: generous — ~2/5 of the screen, clamped for tiny terms.
-_MIN_RAIL = 38
-_MAX_RAIL = 72
+#: Right rail width bounds when driven by :class:`UiPrefs` — module-level
+#: ``rail_width`` keeps the shipped defaults for back-compat/tests.
+_MIN_RAIL_PREFS = 24
+
+# ---------------------------------------------------------------------------
+# ANSI SGR snippets for the live stream region. The transcript stores raw
+# ANSI blocks and prompt_toolkit parses them back into styled fragments, so
+# the streaming area can be styled exactly like the classic AssistantStream
+# bubble (cyan model label / dim italic thinking / thin separator).
+# ---------------------------------------------------------------------------
+_A_RESET = "\x1b[0m"
+_A_DIM = "\x1b[90m"
+_A_MODEL = "\x1b[36m\x1b[1m"          # bold cyan — model label
+_A_THINK = "\x1b[2m\x1b[3m"           # dim italic — reasoning deltas
+_A_THINK_OFF = "\x1b[23m\x1b[22m"
 
 
-def rail_width(term_width: int) -> int:
-    return max(_MIN_RAIL, min(_MAX_RAIL, term_width * 2 // 5))
+def rail_width(
+    term_width: int,
+    *,
+    ratio: float = 0.4,
+    lo: int = 38,
+    hi: int = 72,
+) -> int:
+    return max(lo, min(hi, int(term_width * ratio)))
 
 
 # ---------------------------------------------------------------------------
@@ -68,10 +87,14 @@ class TranscriptBuffer:
     def append(self, ansi_block: str) -> None:
         if not ansi_block:
             return
+        # NOTE: deliberately does NOT reset scroll_up. While the user is
+        # scrolled up reading history (or mid-turn during a long stream),
+        # incoming blocks must not yank the view back to the bottom.
+        # Follow-mode resumes once scroll_up reaches 0 via PgDn/wheel-down/
+        # submitting input (`_submit` explicitly resets it).
         with self._lock:
             self._blocks.append(ansi_block)
             self._frag_cache.append(_ansi_to_fragments(ansi_block))
-            self.scroll_up = 0
             if len(self._blocks) > 4000:
                 drop = len(self._blocks) - 4000
                 self._blocks = self._blocks[drop:]
@@ -211,8 +234,11 @@ class TuiRepl:
         on_exit: Callable[[], None] | None = None,
         pt_input: Any = None,
         pt_output: Any = None,
+        prefs: UiPrefs | None = None,
     ) -> None:
         self.side_panel = side_panel
+        self.prefs = prefs or UiPrefs()
+        self.prefs.clamp()
         self.approval = ApprovalBroker()
         self._completer = completer
         self._history = history
@@ -225,6 +251,10 @@ class TuiRepl:
 
         self.transcript = TranscriptBuffer()
         self._lines: Queue[str] = Queue()
+        # Live-region style markers (reset by stream_reset).
+        self._stream_model_shown = False
+        self._stream_last_kind = ""
+        self._stream_reasoning_shown = False
         self._thread: threading.Thread | None = None
         self._app: Any = None
         self._dead = False
@@ -276,7 +306,7 @@ class TuiRepl:
             except Exception:
                 if self._thread is not None and not self._thread.is_alive():
                     self._dead = True
-                    raise EOFError
+                    raise EOFError from None  # 队列超时不是成因，切断异常链
                 continue
             if item == "\x00exit":
                 raise EOFError
@@ -300,11 +330,45 @@ class TuiRepl:
             pass
 
     def stream_reset(self) -> None:
+        self._stream_model_shown = False
+        self._stream_last_kind = ""
+        self._stream_reasoning_shown = False
         self.transcript.stream_reset()
         self.invalidate()
 
-    def stream_append(self, _kind: str, text: str) -> None:
-        self.transcript.stream_append(text)
+    def stream_append(self, kind: str, text: str) -> None:
+        """Live-region delta with per-kind styling (mirrors AssistantStream).
+
+        ``kind="reasoning"`` renders dim italic, ``kind="content"`` plain.
+        The region opens with a bold-cyan ``● <model>`` label and a thin dim
+        separator marks where thinking ended and the answer began — same
+        visual language as the classic bubble, so neither mode looks like a
+        raw dump. Deltas arrive as arbitrary chunks; per-delta SGR pairs keep
+        the styling correct without needing to track line state.
+        """
+        if not text:
+            return
+        pre: list[str] = []
+        if not self._stream_model_shown:
+            pre.append(f"{_A_MODEL}● {self.side_panel.model_name}{_A_RESET}\n")
+            self._stream_model_shown = True
+        if kind == "reasoning":
+            if self.prefs.stream_thinking:
+                styled = _A_THINK + text + _A_THINK_OFF
+                self._stream_reasoning_shown = True
+            else:
+                # /ui 关掉实时思考：delta 静默丢弃（最终 Markdown 里该有的
+                # 推理摘要不受影响），标签行保持。
+                styled = ""
+        else:
+            if self._stream_last_kind == "reasoning" and self._stream_reasoning_shown:
+                # First content delta after visible thinking — draw the
+                # separator (suppressed thinking never drew one).
+                pre.append(f"{_A_DIM}────{_A_RESET}\n")
+            styled = text
+        self._stream_last_kind = kind
+        if styled or pre:
+            self.transcript.stream_append("".join(pre) + styled)
         self.invalidate()
 
     def stream_commit(self, ansi_block: str) -> None:
@@ -324,9 +388,16 @@ class TuiRepl:
         console.file = _ConsoleProxy(self, console)
         self._sync_console_width(console)
 
+    def _rail_w(self) -> int:
+        """Rail width honoring UiPrefs (ratio + cap) with a small floor."""
+        return max(
+            _MIN_RAIL_PREFS,
+            min(self.prefs.rail_max, int(self._term_w * self.prefs.rail_ratio)),
+        )
+
     def _sync_console_width(self, console: Any) -> None:
         try:
-            console.width = max(40, self._term_w - rail_width(self._term_w) - 1)
+            console.width = max(40, self._term_w - self._rail_w() - 1)
         except Exception:
             pass
 
@@ -339,8 +410,11 @@ class TuiRepl:
         try:
             from prompt_toolkit.application import get_app
 
-            w, h = get_app().output.get_size()
-            self._term_w, self._term_h = int(w), int(h)
+            # Size is a NamedTuple: iterating it yields (rows, columns) —
+            # tuple-unpacking used to swap them, so the whole layout ran on
+            # "terminal height" as width. Read the named fields instead.
+            size = get_app().output.get_size()
+            self._term_w, self._term_h = int(size.columns), int(size.rows)
             if self._console is not None:
                 self._sync_console_width(self._console)
         except Exception:
@@ -373,14 +447,19 @@ class TuiRepl:
             buf = event.current_buffer
             text = buf.text
             buf.reset(append_to_history=True)
-            # 回显走经典对话语言：用户消息右对齐（绿色），AI 输出靠左。
+            # 回显走经典对话语言：右对齐 + 绿色 ▎ 色条（与 render_user_bubble
+            # 一致），正文保持默认前景色，不再整行染绿。
             if text:
-                left_w = max(20, self._term_w - rail_width(self._term_w) - 2)
-                pad = max(1, left_w - _cells(text) - 2)
+                shown = text.replace("\x1b", "?")
+                bar_cells = 2  # ▎ + space
+                left_w = max(20, self._term_w - self._rail_w() - 2)
+                if self.prefs.user_align == "right":
+                    pad = max(1, left_w - _cells(shown) - bar_cells - 2)
+                    line_prefix = " " * pad
+                else:
+                    line_prefix = ""
                 self.transcript.append("")
-                self.transcript.append(
-                    " " * pad + "\x1b[32m" + text.replace("\x1b", "?") + "\x1b[0m"
-                )
+                self.transcript.append(line_prefix + "\x1b[32m▎\x1b[0m " + shown)
             else:
                 self.transcript.append("\x1b[90m(回车 — 唤醒后台任务)\x1b[0m")
             self._lines.put(text)
@@ -427,6 +506,38 @@ class TuiRepl:
         def _scroll_down(event: Any) -> None:
             self.transcript.scroll_up = max(0, self.transcript.scroll_up - max(5, self._term_h // 2))
             self.invalidate(throttle=False)
+
+        # Mouse wheel — packets arrive as the Vt100MouseEvent key (with
+        # coordinates), NOT as Keys.ScrollUp: prompt_toolkit routes them to
+        # its default Vt100MouseEvent handler first, whose per-window lookup
+        # silently returns NotImplemented on our non-scrollable panes. A
+        # user-level binding for the same key wins (later entries have
+        # priority), so we parse the two common encodings ourselves and give
+        # other mouse events (clicks, moves) back via NotImplemented.
+        from prompt_toolkit.keys import Keys
+
+        @kb.add(Keys.Vt100MouseEvent)
+        def _wheel(event: Any) -> Any:
+            data = event.data or ""
+            try:
+                if data.startswith("\x1b[<"):
+                    # xterm SGR: ESC [ < button ; x ; y M/m
+                    btn = int(data[3:].split(";", 1)[0])
+                elif data.startswith("\x1b[M"):
+                    # X10 ("typical"): ESC [ M button+x+y as 3 raw bytes
+                    btn = ord(data[3]) - 32
+                else:
+                    return NotImplemented
+            except (IndexError, ValueError):
+                return NotImplemented
+            if btn == 64:      # wheel up — fine-grained, reading pace
+                self.transcript.scroll_up += 3
+            elif btn == 65:    # wheel down
+                self.transcript.scroll_up = max(0, self.transcript.scroll_up - 3)
+            else:
+                return NotImplemented  # clicks / motion: default dispatch
+            self.invalidate(throttle=False)
+            return None
 
         if self._user_bindings is not None:
             kb = self._merge_bindings(kb, self._user_bindings)
@@ -483,7 +594,7 @@ class TuiRepl:
             FormattedTextControl(
                 cast(Any, self._rail_control), show_cursor=False, focusable=False,
             ),
-            width=lambda: rail_width(self._term_w),
+            width=lambda: self._rail_w(),
             wrap_lines=True,
             style="class:rail",
         )
@@ -504,6 +615,14 @@ class TuiRepl:
             key_bindings=kb,
             full_screen=True,
             erase_when_done=False,
+            # 滚轮翻页依赖终端鼠标上报；pt 会在 enter/leave 时自动切换模式。
+            mouse_support=True,
+            # We own PgUp/PgDn for transcript paging. The built-in page
+            # navigation bindings would otherwise consume PageDown for
+            # scrollable-layout paging and outrank our binding on that key
+            # (PageUp survives because its built-in no-ops on this layout —
+            # an asymmetry that cost a debugging session to find).
+            enable_page_navigation_bindings=False,
             input=self._pt_input,
             output=self._pt_output,
         )
@@ -535,27 +654,42 @@ class TuiRepl:
 
     def _rail_control(self) -> list[tuple[str, str]]:
         self._sync_size()
+        # 热重载：浏览器侧栏 /ui 面板改了 ui.json → 终端右栏下一帧跟上。
+        try:
+            self.prefs.maybe_reload()
+        except Exception:
+            pass
         return self._rail_fragments()
 
     def _rail_fragments(self) -> list[tuple[str, str]]:
         """Right rail — plain text only, generous spacing, aligned labels.
 
-        Layout (label column aligned, blank line between sections)::
+        Layout (label column aligned, dim rule under each section title)::
 
             状态
+            ──────────────
             目录   D:\\modelbridge
-            模型   ds  4% 2.1k/1.0M
-            缓存   16% (768)  会话 16%
+            模型   deepseek-v4-pro
+            上下文 4% 2.1k/1.0M
+            缓存   16% (768)
+            会话   16%
 
             任务
+            ──────────────
             [x] 收购glm
             [ ] 打爆glm-5.3
+
+        Values truncate by *display cells* (CJK-aware), and long pairs that
+        used to be crammed onto one line (模型+ctx、缓存+会话) get their own
+        row instead of being ellipsized into uselessness.
         """
-        w = rail_width(self._term_w)
+        w = self._rail_w()
+        p = self.prefs
         out: list[tuple[str, str]] = []
         sp = self.side_panel
         pad = "  "
         label_w = 6  # 2 CJK chars + 2 spaces, then value column
+        room = w - 4 - label_w  # usable width for kv values (pad + right margin)
 
         def line(frags: list[tuple[str, str]]) -> None:
             out.extend(frags)
@@ -563,57 +697,98 @@ class TuiRepl:
 
         def header(title: str) -> None:
             out.append(("", "\n"))
-            out.append(("#58a6ff bold", pad + title))
+            out.append((f"{p.color_accent} bold", pad + title))
+            out.append(("", "\n"))
+            # 细分隔线：给每组一个明确的视觉边界，标题不再和内容粘在一起。
+            out.append(("#30363d", pad + "─" * min(14, max(8, w // 3))))
             out.append(("", "\n"))
 
         def wrap(text: str, style: str = "") -> None:
-            if len(text) > w - 5:
-                text = text[: w - 6] + "…"
+            if _cells(text) > w - 4:
+                text = _truncate(text, w - 6) + "…"
             line([(style, pad + text)])
 
         def kv(label: str, value: str, value_style: str = "") -> None:
             # CJK label occupies 2 cells/char; pad label column to label_w.
             fill = " " * max(1, label_w - len(label) * 2)
-            room = w - 4 - label_w
-            if len(value) > room:
-                value = value[: max(1, room - 1)] + "…"
-            line([("#8a8f98", pad + label + fill), (value_style, value)])
+            if _cells(value) > room:
+                value = _truncate(value, room - 1) + "…"
+            line([(p.color_dim, pad + label + fill), (value_style, value)])
 
         # ── 状态 ────────────────────────────────────────────────────
-        header("状态")
-        kv("目录", sp.cwd)
-        if sp.model_name:
-            value = f"{sp.model_name}  {sp.ctx_line}".strip()
-            kv("模型", value)
-        if sp.cache_last:
-            sess = f"  会话 {sp.cache_session}" if sp.cache_session else ""
-            kv("缓存", f"{sp.cache_last}{sess}")
+        if p.show_status:
+            header("状态")
+            kv("目录", sp.cwd)
+            if sp.model_name:
+                kv("模型", sp.model_name, f"{p.color_accent} bold")
+                if sp.ctx_line:
+                    try:
+                        pct_val = float(sp.ctx_line.split("%", 1)[0])
+                    except ValueError:
+                        pct_val = 0.0
+                    ctx_color = (
+                        p.color_good
+                        if pct_val < 60
+                        else (p.color_warn if pct_val < 85 else p.color_bad)
+                    )
+                    kv("上下文", sp.ctx_line, ctx_color)
+            if sp.cache_last:
+                cache_color = (
+                    p.color_warn
+                    if sp.cache_last.startswith(("0%", "1", "2", "3"))
+                    else p.color_good
+                )
+                kv("缓存", sp.cache_last, cache_color)
+                if sp.cache_session:
+                    kv("会话", sp.cache_session)
 
         # ── 任务 ────────────────────────────────────────────────────
         todos = sp._todos()
-        if todos:
+        if todos and p.show_tasks:
             header("任务")
             for mark, content, style in todos[:14]:
-                color = {"green": "#3fb950", "cyan": "#58a6ff", "dim": "#8a8f98"}.get(style, "#8a8f98")
+                color = {
+                    "green": p.color_good,
+                    "cyan": p.color_accent,
+                    "dim": p.color_dim,
+                }.get(style, p.color_dim)
                 wrap(f"[{mark}] {content}", color)
             if len(todos) > 14:
                 wrap(f"… 还有 {len(todos) - 14} 项")
 
         # ── 后台 ────────────────────────────────────────────────────
         bgs = sp._bg_tasks()
-        if bgs:
+        if bgs and p.show_bg:
             header("后台")
             for mark, txt, style in bgs[:10]:
-                color = {"green": "#3fb950", "red": "#f85149", "cyan": "#58a6ff"}.get(style, "#8a8f98")
+                color = {
+                    "green": p.color_good,
+                    "red": p.color_bad,
+                    "cyan": p.color_accent,
+                }.get(style, p.color_dim)
                 wrap(f"{mark} {txt}", color)
 
         # ── 本轮 ────────────────────────────────────────────────────
-        if sp.tools:
+        if sp.tools and p.show_tools:
             header("本轮")
             for name, preview, is_error in sp.tools[-12:]:
                 mark = "!" if is_error else "+"
-                color = "#f85149" if is_error else "#3fb950"
-                wrap(f"{mark} {name} {preview}".strip(), color)
+                mark_color = p.color_bad if is_error else p.color_good
+                prefix_cells = len(pad) + 2  # pad + "X "
+                avail = w - prefix_cells - _cells(name) - 1
+                prev_disp = ""
+                if preview:
+                    if avail > 3 and _cells(preview) > avail:
+                        prev_disp = " " + _truncate(preview, avail - 1) + "…"
+                    elif avail > 0:
+                        prev_disp = " " + preview
+                line(
+                    [
+                        (mark_color, pad + mark + " "),
+                        (f"{p.color_tool} bold", name),
+                        (p.color_dim, prev_disp),
+                    ]
+                )
             if len(sp.tools) > 12:
                 wrap(f"… 共 {len(sp.tools)} 次")
 
@@ -621,14 +796,15 @@ class TuiRepl:
         pend = self.approval.pending
         if pend is not None:
             header("需要确认")
-            wrap(f"{pend.tool}: {pend.summary}", "#f85149")
+            wrap(f"{pend.tool}: {pend.summary}", f"{p.color_bad} bold")
             if pend.reason:
-                wrap(f"意图: {pend.reason}", "#8a8f98")
-            wrap("y 同意 · n 拒绝 · a 总是", "#d29922")
-            wrap("o auto (AI 判定)", "#d29922")
+                wrap(f"意图: {pend.reason}", p.color_dim)
+            wrap("y 同意 · n 拒绝 · a 总是", p.color_warn)
+            wrap("o auto (AI 判定)", p.color_warn)
 
-        out.append(("", "\n"))
-        out.append(("#8a8f98", pad + "PgUp/PgDn 滚动 · Ctrl-C 中断"))
+        if p.footer_hint:
+            out.append(("", "\n"))
+            out.append((p.color_dim, pad + "滚轮逐行 · PgUp/PgDn 翻页 · Ctrl-C 中断"))
         return out
 
 
@@ -637,8 +813,8 @@ def _term_size(app: Any) -> tuple[int, int]:
 
     try:
         out = app.output
-        w, h = out.get_size()
-        return w, h
+        size = out.get_size()
+        return int(size.columns), int(size.rows)
     except Exception:
         size = shutil.get_terminal_size(fallback=(100, 30))
         return size.columns, size.lines
@@ -647,13 +823,26 @@ def _term_size(app: Any) -> tuple[int, int]:
 _ANSI_STRIP_RE = __import__("re").compile(r"\x1b\[[0-9;]*m")
 
 
+def _cell_w(ch: str) -> int:
+    """Terminal cell width of one char (CJK ≈ 2 cells)."""
+    return 2 if "\u2e80" <= ch <= "\ufe4f" or "\uff00" <= ch <= "\uffef" else 1
+
+
 def _cells(text: str) -> int:
     """Terminal cell width of ANSI-free text (CJK ≈ 2 cells)."""
     plain = _ANSI_STRIP_RE.sub("", text)
+    return sum(_cell_w(ch) for ch in plain)
+
+
+def _truncate(text: str, max_cells: int) -> str:
+    """Hard-truncate ``text`` to fit ``max_cells`` display cells."""
     w = 0
-    for ch in plain:
-        w += 2 if "\u2e80" <= ch <= "\ufe4f" or "\uff00" <= ch <= "\uffef" else 1
-    return w
+    for i, ch in enumerate(text):
+        cw = _cell_w(ch)
+        if w + cw > max_cells:
+            return text[:i]
+        w += cw
+    return text
 
 
 class _ConsoleProxy:

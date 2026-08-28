@@ -28,8 +28,15 @@ class UseSkillTool(Tool):
         "name 取自系统提示里的「可用 Skills」索引。"
     )
 
-    def __init__(self, project_path: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        project_path: Path | str | None = None,
+        disabled: "set[str] | frozenset[str] | None" = None,
+    ) -> None:
         self._project_path = project_path
+        # Skills disabled via ~/.modelbridge/skills.json — invoking them is a
+        # clean error instead of silently loading the instructions.
+        self._disabled = frozenset(disabled or ())
 
     def json_schema(self) -> dict[str, Any]:
         return {
@@ -50,6 +57,12 @@ class UseSkillTool(Tool):
             return self.err("缺少必填参数 name")
 
         skill_name = skill_name.strip()
+
+        if skill_name in self._disabled:
+            return self.err(
+                f"skill 已被禁用: {skill_name}",
+                hint="用户通过 /skill off 禁用了它；如需恢复请运行 /skill on。",
+            )
 
         skill = find_skill(skill_name, project_path=self._project_path)
         if skill is None:

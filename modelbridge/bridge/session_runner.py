@@ -103,12 +103,22 @@ class SessionRunner:
 
     def _send_state(self, turn_id: str = "") -> None:
         s_total = self._cache_hits + self._cache_misses
+        # 桥接会话默认没有 shell 后台（侧栏不注册 shell 工具），但 wire 上
+        # 预留 bgs 字段：未来接入任务型后台时面板无需再改协议。
+        bgs: list[dict[str, Any]] = []
+        mgr = getattr(self, "_bg_manager", None)
+        if mgr is not None:
+            try:
+                bgs = mgr.snapshot_for_panel()
+            except Exception:
+                bgs = []
         self._send(P.state(
             id=turn_id,
             cwd=str(Path.cwd()),
             cache_last=self._fmt_cache(self._last_hit, self._last_hit + self._last_miss),
             cache_session=self._fmt_cache(self._cache_hits, s_total),
             todos=self._todos.to_list(),
+            bgs=bgs,
         ))
 
     _last_hit: int = 0

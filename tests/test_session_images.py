@@ -48,7 +48,7 @@ def test_run_interactive_consumes_pending_images(monkeypatch):
         try:
             return next(inputs)
         except StopIteration:
-            raise EOFError
+            raise EOFError from None
 
     session = Session(model_name="f")
     ctx = AgentContext(policy=PathPolicy([], []), cwd=Path.cwd(), approve=auto_yes)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "modelbridge"
-version = "1.2.7"
+version = "1.2.8"
 description = "ModelBridge: a China-first AI Coding Agent compatibility gateway / Agent Proxy / CLI."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,7 +26,7 @@ keywords = [
     "lmstudio",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -81,14 +81,17 @@ line-length = 110
 target-version = "py310"
 
 [tool.ruff.lint]
-# Keep the lint gate narrow and stable: only pycodestyle errors (E) and
-# pyflakes (F). The project intentionally uses broad ``except Exception``
-# patterns to keep the REPL alive, which would trip ruff's extended rule
-# families (BLE001, S110, …) added in newer ruff versions. E501 is disabled
+# Gate policy (2026-08): pycodestyle errors (E) + pyflakes (F) + bugbear (B).
+# The project intentionally uses broad ``except Exception`` patterns to keep
+# the REPL alive, so BLE001/S110 stay out — B904 (raise-from) covers the
+# useful half of that family. B008 is off because Typer/FastAPI default-arg
+# injection (`= Option(...)`) is the house style, not a bug. E501 is disabled
 # because ruff miscounts CJK / wide-char line widths on Windows; the
-# line-length cap above still guides formatting.
-select = ["E", "F"]
-ignore = ["E501"]
+# line-length cap above still guides formatting. Adding a new rule family is
+# a deliberate act: measure the finding count first, fix or whitelist with
+# reasons in the same PR.
+select = ["E", "F", "B"]
+ignore = ["E501", "B008"]
 
 [tool.ruff.lint.per-file-ignores]
 # Re-export hubs deliberately import names they don't reference locally.
@@ -106,14 +109,9 @@ warn_return_any = false
 # CI runs this job with continue-on-error until the codebase is annotated.
 check_untyped_defs = false
 
-# In-progress feature modules that haven't been fully annotated yet. mypy
-# still checks the rest of the codebase; these are silenced until their
-# typing catches up. Remove each entry as its module is annotated.
-[[tool.mypy.overrides]]
-module = [
-    "modelbridge.agent.tools.todo_tool",
-    "modelbridge.web.routers.doctor",
-    "modelbridge.web.schemas",
-    "modelbridge.skills.discovery",
-]
-ignore_errors = true
+# Policy (2026-08): CI lint + typecheck are hard gates (ci.yml), and per-module
+# mypy `ignore_errors` overrides are DEBT — every new module must type-check
+# clean from day one, and overrides may only be added with a removal plan in
+# the same PR. The previous four entries (todo_tool / web.routers.doctor /
+# web.schemas / skills.discovery) were un-ignored after fixing real findings;
+# keep the list at zero.

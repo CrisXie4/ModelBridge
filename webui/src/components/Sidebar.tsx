@@ -12,6 +12,9 @@ import {
   Sparkle,
   ShieldCheck,
   Coins,
+  Palette,
+  ChatCircleDots,
+  PuzzlePiece,
 } from "@phosphor-icons/react";
 
 const NAV_GROUPS: {
@@ -22,6 +25,7 @@ const NAV_GROUPS: {
     label: "监控",
     items: [
       { href: "/", label: "概览", Icon: Gauge },
+      { href: "/chat", label: "AI 对话", Icon: ChatCircleDots },
       { href: "/activity", label: "Agent 活动", Icon: Pulse },
     ],
   },
@@ -32,6 +36,8 @@ const NAV_GROUPS: {
       { href: "/routing", label: "路由配置", Icon: Path },
       { href: "/prompts", label: "提示词", Icon: NotePencil },
       { href: "/skills", label: "Skills", Icon: Sparkle },
+      { href: "/mcp", label: "MCP", Icon: PuzzlePiece },
+      { href: "/settings", label: "界面样式", Icon: Palette },
     ],
   },
   {

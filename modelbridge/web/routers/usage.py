@@ -86,7 +86,7 @@ def cache_stats() -> dict:
         }
         for name, m in stats.per_model.items()
     }
-    for name, m in per_model.items():
+    for _name, m in per_model.items():
         total = m["hits"] + m["misses"]
         m["hit_rate"] = (m["hits"] / total) if total else 0.0
     return {

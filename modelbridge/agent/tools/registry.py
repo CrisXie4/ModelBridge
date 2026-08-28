@@ -62,11 +62,18 @@ class ToolRegistry:
             )
 
 
-def build_default_registry(*, include_bash: bool = False) -> ToolRegistry:
+def build_default_registry(*, include_bash: bool = False, minimal: bool = False) -> ToolRegistry:
     """Default toolset: read/list always on; write/edit always on; bash opt-in.
 
-    ``include_bash=False`` *also* removes the tool from the schema list sent
-    to the model — keeping the model from even attempting it when disabled.
+    ``minimal=True`` strips the toolset to the 极简模式 allowlist —
+    read_file / write_file (+ run_bash when enabled). No grep/list_dir
+    indexing helpers, no str_replace edit flow; the companion terse system
+    prompt (``_minimal_system_prompt``) is written against exactly this
+    surface.
+
+    ``include_bash=False`` *also* removes the bash tool from the schema list
+    sent to the model, keeping the model from even attempting it when
+    disabled.
 
     Image reading is handled by ``read_file`` itself (it returns an image
     block when the file is an image and the model is vision-capable), so there
@@ -77,10 +84,12 @@ def build_default_registry(*, include_bash: bool = False) -> ToolRegistry:
     """
     reg = ToolRegistry()
     reg.register(ReadFileTool())
-    reg.register(ListDirTool())
-    reg.register(GrepTool())
+    if not minimal:
+        reg.register(ListDirTool())
+        reg.register(GrepTool())
     reg.register(WriteFileTool())
-    reg.register(StrReplaceTool())
+    if not minimal:
+        reg.register(StrReplaceTool())
     if include_bash:
         reg.register(RunBashTool())
     return reg

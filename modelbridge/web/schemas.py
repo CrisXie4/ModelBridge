@@ -100,6 +100,8 @@ class SkillOut(BaseModel):
     scope: str
     path: str
     body: str = ""
+    # skills.json 启停状态；None = 旧数据源未提供。
+    enabled: bool | None = None
 
 
 class Message(BaseModel):

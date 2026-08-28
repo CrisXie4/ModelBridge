@@ -316,7 +316,15 @@ CURRENT_SCHEMA_VERSION = 1
 
 
 class AppConfig(BaseModel):
-    """Schema for ``~/.modelbridge/config.yaml``."""
+    """Schema for ``~/.modelbridge/config.yaml``.
+
+    ``extra="allow"`` is load-bearing: unknown-but-valid sections in the
+    YAML (notably the ``mcp:`` block owned by :mod:`modelbridge.mcp.config`)
+    round-trip through ``save_app_config`` instead of being silently dropped
+    on the next profile/config save from the CLI or the webui.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     schema_version: int = CURRENT_SCHEMA_VERSION
     default_model: str | None = None
