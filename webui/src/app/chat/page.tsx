@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { ChatCircleDots, PaperPlaneRight, Play, Trash } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 
@@ -74,6 +74,67 @@ function mdToHtml(md: string): string {
   return out.join("");
 }
 
+/* ---------------------------------------------------------------------------
+   流式 Markdown 渲染（opencode session-ui 的尾块投影，简化版）
+
+   长回复逐字追加时，整段重渲染既浪费也闪烁。做法：
+
+   * healFences — 流式中途围栏未闭合时补一个闭合符（remend 思路），代码块
+     从第一个 ` 出现起就按代码渲染，而不是先闪一段纯文本。
+   * splitBlocks — 围栏感知的段落切块；围栏内部不再切分。
+   * memo 化的 MdBlock — 已完成的块内容不变，memo 直接跳过重渲染；只有
+     尾块随每个增量批次更新。整段回复的实际渲染成本从 O(全文 × 更新次数)
+     降到 O(尾块 × 更新次数)。
+   --------------------------------------------------------------------------- */
+
+function healFences(md: string): string {
+  let open = 0;
+  for (const line of md.split("\n")) {
+    if (line.trimStart().startsWith("```")) open++;
+  }
+  return open % 2 === 1 ? `${md}\n\`\`\`` : md;
+}
+
+function splitBlocks(md: string): string[] {
+  const blocks: string[] = [];
+  let cur: string[] = [];
+  let inFence = false;
+  for (const line of md.split("\n")) {
+    if (line.trimStart().startsWith("```")) {
+      inFence = !inFence;
+      cur.push(line);
+      if (!inFence) {
+        blocks.push(cur.join("\n"));
+        cur = [];
+      }
+      continue;
+    }
+    if (!inFence && line.trim() === "" && cur.length) {
+      blocks.push(cur.join("\n"));
+      cur = [];
+      continue;
+    }
+    cur.push(line);
+  }
+  if (cur.length) blocks.push(cur.join("\n"));
+  return blocks;
+}
+
+const MdBlock = memo(function MdBlock({ md }: { md: string }) {
+  return <div dangerouslySetInnerHTML={{ __html: mdToHtml(md) }} />;
+});
+
+function StreamingMarkdown({ text }: { text: string }) {
+  const blocks = splitBlocks(healFences(text));
+  return (
+    <>
+      {blocks.map((b, i) => (
+        <MdBlock key={i} md={b} />
+      ))}
+    </>
+  );
+}
+
 export default function ChatPage() {
   const [chats, setChats] = useState<ChatMeta[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -84,6 +145,7 @@ export default function ChatPage() {
   });
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<{ id: string; tool: string; summary: string } | null>(null);
+  const [rejectNote, setRejectNote] = useState("");
   const [input, setInput] = useState("");
   const [models, setModels] = useState<ModelOut[]>([]);
   const [model, setModel] = useState<string>("");
@@ -108,7 +170,9 @@ export default function ChatPage() {
       .catch(() => undefined);
   }, [refreshChats]);
 
-  // 事件轮询：活跃会话每 400ms 拉增量。
+  // 事件轮询：活跃会话每 400ms 拉增量。同一批拉到的 delta 先在本地累积，
+  // 每次轮询只做一次 liveTail 合并（delta 合并），非 delta 事件前先落地
+  // 已累积的文本，保证「流式尾巴」与「已定稿事件」的顺序不乱。
   useEffect(() => {
     if (!activeId) return;
     let stop = false;
@@ -126,22 +190,29 @@ export default function ChatPage() {
         if (stop) return;
         setBusy(snap.busy);
         setPending(snap.pending);
-        if (snap.events.length) {
-          for (const ev of snap.events) {
-            seenSeq.current = Math.max(seenSeq.current, ev.seq);
-            if (ev.type === "delta") {
-              setLiveTail((t) =>
-                ev.kind === "reasoning"
-                  ? { ...t, reasoning: t.reasoning + String(ev.text ?? "") }
-                  : { ...t, content: t.content + String(ev.text ?? "") }
-              );
-              continue;
-            }
-            setLiveTail((t) => (t.content || t.reasoning ? { reasoning: "", content: "" } : t));
-            setEvents((prev) => [...prev, ev]);
-            void refreshChats();
+        const acc = { reasoning: "", content: "" };
+        const flushDelta = () => {
+          if (!acc.reasoning && !acc.content) return;
+          setLiveTail((t) => ({
+            reasoning: t.reasoning + acc.reasoning,
+            content: t.content + acc.content,
+          }));
+          acc.reasoning = "";
+          acc.content = "";
+        };
+        for (const ev of snap.events) {
+          seenSeq.current = Math.max(seenSeq.current, ev.seq);
+          if (ev.type === "delta") {
+            if (ev.kind === "reasoning") acc.reasoning += String(ev.text ?? "");
+            else acc.content += String(ev.text ?? "");
+            continue;
           }
+          flushDelta();
+          setLiveTail((t) => (t.content || t.reasoning ? { reasoning: "", content: "" } : t));
+          setEvents((prev) => [...prev, ev]);
+          void refreshChats();
         }
+        flushDelta();
       } catch {
         /* 会话被删除等——静默 */
       }
@@ -190,8 +261,9 @@ export default function ChatPage() {
     if (!pending) return;
     await api(`/chats/approvals/${pending.id}`, {
       method: "POST",
-      body: JSON.stringify({ decision }),
+      body: JSON.stringify({ decision, feedback: decision === "n" ? rejectNote : "" }),
     }).catch(() => undefined);
+    setRejectNote("");
   };
 
   const renderEvent = (ev: Ev) => {
@@ -205,7 +277,9 @@ export default function ChatPage() {
       case "assistant":
         return (
           <div className="chat-row chat-ai">
-            <div className="bubble-ai md" dangerouslySetInnerHTML={{ __html: mdToHtml(String(ev.content || "")) }} />
+            <div className="bubble-ai md">
+              <StreamingMarkdown text={String(ev.content || "")} />
+            </div>
           </div>
         );
       case "tool":
@@ -294,7 +368,9 @@ export default function ChatPage() {
               <>
                 {liveTail.reasoning ? <div className="chat-row chat-reason">{liveTail.reasoning}</div> : null}
                 <div className="chat-row chat-ai">
-                  <div className="bubble-ai md">{liveTail.content}</div>
+                  <div className="bubble-ai md">
+                    <StreamingMarkdown text={liveTail.content} />
+                  </div>
                 </div>
               </>
             ) : null}
@@ -306,6 +382,18 @@ export default function ChatPage() {
             <div className="chat-approve">
               <div className="chat-approve-title">需要确认 · {pending.tool}</div>
               <div className="chat-approve-body">{pending.summary}</div>
+              <input
+                className="chat-approve-note"
+                placeholder="拒绝理由（可选，AI 会看到并据此调整方案）"
+                value={rejectNote}
+                onChange={(e) => setRejectNote(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void answer("n");
+                  }
+                }}
+              />
               <div className="rail-actions">
                 <button className="btn" onClick={() => void answer("y")}>
                   同意

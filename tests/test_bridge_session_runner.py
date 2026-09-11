@@ -91,7 +91,13 @@ def test_session_persists_across_turns(monkeypatch, patched):
     runner.run({"type": "chat", "id": "t1", "text": "first"})
     runner.run({"type": "chat", "id": "t2", "text": "second"})
 
-    roles = [m.role for m in runner.session.messages]
+    # Ignore injected <system-update> context messages (date/branch facts)
+    # — the runner's own message sequence is what this test pins.
+    roles = [
+        m.role for m in runner.session.messages
+        if not (m.role == "user" and isinstance(m.content, str)
+                and m.content.startswith("<system-update>"))
+    ]
     # system, user(first), assistant, user(second), assistant
     assert roles == ["system", "user", "assistant", "user", "assistant"]
 

@@ -379,6 +379,7 @@ def compact_session(
     model_name: str,
     summarize_fn: SummarizerFn | None = None,
     prune_chars: int = 0,
+    on_started: Callable[[], None] | None = None,
 ) -> CompactResult:
     """Condense older history in place.
 
@@ -387,6 +388,16 @@ def compact_session(
     ``prune_chars > 0`` first rewrites oversized historical tool results
     (model-free) — that pass is part of the same atomic operation and rolls
     back with everything else.
+
+    Two-phase protocol (opencode's started/ended shape, right-sized for an
+    in-memory session): ``on_started`` fires right before the first
+    summarizer call — the slow, fallible part — while the visible session
+    only ever changes at the single atomic commit at the end. A crash or
+    error before that commit is equivalent to "compaction never started":
+    the previous history boundary stays intact. After a successful commit
+    the system-context snapshot is invalidated (``session.metadata``), so
+    the next turn re-baselines environment facts the checkpoint may have
+    summarized away — see :mod:`modelbridge.context.system_context`.
     """
     msgs = session.messages
     if len(msgs) < 2:
@@ -425,6 +436,14 @@ def compact_session(
     original = list(msgs)  # snapshot for rollback (includes pre-prune state)
     big_starts = {s: (s, e) for (s, e) in big_runs}
     system_messages = msgs[:prefix_end]
+
+    # Phase marker: the summarizer calls below are the slow, fallible part.
+    # Nothing becomes model-visible until the single atomic commit below.
+    if on_started is not None:
+        try:
+            on_started()
+        except Exception:
+            pass
 
     removed_count = 0
     removed_tokens = 0
@@ -476,6 +495,10 @@ def compact_session(
         return CompactResult(skipped=True, reason="摘要未变小，未改动")
 
     msgs[prefix_end:tail_start] = new_middle
+    # Invalidate the system-context snapshot: the checkpoint may have
+    # summarized away environment facts (date, git branch). Clearing it
+    # makes the next turn re-emit a fresh <system-update> baseline.
+    session.metadata.pop("system_context_snapshot", None)
     return CompactResult(
         ok=True,
         removed_count=removed_count,
@@ -564,6 +587,11 @@ def maybe_auto_compact(
             keep_turns=cfg.auto_compact_keep_turns,
             model_name=model_name,
             prune_chars=cfg.auto_compact_prune_chars,
+            on_started=(
+                (lambda: on_system("[自动压缩：正在生成检查点，历史暂时只读…]"))
+                if on_system is not None
+                else None
+            ),
         )
         if on_system is not None and not result.skipped:
             on_system(format_notice(result, auto=True))

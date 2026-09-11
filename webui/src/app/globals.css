@@ -2170,6 +2170,25 @@ tbody tr:hover .row-actions {
   margin-bottom: 10px;
   word-break: break-all;
 }
+.chat-approve-note {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 10px;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--mb-text);
+  background: var(--mb-panel);
+  border: 1px solid var(--mb-border);
+  border-radius: 10px;
+  outline: none;
+}
+.chat-approve-note:focus {
+  border-color: var(--mb-border-strong);
+}
+.chat-approve-note::placeholder {
+  color: var(--mb-muted);
+}
 
 .chat-composer {
   display: flex;

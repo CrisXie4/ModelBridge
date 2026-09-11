@@ -39,6 +39,9 @@ class _PendingApproval:
     summary: str = ""
     done: threading.Event = field(default_factory=threading.Event)
     decision: str = "n"
+    # Free text the user typed when rejecting — rides back to the model in
+    # the tool's error message (see AgentContext.last_feedback).
+    feedback: str = ""
 
 
 class ChatConversation:
@@ -129,11 +132,13 @@ class ChatService:
 
     # -- approvals -----------------------------------------------------------
 
-    def resolve_approval(self, approval_id: str, decision: str) -> bool:
+    def resolve_approval(self, approval_id: str, decision: str,
+                         feedback: str = "") -> bool:
         pend = self.pending_map.pop(approval_id, None)
         if pend is None:
             return False
         pend.decision = decision
+        pend.feedback = (feedback or "").strip()
         pend.done.set()
         chat = self.chats.get(pend.chat_id)
         if chat is not None:
@@ -235,7 +240,14 @@ class ChatService:
             pend.done.wait()
             chat.pending = None
             chat.emit("decision", approval_id=aid, decision=pend.decision)
-            return ApprovalDecision.YES if pend.decision == "y" else ApprovalDecision.NO
+            if pend.decision != "y":
+                # Rejection carries optional user feedback as a (decision,
+                # feedback) tuple — AgentContext.confirm stores it and
+                # run_bash embeds it in the model-facing error.
+                if pend.feedback:
+                    return (ApprovalDecision.NO, pend.feedback)
+                return ApprovalDecision.NO
+            return ApprovalDecision.YES
 
         # 与 REPL 相同的路径策略：mbridge web 的 cwd 即聊天的工作目录。
         try:
@@ -254,6 +266,9 @@ class ChatService:
                     cwd=self.cwd,
                     approve=approve,
                     allow_bash=True,
+                    # No subagent tool in the web chat registry → truncation
+                    # hints stay with read_file, no delegate suggestion.
+                    delegable=False,
                 ),
                 registry=registry,
                 model_name=model_name,

@@ -35,9 +35,14 @@ class ApprovalFn(Protocol):
         reason: str = "",
         save_pattern: str | None = None,
         auto: bool = False,
-    ) -> ApprovalDecision: ...
+    ) -> "ApprovalDecision | tuple[ApprovalDecision, str]": ...
     """``reason`` is the LLM's justification for the action (shown to the user).
-    ``save_pattern`` persists an "always" decision. ``auto`` enables LLM safety judgement."""
+    ``save_pattern`` persists an "always" decision. ``auto`` enables LLM safety judgement.
+
+    May return a ``(decision, feedback)`` tuple: feedback is free text the user
+    typed when rejecting ("别动这个文件，改用 X 方案") — :meth:`AgentContext.confirm`
+    stores it on ``last_feedback`` so the tool can hand it back to the model as
+    part of the rejection error (a steering signal, not a dead end)."""
 
 
 class BrowserBridge(Protocol):
@@ -81,9 +86,25 @@ class AgentContext:
     # Mutated by ApprovalDecision.ALWAYS so subsequent calls to the same
     # tool skip the prompt. Keyed by tool name.
     _auto_approved: set[str] = field(default_factory=set)
+    # run_bash "always" approvals, pattern-scoped (opencode-style): each
+    # entry is a command prefix pattern like "git push *" recorded by
+    # command_patterns.command_patterns(). A future command auto-approves
+    # only when every one of its pipeline segments matches a pattern —
+    # approving "git push" never widens to "git config". See
+    # ``bash_allowed`` / ``approve_bash``.
+    _bash_patterns: list[str] = field(default_factory=list)
     # When True, every tool confirmation runs LLM auto-judge first (safe → auto-yes,
     # unsafe → fall through to human prompt). Set via /auto slash command.
     _auto_mode: bool = False
+    # Outcome of the most recent confirm() call: the raw decision (useful to
+    # distinguish YES from ALWAYS when callers handle the widening themselves,
+    # as run_bash does for pattern recording) and optional user feedback text
+    # from a rejection. Both reset at the start of every confirm().
+    last_decision: ApprovalDecision | None = None
+    last_feedback: str | None = None
+    # True when a subagent tool is registered for this session — lets tools
+    # tailor truncation hints ("delegate to a subagent") to what's available.
+    delegable: bool = False
 
     def confirm(
         self,
@@ -121,6 +142,8 @@ class AgentContext:
         interrupting the user.
         """
         key = group or tool
+        self.last_decision = None
+        self.last_feedback = None
         if key in self._auto_approved:
             return True
         # /auto mode forces auto-judge on for every confirmation
@@ -129,11 +152,43 @@ class AgentContext:
             tool=tool, summary=summary, detail=detail, reason=reason,
             save_pattern=pattern_key, auto=effective_auto,
         )
+        # A callback may return (decision, feedback) — feedback is free text
+        # the user typed while rejecting; tools surface it to the model so a
+        # rejection can steer the next attempt instead of dead-ending it.
+        feedback = ""
+        if isinstance(decision, tuple):
+            decision, feedback = decision
+        self.last_decision = decision
+        self.last_feedback = (feedback or "").strip() or None
         if decision == ApprovalDecision.ALWAYS:
             if allow_always:
                 self._auto_approved.add(key)
             return True
         return decision == ApprovalDecision.YES
+
+    # ------------------------------------------------------------------
+    # run_bash pattern-scoped "always" (command_patterns.py)
+    # ------------------------------------------------------------------
+
+    def bash_allowed(self, command: str) -> bool:
+        """True when every pipeline segment of ``command`` matches a recorded
+        bash "always" pattern."""
+        from .command_patterns import command_matches
+
+        return command_matches(command, self._bash_patterns)
+
+    def approve_bash(self, command: str) -> list[str]:
+        """Record prefix patterns for ``command`` after an ALWAYS decision.
+
+        Returns the patterns added (also appended to ``_bash_patterns``).
+        """
+        from .command_patterns import command_patterns
+
+        added = command_patterns(command)
+        for pattern in added:
+            if pattern not in self._bash_patterns:
+                self._bash_patterns.append(pattern)
+        return added
 
     def resolve(self, path: str) -> Path:
         return self.policy.resolve(path, base=self.cwd)

@@ -231,9 +231,11 @@ def test_run_bash_disabled_without_allow_bash(tmp_path):
     assert result.is_error and "allow-bash" in result.content
 
 
-def test_run_bash_always_is_remembered_for_session(tmp_path, monkeypatch):
-    """One ALWAYS decision covers the rest of the session (allow_always=True).
-    The old re-prompt-every-call behaviour made 'always' a lie for run_bash."""
+def test_run_bash_always_is_pattern_scoped(tmp_path, monkeypatch):
+    """ALWAYS records a command prefix pattern (opencode-style), not a
+    whole-tool pass: a same-prefix command auto-approves, a different
+    command shape re-asks. Approving ``python -c`` never widens to every
+    python invocation."""
     monkeypatch.setenv("MBRIDGE_HOME", str(tmp_path))
     calls = {"n": 0}
 
@@ -245,10 +247,33 @@ def test_run_bash_always_is_remembered_for_session(tmp_path, monkeypatch):
     prog = Path(sys.executable).stem
     tool = RunBashTool()
     ctx = _ctx(tmp_path, approve=approve_always)
-    tool.execute({"command": f"{prog} -c \"print(1)\""}, ctx)
-    tool.execute({"command": f"{prog} -c \"print(2)\""}, ctx)
-    assert calls["n"] == 1  # second call was auto-approved
-    assert "run_bash" in ctx._auto_approved
+    tool.execute({"command": f'{prog} -c "print(1)"'}, ctx)
+    tool.execute({"command": f'{prog} -c "print(2)"'}, ctx)
+    assert calls["n"] == 1  # same prefix was auto-approved
+    assert ctx._bash_patterns == [f"{prog} -c *"]
+    assert "run_bash" not in ctx._auto_approved  # whole-tool arming is gone
+
+    # A different command shape (same binary, different prefix) re-asks.
+    tool.execute({"command": f"{prog} -V"}, ctx)
+    assert calls["n"] == 2
+
+
+def test_run_bash_rejection_carries_user_feedback(tmp_path, monkeypatch):
+    """A NO with feedback text rides back in the tool error so the model can
+    adjust instead of blind-retrying (opencode's CorrectedError)."""
+    monkeypatch.setenv("MBRIDGE_HOME", str(tmp_path))
+
+    def approve_reject(*, tool, summary, detail="", reason="",  # noqa: ARG001
+                       save_pattern=None, auto=False):  # noqa: ARG001
+        return (ApprovalDecision.NO, "不要用 python 直接跑，改成写文件")
+
+    prog = Path(sys.executable).stem
+    tool = RunBashTool()
+    ctx = _ctx(tmp_path, approve=approve_reject)
+    result = tool.execute({"command": f'{prog} -c "print(1)"'}, ctx)
+    assert result.is_error
+    assert "拒绝" in result.content
+    assert "不要用 python 直接跑" in result.content
 
 
 def test_run_bash_user_can_still_decline(tmp_path, monkeypatch):

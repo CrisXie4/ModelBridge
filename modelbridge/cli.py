@@ -600,6 +600,10 @@ def _run_repl(
     )
     _approval_ctx_holder["ctx"] = agent_ctx
     registry = build_default_registry(include_bash=allow_bash, minimal=minimal)
+    # Tools with big outputs tailor their truncation hint to whether a
+    # subagent tool exists to delegate to (registered a few lines below in
+    # non-minimal mode).
+    agent_ctx.delegable = not minimal
 
     # Browser tools are always available: the agent can read/operate the active
     # web page by relaying to the side-panel extension via the LocalBridge host.
@@ -1683,6 +1687,20 @@ def _make_approval(*, yes: bool, auto_mode_flip=None, tui_holder=None):
             ).lower()
         if choice == "y":
             return ApprovalDecision.YES
+        if choice in {"n", "no"}:
+            # Rejection with optional feedback (opencode's CorrectedError):
+            # the text rides back to the model in the tool's error message,
+            # so "don't touch this file, use plan B" steers the next attempt
+            # instead of the model blind-retrying. Empty input = plain NO.
+            try:
+                feedback = Prompt.ask(
+                    "反馈给 AI（可选，直接回车跳过）", default=""
+                ).strip()
+            except Exception:
+                feedback = ""
+            if feedback:
+                return (ApprovalDecision.NO, feedback)
+            return ApprovalDecision.NO
         if choice == "a":
             if save_pattern:
                 _save_pattern_to_disk(save_pattern, summary)

@@ -308,6 +308,12 @@ class PromptConfig(BaseModel):
     # head+marker+tail before summarization (recent tail stays verbatim).
     # 0 disables pruning. Mirrors the DeepSeek harness's tool-result pruner.
     auto_compact_prune_chars: int = 4000
+    # System context updates (opencode Context Epoch, right-sized): at each
+    # step boundary, changed environment facts (date, git branch) are
+    # appended as one <system-update> user message instead of being baked
+    # into the cache-stable system prefix. Disable via
+    # ``prompt.system_context_updates: false``.
+    system_context_updates: bool = True
 
 
 # Current config.yaml schema version. Bump when a breaking structural change

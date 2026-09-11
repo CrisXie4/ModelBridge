@@ -96,6 +96,14 @@ def run_agent_turn(
 
         maybe_auto_compact(session, model_name=model_name, on_system=on_system)
 
+        # Context updates at the same safe boundary (after compaction, after
+        # tool results settle, before the request): environment facts that
+        # changed since the last turn are appended as one <system-update>
+        # message. Appends only — the cache-stable prefix is never touched.
+        from ..context.system_context import maybe_apply_context_updates
+
+        maybe_apply_context_updates(session, cwd=ctx.cwd)
+
         i += 1
         request = ChatRequest(
             model=entry.model,

@@ -179,7 +179,12 @@ def test_unapproved_pattern_still_prompts(home, monkeypatch):
     (home / "approved_patterns.json").write_text(
         json.dumps({"other_tool": "别的东西"}), encoding="utf-8"
     )
-    monkeypatch.setattr(Prompt, "ask", lambda *a, **k: "n")
+    # First ask = the y/n/a/o choice ("n"); second ask = the optional
+    # rejection-feedback prompt (empty → plain NO, no feedback tuple).
+    monkeypatch.setattr(
+        Prompt, "ask",
+        lambda *a, **k: "" if a and "反馈" in str(a[0]) else "n",
+    )
     monkeypatch.setattr(
         utils_mod, "llm_safety_judge", lambda **k: (_ for _ in ()).throw(
             AssertionError("judge should not run without auto=True")
@@ -187,4 +192,4 @@ def test_unapproved_pattern_still_prompts(home, monkeypatch):
     )
     ask = _make_approval(yes=False)
     decision = ask(tool="click", summary="s", detail="", save_pattern="browser_write")
-    assert decision == ApprovalDecision.NO  # user answered n
+    assert decision == ApprovalDecision.NO  # user answered n (no feedback)

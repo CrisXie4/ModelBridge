@@ -23,6 +23,9 @@ class MessageIn(BaseModel):
 
 class ApprovalIn(BaseModel):
     decision: str = Field(pattern="^(y|n)$")
+    # Optional free text sent back to the model in the tool's rejection
+    # error ("用户反馈：不要动这个文件，改用 X") — empty = plain rejection.
+    feedback: str = Field(default="", max_length=2000)
 
 
 @router.get("")
@@ -70,7 +73,7 @@ def send_message(chat_id: str, payload: MessageIn) -> dict[str, Any]:
 @router.post("/approvals/{approval_id}")
 def resolve_approval(approval_id: str, payload: ApprovalIn) -> dict[str, bool]:
     # 注意前缀：挂载后路径为 /api/chats/approvals/{id}，见 server.py 说明。
-    ok = get_chat_service().resolve_approval(approval_id, payload.decision)
+    ok = get_chat_service().resolve_approval(approval_id, payload.decision, payload.feedback)
     if not ok:
         raise HTTPException(status_code=404, detail="审批不存在或已处理")
     return {"ok": True}

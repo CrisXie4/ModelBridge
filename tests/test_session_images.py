@@ -57,7 +57,13 @@ def test_run_interactive_consumes_pending_images(monkeypatch):
         read_input=read_input, pending_images=pending,
     )
 
-    user_msgs = [m for m in captured["messages"] if m.role == "user"]
+    # Injected <system-update> context messages are role=user too — keep
+    # only the real user turns for the multimodal assertion.
+    user_msgs = [
+        m for m in captured["messages"]
+        if m.role == "user"
+        and not (isinstance(m.content, str) and m.content.startswith("<system-update>"))
+    ]
     assert user_msgs and isinstance(user_msgs[-1].content, list)
     assert user_msgs[-1].content[0]["type"] == "text"
     assert any(b.get("type") == "image_url" for b in user_msgs[-1].content)
