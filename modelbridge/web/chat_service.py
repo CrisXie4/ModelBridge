@@ -228,7 +228,8 @@ class ChatService:
             return
 
         def approve(*, tool: str, summary: str, detail: str = "",
-                    reason: str = "", **_: Any) -> ApprovalDecision:
+                    reason: str = "", **_: Any
+                    ) -> "ApprovalDecision | tuple[ApprovalDecision, str]":
             aid = f"a{next(self.counter)}"
             pend = _PendingApproval(aid=aid, chat_id=chat.id, tool=tool, summary=summary)
             self.pending_map[aid] = pend
