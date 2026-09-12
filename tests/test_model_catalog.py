@@ -76,7 +76,7 @@ def test_flagship_models_present_across_tables():
     # 用户点名的国产主力阵容 + 2026-08 扩充厂商旗舰：必须同时在示例、价格、
     # 上下文三张表里。
     flagships = [
-        "deepseek-v4-flash", "deepseek-v4-pro",
+        "deepseek-flash", "deepseek-v4-pro",
         "MiniMax-M3", "kimi-k3", "mimo-v2.5-pro", "hy3",
         "doubao-seed-evolving",
     ]
@@ -84,7 +84,7 @@ def test_flagship_models_present_across_tables():
         assert mid in DEFAULT_PRICING, mid
         assert context_window_for(_entry(mid)) > DEFAULT_UNKNOWN_WINDOW, mid
     # 思考档位：推理旗舰要有 profile
-    for mid in ("kimi-k3", "mimo-v2.5-pro", "deepseek-v4-pro"):
+    for mid in ("kimi-k3", "mimo-v2.5-pro", "deepseek-v4-pro", "deepseek-flash"):
         assert profile_for(mid) is not None, mid
 
 

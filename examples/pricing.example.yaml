@@ -3,7 +3,7 @@
 # Copy this file to ~/.modelbridge/pricing.yaml and edit as needed.
 #
 # Keys are PROVIDER-SIDE model ids (the `model:` field in models.yaml,
-# e.g. `deepseek-v4-flash`), not the display name. Anything you put here
+# e.g. `deepseek-flash`), not the display name. Anything you put here
 # overrides the built-in price table in modelbridge/cost/estimator.py
 # but still loses to a `extra.pricing` block on a specific model in
 # models.yaml.
@@ -22,13 +22,13 @@
 # pricing page.
 
 pricing:
-  # DeepSeek V4 为峰谷计价，下表记录高峰时段 (北京时间 9-12 / 14-18 点)，
+  # DeepSeek 为峰谷计价，下表记录高峰时段 (北京时间 9-12 / 14-18 点)，
   # 闲时一律半价。
-  deepseek-v4-flash:
-    input_per_1m: 3.0
-    output_per_1m: 9.0
+  deepseek-flash:
+    input_per_1m: 2.0
+    output_per_1m: 8.0
     currency: CNY
-    cache_hit_input_per_1m: 0.1
+    cache_hit_input_per_1m: 0.04
 
   deepseek-v4-pro:
     input_per_1m: 9.0

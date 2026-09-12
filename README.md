@@ -104,7 +104,7 @@ mbridge init
 
 # 2. 添加一个模型
 export DEEPSEEK_API_KEY=sk-xxx
-mbridge model init             # 选 DeepSeek → 输入 deepseek-v4-flash
+mbridge model init             # 选 DeepSeek → 输入 deepseek-flash
 
 # 3. 自检
 mbridge doctor
@@ -403,11 +403,11 @@ mbridge ask "..." --route --mode powerful --fallback
 
 ```yaml
 pricing:
-  deepseek-v4-flash:        # DeepSeek V4 峰谷计价，此处为高峰价，闲时半价
-    input_per_1m: 3.0
-    output_per_1m: 9.0
+  deepseek-flash:           # DeepSeek 峰谷计价，此处为高峰价，闲时半价
+    input_per_1m: 2.0
+    output_per_1m: 8.0
     currency: CNY
-    cache_hit_input_per_1m: 0.1
+    cache_hit_input_per_1m: 0.04
 ```
 
 ### 5. 预算守卫

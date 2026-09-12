@@ -46,12 +46,12 @@ def default_app_config() -> AppConfig:
     user may not have configured yet. That is fine — they are just hints.
     """
     return AppConfig(
-        default_model="deepseek-v4-flash",
+        default_model="deepseek-flash",
         routing=RoutingConfig(
             mode="balanced",
             levels=RoutingLevels(
                 tiny="local-qwen",
-                cheap="deepseek-v4-flash",
+                cheap="deepseek-flash",
                 coder="qwen-coder",
                 agent="minimax-agent",
                 expert="kimi-k3",

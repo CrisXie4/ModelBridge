@@ -1,13 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  Coins,
-  ChartLine,
-  Database,
-  Calculator,
-  CircleNotch,
-} from "@phosphor-icons/react";
 import { api, CacheStats, ModelOut } from "@/lib/api";
 
 export default function UsagePage() {
@@ -53,13 +46,13 @@ export default function UsagePage() {
 
       <div className="card">
         <h2 className="card-title">
-          <Database size={14} className="icon" /> 缓存命中
+          <i className="ph ph-database icon" /> 缓存命中
         </h2>
         {stats ? (
           <div className="usage-metrics">
             <div className="usage-hero">
               <span className="metric-label">
-                <ChartLine size={14} /> 命中率
+                <i className="ph ph-chart-line" /> 缓存命中率
               </span>
               <span className="usage-hero-value">
                 {(stats.hit_rate * 100).toFixed(1)}
@@ -95,7 +88,7 @@ export default function UsagePage() {
 
       <div className="card">
         <h2 className="card-title">
-          <Calculator size={14} className="icon" /> 单次成本估算
+          <i className="ph ph-calculator icon" /> 单次成本估算
         </h2>
         <div className="cost-layout">
           <div>
@@ -124,11 +117,11 @@ export default function UsagePage() {
             <button className="btn" onClick={estimate} disabled={estimating}>
               {estimating ? (
                 <>
-                  <CircleNotch size={14} className="spin" /> 估算中…
+                  <i className="ph ph-circle-notch spin" /> 估算中…
                 </>
               ) : (
                 <>
-                  <Coins size={14} /> 估算成本
+                  <i className="ph ph-coins" /> 估算成本
                 </>
               )}
             </button>

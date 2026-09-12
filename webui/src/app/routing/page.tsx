@@ -1,30 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  FloppyDisk,
-  CircleNotch,
-  Bird,
-  ChatCircleDots,
-  Code,
-  Robot,
-  Brain,
-  Lightning,
-  CrownSimple,
-} from "@phosphor-icons/react";
 import { api, ConfigOut, ModelOut } from "@/lib/api";
 
 const LEVELS = ["tiny", "cheap", "coder", "agent", "expert"] as const;
 
-const LEVEL_META: Record<
-  string,
-  { desc: string; Icon: typeof Bird }
-> = {
-  tiny: { desc: "意图分类 / 是非判断", Icon: Bird },
-  cheap: { desc: "普通问答 / 解释", Icon: ChatCircleDots },
-  coder: { desc: "单文件代码生成", Icon: Code },
-  agent: { desc: "多文件任务 / 工具", Icon: Robot },
-  expert: { desc: "架构重构 / 安全审查", Icon: Brain },
+// 图标统一来自 Phosphor 图标字体（class 即名称）
+const LEVEL_META: Record<string, { desc: string; icon: string }> = {
+  tiny: { desc: "意图分类 / 是非判断", icon: "ph-bird" },
+  cheap: { desc: "普通问答 / 解释", icon: "ph-chat-circle-dots" },
+  coder: { desc: "单文件代码生成", icon: "ph-code" },
+  agent: { desc: "多文件任务 / 工具", icon: "ph-robot" },
+  expert: { desc: "架构重构 / 安全审查", icon: "ph-brain" },
 };
 
 const MODE_DESC: Record<string, string> = {
@@ -82,6 +69,15 @@ export default function RoutingPage() {
     );
   const names = models.map((m) => m.name);
 
+  // select 只能展示选项内的值：绑定指向已删除的渠道时，补一个「已失效」
+  // 选项，避免数据被静默显示成（未绑定）。
+  const withStale = (current: string | null) => {
+    if (!current || names.includes(current)) return names;
+    return [...names, current];
+  };
+  const optionLabel = (n: string) =>
+    names.includes(n) ? n : `${n}（渠道已失效）`;
+
   return (
     <div className="page">
       <div className="page-head">
@@ -94,11 +90,11 @@ export default function RoutingPage() {
         <button className="btn" onClick={save} disabled={saving}>
           {saving ? (
             <>
-              <CircleNotch size={14} className="spin" /> 保存中…
+              <i className="ph ph-circle-notch spin" /> 保存中…
             </>
           ) : (
             <>
-              <FloppyDisk size={14} /> 保存配置
+              <i className="ph ph-floppy-disk" /> 保存配置
             </>
           )}
         </button>
@@ -106,7 +102,7 @@ export default function RoutingPage() {
 
       <div className="card">
         <h2 className="card-title">
-          <Lightning size={14} className="icon" /> 路由模式
+          <i className="ph ph-lightning icon" /> 路由模式
         </h2>
         <div className="mode-cards">
           {(["economy", "balanced", "powerful"] as const).map((mode) => (
@@ -135,9 +131,9 @@ export default function RoutingPage() {
             }
           >
             <option value="">（未设置）</option>
-            {names.map((n) => (
+            {withStale(cfg.default_model).map((n) => (
               <option key={n} value={n}>
-                {n}
+                {optionLabel(n)}
               </option>
             ))}
           </select>
@@ -146,15 +142,15 @@ export default function RoutingPage() {
 
       <div className="card">
         <h2 className="card-title">
-          <CrownSimple size={14} className="icon" /> 五级模型绑定
+          <i className="ph ph-crown-simple icon" /> 五级模型绑定
         </h2>
         <div className="level-list">
           {LEVELS.map((lvl) => {
-            const { desc, Icon } = LEVEL_META[lvl];
+            const { desc, icon } = LEVEL_META[lvl];
             return (
               <div className="level-row" key={lvl}>
                 <div className="level-icon">
-                  <Icon size={18} />
+                  <i className={`ph ${icon}`} />
                 </div>
                 <div className="level-info">
                   <span className="level-name mono">{lvl}</span>
@@ -171,9 +167,9 @@ export default function RoutingPage() {
                     }
                   >
                     <option value="">（未绑定）</option>
-                    {names.map((n) => (
+                    {withStale(cfg.levels[lvl]).map((n) => (
                       <option key={n} value={n}>
-                        {n}
+                        {optionLabel(n)}
                       </option>
                     ))}
                   </select>

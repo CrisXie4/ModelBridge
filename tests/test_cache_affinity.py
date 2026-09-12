@@ -278,13 +278,13 @@ def test_cache_hit_rate_savings_use_real_pricing(home):
     )
     _record_cache_outcome(entry, resp)
     s = load_cache_stats()
-    # flash peak: input ¥3 vs cache-hit ¥0.10 per 1M → ¥2.90 saved per 1M hit.
+    # flash peak: input ¥2 vs cache-hit ¥0.04 per 1M → ¥1.96 saved per 1M hit.
     assert s.per_model["ds-test"]["hits"] == 1
     assert s.saved_tokens == 1_000_000
-    assert s.estimated_savings == pytest.approx(2.90)
+    assert s.estimated_savings == pytest.approx(1.96)
     # The uncached 10 tokens bill at the FULL input rate — they cost money too.
     assert s.billed_tokens == 1_000_010
-    assert s.spend == pytest.approx(1_000_000 / 1e6 * 0.10 + 10 / 1e6 * 3.0)
+    assert s.spend == pytest.approx(1_000_000 / 1e6 * 0.04 + 10 / 1e6 * 2.0)
 
 
 def test_cache_miss_turn_prices_prompt_tokens(home):
@@ -311,7 +311,7 @@ def test_cache_miss_turn_prices_prompt_tokens(home):
     assert s.misses == 1
     assert s.per_model["ds-miss"]["misses"] == 1
     assert s.billed_tokens == 500_000
-    assert s.spend == pytest.approx(500_000 / 1e6 * 3.0)
+    assert s.spend == pytest.approx(500_000 / 1e6 * 2.0)
 
 
 def test_cache_no_report_falls_back_to_local_prompt_tokens(home):

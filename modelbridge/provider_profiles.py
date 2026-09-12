@@ -53,10 +53,10 @@ PROFILES: dict[ProviderType, ProviderProfile] = {
         label="DeepSeek",
         base_url="https://api.deepseek.com",
         api_key_env="DEEPSEEK_API_KEY",
-        model_examples=["deepseek-v4-pro", "deepseek-v4-flash"],
+        model_examples=["deepseek-flash", "deepseek-v4-pro"],
         default_level=ModelLevel.CHEAP,
         default_capabilities=_THINKING_CAPS,
-        notes="OpenAI 端点 https://api.deepseek.com；Anthropic 兼容端点 /anthropic。V4 系列默认思考，返回 reasoning_content；带工具调用的历史轮必须回传 reasoning_content。ChatRequest.thinking 自动翻译为 thinking 参数，预算映射 reasoning_effort (high/max)。峰谷计价，闲时半价；deepseek-chat/reasoner 已于 2026-07-24 下线。前缀缓存按「厂商×模型」隔离（切模型即换缓存域，flash↔pro 不共享）；请求体无缓存键字段（dsh 线规），ModelBridge 不注入。",
+        notes="OpenAI 端点 https://api.deepseek.com；Anthropic 兼容端点 /anthropic。deepseek-flash = V4.1-Flash（2026-09-10 上线，原生视觉、图片按 token 计费；视觉需在 models.yaml 单模型 capabilities 打开）。V4 系列默认思考，返回 reasoning_content；带工具调用的历史轮必须回传 reasoning_content。ChatRequest.thinking 自动翻译为 thinking 参数，预算映射 reasoning_effort (high/max)。峰谷计价，闲时半价；deepseek-v4-flash/-vision-exp 旧名仍可调用但由 V4.1 Flash 承接计费；deepseek-chat/reasoner 已于 2026-07-24 下线。前缀缓存按「厂商×模型」隔离（切模型即换缓存域，flash↔pro 不共享）；请求体无缓存键字段（dsh 线规），ModelBridge 不注入。",
     ),
     ProviderType.QWEN: ProviderProfile(
         provider=ProviderType.QWEN,

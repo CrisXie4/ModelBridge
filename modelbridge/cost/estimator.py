@@ -65,6 +65,7 @@ class Pricing:
 # 2026-08 refresh: each entry below now cites the official vendor page it was
 # verified against (URLs in the per-section headers). Source legend:
 #   vendor-2026-08-17 — re-verified against the live vendor pricing page this sweep
+#   vendor-2026-09-10 — re-verified against the live vendor pricing page (V4.1 Flash sweep)
 #   vendor-2026-08  — re-verified against the live vendor pricing page this sweep
 #   vendor-2026-07  — verified against vendor rate sheet 2026-07 (prior sweep)
 #   builtin / litellm-2026-07 — pre-existing, not re-verified this sweep
@@ -92,14 +93,20 @@ class Pricing:
 # current payable price ($0.30/$1.20) as the default; the pre-promo rate is
 # noted in the comment for reference.
 DEFAULT_PRICING: dict[str, Pricing] = {
-    # ---- DeepSeek (vendor 2026-08-17 峰谷计价, CNY; api-docs.deepseek.com) ----
-    # V4 全系正式版 2026-08-13 上线，新价 2026-08-17 00:00 生效。表里记录
-    # 高峰时段价（北京时间 9:00-12:00 / 14:00-18:00），闲时一律半价；缓存
-    # 命中输入单独计价。旧 USD 预览价 ($0.435/$0.87) 已作废。
+    # ---- DeepSeek (vendor 2026-09-10 峰谷计价, CNY; api-docs.deepseek.com) ----
+    # V4.1 Flash 2026-09-10 12:00 上线并同步调价。表里记录高峰时段价（北京
+    # 时间 9:00-12:00 / 14:00-18:00），闲时一律半价；缓存命中输入单独计价。
+    # "deepseek-flash" = DeepSeek-V4.1-Flash（552B MoE 新 CED 结构，原生视觉、
+    # 图片按 token 计费，基准反超 V4 Pro）。deepseek-v4-flash / -vision-exp
+    # 旧名仍可调用，但由 V4.1 Flash 承接并按 Flash 价计费 → 旧名条目按新价
+    # 保留。V4 Pro 原定 09-14 起路由 Flash，官方后撤回：继续在售、计费不变
+    # （定价页脚注）。旧 USD 预览价 ($0.435/$0.87) 已作废。
+    "deepseek-flash":     Pricing("CNY", 2.0,  8.0,  "vendor-2026-09-10",
+                                  cache_hit_input_per_1m=0.04),   # 闲时 1/4，命中 0.02
     "deepseek-v4-pro":    Pricing("CNY", 9.0,  27.0, "vendor-2026-08-17",
                                   cache_hit_input_per_1m=0.30),   # 闲时 0.15/4.5/13.5
-    "deepseek-v4-flash":  Pricing("CNY", 3.0,  9.0,  "vendor-2026-08-17",
-                                  cache_hit_input_per_1m=0.10),   # 闲时 0.05/1.5/4.5
+    "deepseek-v4-flash":  Pricing("CNY", 2.0,  8.0,  "vendor-2026-09-10",
+                                  cache_hit_input_per_1m=0.04),   # 旧名 → V4.1 Flash 承接
 
     # ---- 字节豆包 / 火山方舟 (builtin best-effort, CNY；官方价以
     #      docs.volcengine.com/docs/82379/1544106 为准) ----

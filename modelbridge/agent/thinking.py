@@ -86,9 +86,11 @@ MODEL_THINKING_PROFILES: dict[str, ThinkingProfile] = {
     "qwen3-max":              ThinkingProfile(min_tokens=512, max_tokens=32768, default_level=6),
     "qwen3.6-plus":           ThinkingProfile(min_tokens=512, max_tokens=32768, default_level=6),
     "qwen-max-latest":        ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
-    # ---- DeepSeek — V4 family: thinking + reasoning_content; the wire only
-    # accepts reasoning_effort high/max (level 10 / budget=max → 'max',
-    # everything else → 'high') ----
+    # ---- DeepSeek — V4/V4.1 family: thinking + reasoning_content; the wire
+    # only accepts reasoning_effort high/max (level 10 / budget=max → 'max',
+    # everything else → 'high'). V4.1-Flash（deepseek-flash，2026-09-10）沿用
+    # 同一套线规；FIM 补全仅非思考模式可用 ----
+    "deepseek-flash":       ThinkingProfile(min_tokens=512, max_tokens=8192,  default_level=4),
     "deepseek-v4":          ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
     "deepseek-v4-pro":      ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
     "deepseek-v4-flash":    ThinkingProfile(min_tokens=512, max_tokens=8192,  default_level=4),

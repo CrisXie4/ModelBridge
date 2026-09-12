@@ -1,8 +1,11 @@
 """DeepSeek adapter.
 
 DeepSeek (https://api.deepseek.com) is OpenAI-compatible. The current
-lineup is the V4 family (``deepseek-v4-flash`` / ``deepseek-v4-pro``);
-``deepseek-chat`` / ``deepseek-reasoner`` were retired 2026-07-24.
+lineup is ``deepseek-flash`` (V4.1-Flash, 2026-09-10) and
+``deepseek-v4-pro``; the legacy names ``deepseek-v4-flash`` /
+``deepseek-v4-flash-vision-exp`` are still accepted but served — and
+billed — as V4.1-Flash, and ``deepseek-chat`` / ``deepseek-reasoner``
+were retired 2026-07-24.
 
 Wire-format rules below are cross-checked against DeepSeek's own
 open-source agent harness (github.com/deepseek-ai/deepseek-harness,
@@ -131,8 +134,9 @@ class DeepSeekProvider(OpenAICompatibleProvider):
                 "  • assistant 消息 content 为 null（必须为 \"\"，纯 tool_calls / 纯思考轮也一样）；\n"
                 "  • 带工具调用的历史 assistant 轮丢失 reasoning_content（thinking 模式必须回传）；\n"
                 "  • thinking / reasoning_effort 参数格式（只接受 enabled|disabled / high|max）；\n"
-                "  • 模型名拼写错误，当前在售：deepseek-v4-flash / deepseek-v4-pro"
-                "（deepseek-chat / deepseek-reasoner 已于 2026-07-24 下线）；\n"
+                "  • 模型名拼写错误，当前在售：deepseek-flash / deepseek-v4-pro"
+                "（deepseek-v4-flash 等旧名由 V4.1 Flash 承接；"
+                "deepseek-chat / deepseek-reasoner 已于 2026-07-24 下线）；\n"
                 "  • temperature 超出上限或 response_format 与所选模型不兼容。\n"
                 + (err.hint or "")
             )

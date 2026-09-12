@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PlugsConnected } from "@phosphor-icons/react";
 import { api, McpServerOut } from "@/lib/api";
 
 export default function McpPage() {
@@ -46,13 +45,8 @@ export default function McpPage() {
         <div>
           <h1 className="page-title">MCP 服务器</h1>
           <p className="page-sub">
-            管理连接外部工具的 MCP servers。这里的开关写入{" "}
-            <code>config.yaml</code>（持久）；正在运行的会话里也可用{" "}
-            <code>/mcp on|off &lt;id&gt;</code> 做临时启停。
+            管理连接外部工具的 MCP servers。这里的开关写入 <code>config.yaml</code>（持久）；正在运行的会话里也可用 <code>/mcp on|off &lt;id&gt;</code> 做临时启停。
           </p>
-        </div>
-        <div className="page-actions">
-          <PlugsConnected size={22} />
         </div>
       </div>
 
@@ -65,7 +59,7 @@ export default function McpPage() {
         <div className="card">
           <div className="empty">
             <div className="empty-icon">
-              <PlugsConnected size={20} />
+              <i className="ph ph-plugs-connected" />
             </div>
             <div className="empty-title">还没有配置任何 MCP server</div>
             <div className="empty-hint">
@@ -103,7 +97,7 @@ export default function McpPage() {
                 </div>
                 <label
                   className="switch"
-                  title={s.enabled ? "启用中 — 点击持久禁用" : "已禁用 — 点击启用"}
+                  title={s.enabled ? "启用中，点击持久禁用" : "已禁用，点击启用"}
                 >
                   <input
                     type="checkbox"

@@ -23,7 +23,7 @@ Config::
     mcp:
       sampling:
         enabled: true
-        model: deepseek-v4-flash  # optional; default_model otherwise
+        model: deepseek-flash  # optional; default_model otherwise
         max_tokens: 2048        # hard per-call output cap
         max_calls: 32           # per-server, per-session ceiling
 

@@ -297,7 +297,7 @@ def _run_subagent(
         model_name = (
             getattr(parent_ctx, "_parent_model", None)
             or _default_model_name()
-            or "deepseek-v4-flash"
+            or "deepseek-flash"
         )
     try:
         get_model_entry(model_name)

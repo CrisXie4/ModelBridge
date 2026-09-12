@@ -3,48 +3,37 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import {
-  Gauge,
-  Pulse,
-  PlugsConnected,
-  Path,
-  NotePencil,
-  Sparkle,
-  ShieldCheck,
-  Coins,
-  Palette,
-  ChatCircleDots,
-  PuzzlePiece,
-} from "@phosphor-icons/react";
 
+// 图标统一来自 Phosphor 图标字体（regular + fill），见 public/fonts/phosphor。
+// 激活态用 fill 变体，静止态用 regular，尺寸由 CSS 控制。
 const NAV_GROUPS: {
   label: string;
-  items: { href: string; label: string; Icon: typeof Gauge }[];
+  items: { href: string; label: string; icon: string }[];
 }[] = [
   {
     label: "监控",
     items: [
-      { href: "/", label: "概览", Icon: Gauge },
-      { href: "/chat", label: "AI 对话", Icon: ChatCircleDots },
-      { href: "/activity", label: "Agent 活动", Icon: Pulse },
+      { href: "/", label: "概览", icon: "ph-gauge" },
+      { href: "/chat", label: "AI 对话", icon: "ph-chat-circle-dots" },
+      { href: "/activity", label: "Agent 活动", icon: "ph-pulse" },
     ],
   },
   {
     label: "配置",
     items: [
-      { href: "/models", label: "渠道 / 模型", Icon: PlugsConnected },
-      { href: "/routing", label: "路由配置", Icon: Path },
-      { href: "/prompts", label: "提示词", Icon: NotePencil },
-      { href: "/skills", label: "Skills", Icon: Sparkle },
-      { href: "/mcp", label: "MCP", Icon: PuzzlePiece },
-      { href: "/settings", label: "界面样式", Icon: Palette },
+      { href: "/models", label: "渠道 / 模型", icon: "ph-plugs-connected" },
+      { href: "/routing", label: "路由配置", icon: "ph-path" },
+      { href: "/prompts", label: "提示词", icon: "ph-note-pencil" },
+      { href: "/skills", label: "Skills", icon: "ph-sparkle" },
+      { href: "/mcp", label: "MCP", icon: "ph-puzzle-piece" },
+      { href: "/settings", label: "界面样式", icon: "ph-palette" },
     ],
   },
   {
     label: "系统",
     items: [
-      { href: "/doctor", label: "自检", Icon: ShieldCheck },
-      { href: "/usage", label: "成本 / 缓存", Icon: Coins },
+      { href: "/doctor", label: "自检", icon: "ph-shield-check" },
+      { href: "/usage", label: "成本 / 缓存", icon: "ph-coins" },
     ],
   },
 ];
@@ -65,7 +54,7 @@ export function Sidebar() {
         {NAV_GROUPS.map((group) => (
           <div className="nav-group" key={group.label}>
             <div className="nav-group-label">{group.label}</div>
-            {group.items.map(({ href, label, Icon }) => {
+            {group.items.map(({ href, label, icon }) => {
               const active =
                 href === "/" ? pathname === "/" : pathname.startsWith(href);
               return (
@@ -74,7 +63,7 @@ export function Sidebar() {
                   href={href}
                   className={active ? "nav-item active" : "nav-item"}
                 >
-                  <Icon size={16} weight={active ? "fill" : "regular"} />
+                  <i className={active ? `ph-fill ${icon}` : `ph ${icon}`} />
                   <span>{label}</span>
                 </Link>
               );
@@ -101,10 +90,10 @@ const SPARK_MAX = 24;
 const DEGRADED_MS = 300;
 
 const STATUS_COLOR: Record<ApiState, string> = {
-  checking: "#6d7a90",
-  online: "#46c07a",
-  degraded: "#e0b45c",
-  offline: "#f0565c",
+  checking: "#68738a",
+  online: "#43c78f",
+  degraded: "#e2b755",
+  offline: "#f06a64",
 };
 
 type ApiState = "checking" | "online" | "degraded" | "offline";

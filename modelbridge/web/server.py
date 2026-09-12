@@ -34,6 +34,7 @@ class CleanUrlStaticFiles(StaticFiles):  # type: ignore[misc, valid-type]
     async def get_response(self, path: str, scope):
         response = await super().get_response(path, scope)
         if response.status_code != 404 or path.startswith("api/"):
+            self._no_cache_html(response, path)
             return response
         if "." not in os.path.basename(path):
             response = await super().get_response(path + ".html", scope)
@@ -43,7 +44,18 @@ class CleanUrlStaticFiles(StaticFiles):  # type: ignore[misc, valid-type]
                 response.status_code = 404
             except Exception:
                 pass
+        self._no_cache_html(response, path)
         return response
+
+    @staticmethod
+    def _no_cache_html(response, path: str) -> None:
+        # HTML 入口不带 hash，重建 out/ 后浏览器若按启发式缓存会一直顶住
+        # 旧页面（刷新也无效）。no-cache 强制回源用 etag 校验，资产文件
+        # 文件名带 hash、不受此头影响。
+        name = os.path.basename(path)
+        is_html = path == "" or name == "" or "." not in name or name.endswith(".html")
+        if response.status_code == 200 and is_html:
+            response.headers["cache-control"] = "no-cache"
 
 
 def build_app():  # pragma: no cover — integration tested via TestClient

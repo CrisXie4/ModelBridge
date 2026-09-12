@@ -1,14 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  CheckCircle,
-  XCircle,
-  ShieldCheck,
-  Play,
-  CircleNotch,
-  TerminalWindow,
-} from "@phosphor-icons/react";
 import { api, DoctorCheck, ModelOut } from "@/lib/api";
 
 export default function DoctorPage() {
@@ -65,14 +57,14 @@ export default function DoctorPage() {
             onClick={testAll}
             disabled={!!testing}
           >
-            <Play size={13} /> 测试全部模型
+            <i className="ph ph-play" /> 测试全部模型
           </button>
         )}
       </div>
 
       <div className="card">
         <h2 className="card-title">
-          <ShieldCheck size={14} className="icon" /> 环境检查
+          <i className="ph ph-shield-check icon" /> 环境检查
         </h2>
         {loading ? (
           <div className="skeleton">
@@ -84,9 +76,9 @@ export default function DoctorPage() {
             {checks.map((c) => (
               <div className="check-row" key={c.name}>
                 {c.ok ? (
-                  <CheckCircle size={16} weight="fill" className="check-ok" />
+                  <i className="ph-fill ph-check-circle check-ok" />
                 ) : (
-                  <XCircle size={16} weight="fill" className="check-err" />
+                  <i className="ph-fill ph-x-circle check-err" />
                 )}
                 <span className="mono check-name">{c.name}</span>
                 <span className="check-detail">{c.detail}</span>
@@ -98,12 +90,12 @@ export default function DoctorPage() {
 
       <div className="card">
         <h2 className="card-title">
-          <TerminalWindow size={14} className="icon" /> 模型连通性
+          <i className="ph ph-terminal-window icon" /> 模型连通性
         </h2>
         {models.length === 0 ? (
           <div className="empty">
             <div className="empty-icon">
-              <TerminalWindow size={20} />
+              <i className="ph ph-terminal-window" />
             </div>
             <div className="empty-title">未配置模型</div>
             <div className="empty-hint">
@@ -172,7 +164,7 @@ export default function DoctorPage() {
                         onClick={() => testModel(m.name)}
                       >
                         {testing === m.name ? (
-                          <CircleNotch size={12} className="spin" />
+                          <i className="ph ph-circle-notch spin" />
                         ) : (
                           "测试"
                         )}

@@ -1,17 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import {
-  Plus,
-  Sparkle,
-  MagnifyingGlass,
-  Key,
-  LockKey,
-  LockKeyOpen,
-  PencilSimple,
-  Trash,
-  X,
-} from "@phosphor-icons/react";
 import { api, CatalogEntry, ModelOut } from "@/lib/api";
 
 const PROVIDERS = [
@@ -108,17 +97,17 @@ export default function ModelsPage() {
               setShowForm(true);
             }}
           >
-            <Plus size={14} weight="bold" /> 手动添加
+            <i className="ph ph-plus" /> 手动添加
           </button>
           <button className="btn btn-secondary" onClick={() => setShowCatalog(true)}>
-            <Sparkle size={14} /> 从目录添加
+            <i className="ph ph-sparkle" /> 从目录添加
           </button>
         </div>
       </div>
 
       {models.length > 0 && (
         <div className="model-search">
-          <MagnifyingGlass size={14} className="model-search-icon" />
+          <i className="ph ph-magnifying-glass model-search-icon" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -138,7 +127,7 @@ export default function ModelsPage() {
         <div className="card">
           <div className="empty">
             <div className="empty-icon">
-              <Plus size={20} />
+              <i className="ph ph-plus" />
             </div>
             <div className="empty-title">还没有配置任何模型</div>
             <div className="empty-hint">
@@ -169,7 +158,7 @@ export default function ModelsPage() {
                     {m.name}
                   </td>
                   <td>
-                    <span className="badge badge-accent">{m.provider}</span>
+                    <span className="badge">{m.provider}</span>
                   </td>
                   <td className="mono">{m.model}</td>
                   <td className="mono" style={{ color: "var(--mb-muted)" }}>
@@ -184,11 +173,11 @@ export default function ModelsPage() {
                         className="key-ok"
                         title="API Key 已配置（加密存储）"
                       >
-                        <LockKey size={14} weight="fill" /> 就绪
+                        <i className="ph-fill ph-lock-key" /> 就绪
                       </span>
                     ) : (
                       <span className="key-miss" title="未配置 API Key">
-                        <LockKeyOpen size={14} /> 缺失
+                        <i className="ph ph-lock-key-open" /> 缺失
                       </span>
                     )}
                   </td>
@@ -210,13 +199,12 @@ export default function ModelsPage() {
                           setShowForm(true);
                         }}
                       >
-                        <PencilSimple size={13} /> 编辑
-                      </button>
+                        <i className="ph ph-pencil-simple" /> 编辑                      </button>
                       <button
                         className="btn btn-sm btn-danger btn-outline"
                         onClick={() => remove(m.name)}
                       >
-                        <Trash size={13} /> 删除
+                        <i className="ph ph-trash" /> 删除
                       </button>
                     </div>
                   </td>
@@ -341,7 +329,7 @@ function ModelForm({
             {initial ? "编辑渠道" : prefill ? "从目录添加" : "手动添加渠道"}
           </h2>
           <button className="btn btn-sm btn-ghost modal-close" onClick={onClose}>
-            <X size={15} />
+            <i className="ph ph-x" />
           </button>
         </div>
 
@@ -432,7 +420,7 @@ function ModelForm({
           </div>
           <div className="field">
             <label>
-              <Key size={12} style={{ verticalAlign: -1 }} /> 或环境变量名
+              <i className="ph ph-key" style={{ verticalAlign: -1 }} /> 或环境变量名
             </label>
             <input
               value={form.api_key_env}
@@ -526,7 +514,7 @@ function CatalogPicker({
           </div>
           <div className="spacer" />
           <div className="model-search" style={{ width: 220 }}>
-            <MagnifyingGlass size={14} className="model-search-icon" />
+            <i className="ph ph-magnifying-glass model-search-icon" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -536,7 +524,7 @@ function CatalogPicker({
             />
           </div>
           <button className="btn btn-sm btn-ghost modal-close" onClick={onClose}>
-            <X size={15} />
+            <i className="ph ph-x" />
           </button>
         </div>
 
@@ -590,7 +578,7 @@ function CatalogPicker({
                       )}
                     </td>
                     <td>
-                      <span className="badge badge-accent">{c.provider}</span>
+                      <span className="badge">{c.provider}</span>
                     </td>
                     <td className="mono num">
                       {fmtPrice(c.input_per_1m, c.currency)}

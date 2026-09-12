@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FloppyDisk, CircleNotch, FileText, Scroll } from "@phosphor-icons/react";
 import { api, PromptFiles } from "@/lib/api";
 
 export default function PromptsPage() {
@@ -56,7 +55,7 @@ export default function PromptsPage() {
   const lineCount = draft ? draft.split("\n").length : 0;
 
   return (
-    <div className="page">
+    <div className="page page--fill">
       <div className="page-head">
         <div>
           <h1 className="page-title">系统提示词</h1>
@@ -67,11 +66,11 @@ export default function PromptsPage() {
         <button className="btn" onClick={save} disabled={saving}>
           {saving ? (
             <>
-              <CircleNotch size={14} className="spin" /> 保存中…
+              <i className="ph ph-circle-notch spin" /> 保存中…
             </>
           ) : (
             <>
-              <FloppyDisk size={14} /> 保存 {tab}.md
+              <i className="ph ph-floppy-disk" /> 保存 {tab}.md
             </>
           )}
         </button>
@@ -84,13 +83,13 @@ export default function PromptsPage() {
               className={tab === "system" ? "seg-item active" : "seg-item"}
               onClick={() => setTab("system")}
             >
-              <FileText size={13} style={{ verticalAlign: -2 }} /> system.md
+              <i className="ph ph-file-text" /> system.md
             </button>
             <button
               className={tab === "rules" ? "seg-item active" : "seg-item"}
               onClick={() => setTab("rules")}
             >
-              <Scroll size={13} style={{ verticalAlign: -2 }} /> rules.md
+              <i className="ph ph-scroll" /> rules.md
             </button>
           </div>
           <div className="editor-meta mono">

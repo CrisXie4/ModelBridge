@@ -17,6 +17,17 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <body>
+        {/* Phosphor 图标字体（本地资产，见 public/fonts/phosphor） */}
+        <link
+          rel="stylesheet"
+          href="/fonts/phosphor/phosphor-regular.css"
+          precedence="default"
+        />
+        <link
+          rel="stylesheet"
+          href="/fonts/phosphor/phosphor-fill.css"
+          precedence="default"
+        />
         <div className="app-shell">
           <Sidebar />
           <main className="app-main">{children}</main>

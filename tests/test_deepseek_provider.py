@@ -191,7 +191,7 @@ def test_plain_text_reasoning_turn_dropped_but_text_kept():
 def test_400_hint_mentions_current_models_and_eol():
     p = _provider()
     err = p.normalize_error(status_code=400, body='{"error":{"message":"bad"}}')
-    assert "deepseek-v4-flash" in (err.hint or "")
+    assert "deepseek-flash" in (err.hint or "")
     assert "deepseek-v4-pro" in (err.hint or "")
     assert "2026-07-24" in (err.hint or "")
 
@@ -219,18 +219,22 @@ def test_context_overflow_error_gets_compact_hint():
 # ---------------------------------------------------------------------------
 
 def test_v4_models_have_thinking_profiles():
-    for mid in ("deepseek-v4", "deepseek-v4-pro", "deepseek-v4-flash"):
+    for mid in ("deepseek-flash", "deepseek-v4", "deepseek-v4-pro", "deepseek-v4-flash"):
         assert profile_for(mid) is not None, mid
     assert "deepseek-v3.1" not in MODEL_THINKING_PROFILES
 
 
 def test_v4_pricing_records_peak_rates_in_cny():
-    for mid in ("deepseek-v4-pro", "deepseek-v4-flash"):
+    for mid in ("deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash"):
         pricing = DEFAULT_PRICING[mid]
         assert pricing.currency == "CNY"
         assert pricing.cache_hit_input_per_1m is not None
-    # Official 2026-08-17 peak rates (¥/1M): flash 3/9, pro 9/27.
-    assert DEFAULT_PRICING["deepseek-v4-flash"].input_per_1m == 3.0
-    assert DEFAULT_PRICING["deepseek-v4-flash"].output_per_1m == 9.0
+    # Official 2026-09-10 peak rates (¥/1M): flash 2/8 (cache-hit 0.04), pro 9/27.
+    assert DEFAULT_PRICING["deepseek-flash"].input_per_1m == 2.0
+    assert DEFAULT_PRICING["deepseek-flash"].output_per_1m == 8.0
+    assert DEFAULT_PRICING["deepseek-flash"].cache_hit_input_per_1m == 0.04
+    # 旧名 deepseek-v4-flash 仍可调用，由 V4.1 Flash 承接 → 按 Flash 新价计费。
+    assert DEFAULT_PRICING["deepseek-v4-flash"].input_per_1m == 2.0
+    assert DEFAULT_PRICING["deepseek-v4-flash"].output_per_1m == 8.0
     assert DEFAULT_PRICING["deepseek-v4-pro"].input_per_1m == 9.0
     assert DEFAULT_PRICING["deepseek-v4-pro"].output_per_1m == 27.0

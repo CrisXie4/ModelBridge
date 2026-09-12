@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Palette } from "@phosphor-icons/react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { api } from "@/lib/api";
 
 // 与侧边栏 /ui 完全同一套旋钮（~/.modelbridge/ui.json）。
@@ -37,6 +36,27 @@ const FIELDS: {
   { key: "color_tool", label: "工具名颜色", type: "color" },
   { key: "color_dim", label: "次要文字灰", type: "color" },
 ];
+
+// 与 agent/ui_prefs.py 的 UiPrefs 默认值保持一致（预览兜底用）。
+const DEFAULTS: Record<string, unknown> = {
+  rail_ratio: 0.4,
+  rail_max: 72,
+  footer_hint: true,
+  show_status: true,
+  show_tasks: true,
+  show_bg: true,
+  show_tools: true,
+  user_align: "right",
+  stream_thinking: true,
+  color_accent: "#58a6ff",
+  color_good: "#3fb950",
+  color_bad: "#f85149",
+  color_warn: "#d29922",
+  color_tool: "#d2a8ff",
+  color_dim: "#8a8f98",
+};
+
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 
 export default function SettingsPage() {
   const [prefs, setPrefs] = useState<Record<string, unknown> | null>(null);
@@ -99,6 +119,13 @@ export default function SettingsPage() {
     }
   };
 
+  // 按 group 拆组
+  const groups: { name: string; fields: (typeof FIELDS)[number][] }[] = [];
+  for (const f of FIELDS) {
+    if (f.group) groups.push({ name: f.group, fields: [] });
+    else if (groups.length) groups[groups.length - 1].fields.push(f);
+  }
+
   return (
     <div className="page">
       <div className="page-head">
@@ -108,9 +135,6 @@ export default function SettingsPage() {
             配置终端 TUI（mbridge 全屏界面）的外观：右栏宽度、分组、配色。保存写入{" "}
             <code>~/.modelbridge/ui.json</code>，正在运行的终端与浏览器侧栏都会热重载。
           </p>
-        </div>
-        <div className="page-actions">
-          <Palette size={22} />
         </div>
       </div>
 
@@ -124,54 +148,62 @@ export default function SettingsPage() {
           </div>
         )
       ) : (
-        <>
-          <div className="card settings-card">
-            {FIELDS.map((f, i) => {
-              if (f.group)
-                return (
-                  <div className="settings-group" key={`g${i}`}>
-                    <span>{f.group}</span>
-                  </div>
-                );
-              const key = f.key!;
-              const val = prefs[key];
-              return (
-                <label className="settings-row" key={key}>
-                  <span className="settings-label">{f.label}</span>
-                  {f.type === "bool" ? (
-                    <input
-                      type="checkbox"
-                      checked={Boolean(val)}
-                      onChange={(e) => setValue(key, e.target.checked)}
-                    />
-                  ) : f.type === "enum" ? (
-                    <select value={String(val ?? "")} onChange={(e) => setValue(key, e.target.value)}>
-                      {(f.choices || []).map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  ) : f.type === "color" ? (
-                    <input
-                      type="color"
-                      value={/^#[0-9a-fA-F]{6}$/.test(String(val || "")) ? String(val) : "#000000"}
-                      onChange={(e) => setValue(key, e.target.value.toLowerCase())}
-                    />
-                  ) : (
-                    <input
-                      type="number"
-                      value={Number(val ?? 0)}
-                      min={f.min}
-                      max={f.max}
-                      step={f.step}
-                      onChange={(e) => setValue(key, Number(e.target.value))}
-                    />
-                  )}
-                </label>
-              );
-            })}
+        <div className="settings-layout">
+          <div className="settings-left">
+            {groups.map((g) => (
+              <div className="card settings-card" key={g.name}>
+                <div className="settings-group">{g.name}</div>
+                {g.fields.map((f) => {
+                  const key = f.key!;
+                  const val = prefs[key];
+                  return (
+                    <div className="settings-row" key={key}>
+                      <span className="settings-label">{f.label}</span>
+                      {f.type === "bool" ? (
+                        <label className="switch" title={f.label}>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(val)}
+                            onChange={(e) => setValue(key, e.target.checked)}
+                          />
+                          <span className="switch-slider" />
+                        </label>
+                      ) : f.type === "enum" ? (
+                        <select
+                          value={String(val ?? "")}
+                          onChange={(e) => setValue(key, e.target.value)}
+                        >
+                          {(f.choices || []).map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                      ) : f.type === "color" ? (
+                        <ColorSwatch
+                          value={
+                            HEX_RE.test(String(val || "")) ? String(val) : "#000000"
+                          }
+                          onChange={(v) => setValue(key, v)}
+                        />
+                      ) : (
+                        <input
+                          type="number"
+                          value={Number(val ?? 0)}
+                          min={f.min}
+                          max={f.max}
+                          step={f.step}
+                          onChange={(e) => setValue(key, Number(e.target.value))}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
+
+          <TuiPreview prefs={prefs} />
 
           <div className="settings-actions">
             <button className="btn" onClick={save} disabled={!dirty}>
@@ -187,8 +219,186 @@ export default function SettingsPage() {
             </button>
             <span className={msgKind === "err" ? "settings-msg err" : "settings-msg ok"}>{msg}</span>
           </div>
-        </>
+        </div>
       )}
+    </div>
+  );
+}
+
+// 原生取色器藏在圆角色块下面，旁边展示 hex 值
+function ColorSwatch({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <span className="color-swatch">
+      <span className="color-chip" style={{ ["--swatch" as any]: value }} />
+      <span className="color-hex">{value}</span>
+      <input
+        type="color"
+        value={value}
+        onChange={(e) => onChange(e.target.value.toLowerCase())}
+        aria-label="选择颜色"
+      />
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TuiPreview — 按 agent/tui.py 的右栏渲染规则模拟的实时预览。
+// 颜色/开关/对齐绑定当前草稿值（未保存也生效）；右栏宽度按
+// min(rail_max, 终端列数 × rail_ratio) 换算，模拟 110 列终端。
+// ---------------------------------------------------------------------------
+
+const TERM_COLS = 110;
+const CELL_RATIO = 1 / TERM_COLS; // 1 列占屏宽比例
+
+function num(prefs: Record<string, unknown>, key: string): number {
+  const v = Number(prefs[key] ?? DEFAULTS[key]);
+  return Number.isFinite(v) ? v : (DEFAULTS[key] as number);
+}
+
+function bool(prefs: Record<string, unknown>, key: string): boolean {
+  if (prefs[key] === undefined) return DEFAULTS[key] as boolean;
+  return Boolean(prefs[key]);
+}
+
+function color(prefs: Record<string, unknown>, key: string): string {
+  const v = String(prefs[key] ?? "");
+  return HEX_RE.test(v) ? v : (DEFAULTS[key] as string);
+}
+
+function TuiPreview({ prefs }: { prefs: Record<string, unknown> }) {
+  const ratio = Math.min(0.55, Math.max(0.22, num(prefs, "rail_ratio")));
+  const railMax = Math.round(
+    Math.min(96, Math.max(40, num(prefs, "rail_max")))
+  );
+  const railCols = Math.min(railMax, Math.round(TERM_COLS * ratio));
+  const alignRight = String(prefs.user_align ?? DEFAULTS.user_align) === "right";
+
+  const style = {
+    "--c-accent": color(prefs, "color_accent"),
+    "--c-good": color(prefs, "color_good"),
+    "--c-bad": color(prefs, "color_bad"),
+    "--c-warn": color(prefs, "color_warn"),
+    "--c-tool": color(prefs, "color_tool"),
+    "--c-dim": color(prefs, "color_dim"),
+  } as CSSProperties;
+
+  const railStyle = { width: `${(railCols * CELL_RATIO * 100).toFixed(2)}%` } as CSSProperties;
+
+  return (
+    <div className="tui-preview">
+      <div className="tui-frame">
+        <div className="tui-titlebar">
+          <span>mbridge — 全屏 TUI</span>
+          <span>{TERM_COLS} 列模拟 · 右栏 {railCols} 列</span>
+        </div>
+        <div className="tui-screen" style={style}>
+          <div className="tui-body">
+            <div className="tui-transcript">
+              <div className={`tui-user-line ${alignRight ? "is-right" : ""}`}>
+                <span className="tui-user-bar">▎</span>
+                <span>帮我修复缓存剪裁的越界问题</span>
+              </div>
+              {bool(prefs, "stream_thinking") && (
+                <div className="tui-think">
+                  思考中：先读 raw_logger 的剪裁条件，确认 checkpoint 边界…
+                </div>
+              )}
+              <div className="tui-tool-line">
+                <span className="mark" style={{ color: "var(--c-good)" }}>+</span>
+                <span className="name">read</span>
+                <span className="arg">modelbridge/raw_logger.py</span>
+              </div>
+              <div className="tui-tool-line">
+                <span className="mark" style={{ color: "var(--c-bad)" }}>!</span>
+                <span className="name">grep</span>
+                <span className="arg">无匹配：checkpoint_ts</span>
+              </div>
+              <div className="tui-ai">
+                找到问题了：<span className="hl">剪裁窗口</span>用了过期的 checkpoint
+                行号，回滚时会把未持久化的行一起丢掉。修复方案分三步…
+              </div>
+            </div>
+
+            <div className="tui-rail" style={railStyle}>
+              {bool(prefs, "show_status") && (
+                <>
+                  <div className="tui-h">状态</div>
+                  <div className="tui-rule" />
+                  <div className="tui-kv">
+                    <span className="k">目录</span>
+                    <span className="v">D:\modelbridge</span>
+                  </div>
+                  <div className="tui-kv">
+                    <span className="k">模型</span>
+                    <span className="v" style={{ color: "var(--c-accent)", fontWeight: 600 }}>
+                      deepseek-v4-pro
+                    </span>
+                  </div>
+                  <div className="tui-kv">
+                    <span className="k">上下文</span>
+                    <span className="v" style={{ color: "var(--c-warn)" }}>68% 680k/1.0M</span>
+                  </div>
+                  <div className="tui-kv">
+                    <span className="k">缓存</span>
+                    <span className="v" style={{ color: "var(--c-good)" }}>95.5%</span>
+                  </div>
+                </>
+              )}
+              {bool(prefs, "show_tasks") && (
+                <>
+                  <div className="tui-h">任务</div>
+                  <div className="tui-rule" />
+                  <div className="tui-li" style={{ color: "var(--c-good)" }}>[x] 复现越界</div>
+                  <div className="tui-li" style={{ color: "var(--c-accent)" }}>
+                    {"[>]"} 修 checkpoint 行号
+                  </div>
+                  <div className="tui-li" style={{ color: "var(--c-dim)" }}>[ ] 回归 703 项测试</div>
+                </>
+              )}
+              {bool(prefs, "show_bg") && (
+                <>
+                  <div className="tui-h">后台</div>
+                  <div className="tui-rule" />
+                  <div className="tui-li" style={{ color: "var(--c-good)" }}>✓ pytest tests/ 通过</div>
+                  <div className="tui-li" style={{ color: "var(--c-dim)" }}>⟳ 文档索引构建中</div>
+                </>
+              )}
+              {bool(prefs, "show_tools") && (
+                <>
+                  <div className="tui-h">本轮</div>
+                  <div className="tui-rule" />
+                  <div className="tui-li">
+                    <span style={{ color: "var(--c-good)" }}>+ </span>
+                    <span style={{ color: "var(--c-tool)", fontWeight: 600 }}>read</span>
+                    <span style={{ color: "var(--c-dim)" }}> raw_logger.py</span>
+                  </div>
+                  <div className="tui-li">
+                    <span style={{ color: "var(--c-good)" }}>+ </span>
+                    <span style={{ color: "var(--c-tool)", fontWeight: 600 }}>str_replace</span>
+                    <span style={{ color: "var(--c-dim)" }}> tui.py</span>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+          {bool(prefs, "footer_hint") && (
+            <div className="tui-foot">
+              滚轮逐行 · PgUp/PgDn 翻页 · Ctrl-C 中断
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="tui-caption">
+        实时预览（未保存也生效）。按 <span className="mono">{TERM_COLS}</span> 列终端模拟，
+        右栏宽 = min(<span className="mono">{railMax}</span> 列上限, 全宽 ×{" "}
+        <span className="mono">{ratio.toFixed(2)}</span>)。
+      </div>
     </div>
   );
 }

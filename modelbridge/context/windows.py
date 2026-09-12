@@ -30,8 +30,8 @@ from ..schemas import ChatMessage, text_of
 # Tokens. **Per-provider values, sourced from each vendor's docs as of 2026-07.**
 # Cross-checked via ModelScope API where available; see per-entry comments.
 #
-# DeepSeek (V4 era; V3 + chat/reasoner EOL'd 2026-07-24, removed)
-#   - V4 family: 1M
+# DeepSeek (V4/V4.1 era; V3 + chat/reasoner EOL'd 2026-07-24, removed)
+#   - V4 family: 1M; V4.1-Flash (deepseek-flash, 2026-09-10): 1M / 384K out
 # 腾讯混元
 #   - Hy3 (GA) / Hy3 preview: 256K
 # 字节豆包 (火山方舟)
@@ -64,10 +64,11 @@ from ..schemas import ChatMessage, text_of
 #   - minimax-m3: 1M (2026-06, native multimodal)
 #   - minimax-m2.7 / m2.5: 200K (官方 text-generation 页)
 DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
-    # DeepSeek (V4 era)
+    # DeepSeek (V4/V4.1 era)
+    "deepseek-flash":          1_000_000,    # = DeepSeek-V4.1-Flash (1M / 384K out)
     "deepseek-v4":             1_000_000,
     "deepseek-v4-pro":         1_000_000,
-    "deepseek-v4-flash":       1_000_000,
+    "deepseek-v4-flash":       1_000_000,    # 旧名仍可调用，由 V4.1 Flash 承接
 
     # 腾讯混元
     "hy3":                     262_144,    # GA 正式版 (2026-08)

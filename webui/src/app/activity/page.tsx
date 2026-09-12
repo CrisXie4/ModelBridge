@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Pulse, FolderOpen, ListChecks } from "@phosphor-icons/react";
 import { api, SessionLive } from "@/lib/api";
 
 const POLL_MS = 2000;
@@ -142,7 +141,7 @@ function StatusHeader({ data }: { data: SessionLive }) {
       </div>
       {data.cwd && (
         <div className="cwd-line mono" title={data.cwd}>
-          <FolderOpen size={12} style={{ verticalAlign: -1.5 }} /> {data.cwd}
+          <i className="ph ph-folder-open" style={{ verticalAlign: -1.5 }} /> {data.cwd}
         </div>
       )}
     </div>
@@ -208,7 +207,7 @@ function TodoHeader({
   return (
     <div className="todo-head">
       <h2 className="card-title" style={{ margin: 0 }}>
-        <ListChecks size={14} className="icon" /> 待办计划
+        <i className="ph ph-list-checks icon" /> 待办计划
       </h2>
       {total > 0 ? (
         <div className="todo-meta">
@@ -231,7 +230,7 @@ function TodoList({ todos }: { todos: SessionLive["todos"] }) {
     return (
       <div className="empty">
         <div className="empty-icon">
-          <ListChecks size={20} />
+          <i className="ph ph-list-checks" />
         </div>
         <div className="empty-title">AI 还没有写下计划</div>
         <div className="empty-hint">
@@ -282,7 +281,7 @@ function OfflineCard() {
     <div className="card">
       <div className="empty">
         <div className="empty-icon">
-          <Pulse size={20} />
+          <i className="ph ph-pulse" />
         </div>
         <div className="empty-title">没有正在运行的 REPL</div>
         <div className="empty-hint">
@@ -318,15 +317,15 @@ const STATUS_META: Record<
   string,
   { label: string; color: string }
 > = {
-  idle: { label: "空闲", color: "#46c07a" },
-  working: { label: "处理中", color: "#e0b45c" },
-  offline: { label: "离线", color: "#6d7a90" },
+  idle: { label: "空闲", color: "#43c78f" },
+  working: { label: "处理中", color: "#e2b755" },
+  offline: { label: "离线", color: "#68738a" },
 };
 
 const GRADE_COLOR: Record<string, string> = {
-  ok: "#46c07a",
-  warn: "#e0b45c",
-  critical: "#f0565c",
+  ok: "#43c78f",
+  warn: "#e2b755",
+  critical: "#f06a64",
 };
 
 const TODO_MARK: Record<string, string> = {

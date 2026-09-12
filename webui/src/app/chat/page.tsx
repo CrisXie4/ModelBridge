@@ -1,7 +1,6 @@
 "use client";
 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { ChatCircleDots, PaperPlaneRight, Play, Trash } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 
 type Ev = { seq: number; type: string; [k: string]: unknown };
@@ -299,7 +298,7 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="page">
+    <div className="page page--fill">
       <div className="page-head">
         <div>
           <h1 className="page-title">AI 对话</h1>
@@ -317,7 +316,7 @@ export default function ChatPage() {
             ))}
           </select>
           <button className="btn btn-secondary" onClick={() => void newChat()}>
-            <Play size={14} /> 新会话
+            <i className="ph ph-play" /> 新会话
           </button>
         </div>
       </div>
@@ -333,7 +332,7 @@ export default function ChatPage() {
               className={`chat-item ${c.id === activeId ? "active" : ""}`}
               onClick={() => setActiveId(c.id)}
             >
-              <ChatCircleDots size={15} />
+              <i className="ph ph-chat-circle-dots" />
               <span className="chat-item-title">{c.title}</span>
               <button
                 className="chat-del"
@@ -343,7 +342,7 @@ export default function ChatPage() {
                   void removeChat(c.id);
                 }}
               >
-                <Trash size={13} />
+                <i className="ph ph-trash" />
               </button>
             </div>
           ))}
@@ -355,7 +354,7 @@ export default function ChatPage() {
             {!activeId ? (
               <div className="empty">
                 <div className="empty-icon">
-                  <ChatCircleDots size={20} />
+                  <i className="ph ph-chat-circle-dots" />
                 </div>
                 <div className="empty-title">选择或新建一个会话</div>
                 <div className="empty-hint">消息直接发给本机 agent，支持读写文件与 shell。</div>
@@ -420,7 +419,7 @@ export default function ChatPage() {
               }}
             />
             <button className="btn" disabled={!activeId || busy || !input.trim()} onClick={() => void send()}>
-              <PaperPlaneRight size={15} /> 发送
+              <i className="ph ph-paper-plane-right" /> 发送
             </button>
           </div>
         </section>

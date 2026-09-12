@@ -2,16 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import {
-  PlugsConnected,
-  Sparkle,
-  ShieldCheck,
-  Path,
-  NotePencil,
-  ArrowRight,
-  Cube,
-  Faders,
-} from "@phosphor-icons/react";
 import { api, ModelOut, SkillOut, DoctorCheck, ConfigOut } from "@/lib/api";
 
 export default function HomePage() {
@@ -52,10 +42,10 @@ export default function HomePage() {
         </div>
         <div className="toolbar">
           <Link href="/models" className="btn">
-            <PlugsConnected size={14} weight="bold" /> 添加渠道
+            <i className="ph ph-plus" /> 添加渠道
           </Link>
           <Link href="/doctor" className="btn btn-secondary">
-            <ShieldCheck size={14} /> 运行自检
+            <i className="ph ph-shield-check" /> 运行自检
           </Link>
         </div>
       </div>
@@ -74,7 +64,7 @@ export default function HomePage() {
               style={{ textDecoration: "none" }}
             >
               <span className="metric-label">
-                <PlugsConnected size={14} /> 已配置模型
+                <i className="ph ph-plugs-connected" /> 已配置模型
               </span>
               <span className="metric-value">{models.length}</span>
               <span className="metric-hint">
@@ -89,7 +79,7 @@ export default function HomePage() {
               style={{ textDecoration: "none" }}
             >
               <span className="metric-label">
-                <Sparkle size={14} /> 可用 Skill
+                <i className="ph ph-sparkle" /> 可用 Skill
               </span>
               <span className="metric-value">{skills.length}</span>
               <span className="metric-hint">
@@ -102,7 +92,7 @@ export default function HomePage() {
               style={{ textDecoration: "none" }}
             >
               <span className="metric-label">
-                <ShieldCheck size={14} /> 自检通过
+                <i className="ph ph-shield-check" /> 自检通过
               </span>
               <span
                 className={
@@ -124,7 +114,7 @@ export default function HomePage() {
                 style={{ textDecoration: "none" }}
               >
                 <span className="metric-label">
-                  <Path size={14} /> 路由绑定
+                  <i className="ph ph-path" /> 路由绑定
                 </span>
                 <span className="metric-value">{boundLevels ?? 0}/5</span>
                 <span className="metric-hint">
@@ -137,7 +127,7 @@ export default function HomePage() {
           <div className="home-grid">
             <div className="card">
               <h2 className="card-title">
-                <Faders size={14} className="icon" /> 路由现状
+                <i className="ph ph-faders icon" /> 路由现状
               </h2>
               {cfg ? (
                 <div className="route-snapshot">
@@ -173,7 +163,7 @@ export default function HomePage() {
 
             <div className="card">
               <h2 className="card-title">
-                <Cube size={14} className="icon" /> 快捷入口
+                <i className="ph ph-cube icon" /> 快捷入口
               </h2>
               <div className="quick-links">
                 <QuickLink
@@ -220,7 +210,7 @@ function QuickLink({
         <div className="quick-link-title">{title}</div>
         <div className="quick-link-desc">{desc}</div>
       </div>
-      <ArrowRight size={15} className="quick-link-arrow" />
+      <i className="ph ph-arrow-right quick-link-arrow" />
     </Link>
   );
 }

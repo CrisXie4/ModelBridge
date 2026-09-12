@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Sparkle, X, Cube } from "@phosphor-icons/react";
 import { api, SkillOut } from "@/lib/api";
 
 export default function SkillsPage() {
@@ -41,8 +40,7 @@ export default function SkillsPage() {
         <div>
           <h1 className="page-title">Skills</h1>
           <p className="page-sub">
-            AI 会话中可加载的技能指令。内置 skill 随包发布、免确认；用户 skill 可用{" "}
-            <code>mbridge skill add</code> 安装。
+            AI 会话中可加载的技能指令。内置 skill 随包发布、免确认；用户 skill 可用 <code>mbridge skill add</code> 安装。
           </p>
         </div>
       </div>
@@ -56,7 +54,7 @@ export default function SkillsPage() {
         <div className="card">
           <div className="empty">
             <div className="empty-icon">
-              <Sparkle size={20} />
+              <i className="ph ph-sparkle" />
             </div>
             <div className="empty-title">还没有安装任何 Skill</div>
             <div className="empty-hint">
@@ -79,7 +77,7 @@ export default function SkillsPage() {
                 }
               >
                 <div className="skill-icon">
-                  <Cube size={17} />
+                  <i className="ph ph-cube" />
                 </div>
                 <div className="skill-info">
                   <div className="skill-name-row">
@@ -90,7 +88,7 @@ export default function SkillsPage() {
                 </div>
                 <label
                   className="switch"
-                  title={off ? "已禁用 — 点击启用" : "启用中 — 点击禁用"}
+                  title={off ? "已禁用，点击启用" : "启用中，点击禁用"}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <input
@@ -121,7 +119,7 @@ export default function SkillsPage() {
                 className="btn btn-sm btn-ghost modal-close"
                 onClick={() => setActive(null)}
               >
-                <X size={15} />
+                <i className="ph ph-x" />
               </button>
             </div>
             <p className="muted" style={{ margin: "0 0 14px", fontSize: 13 }}>
