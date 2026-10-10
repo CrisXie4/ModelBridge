@@ -386,6 +386,48 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+@app.command(
+    "resume",
+    help="从会话 JSON 恢复历史并进入 REPL (U12)。用法: mbridge resume <路径>",
+)
+def cmd_resume(
+    path: Path = typer.Argument(
+        ..., help="会话 JSON 文件 (~/.modelbridge/sessions/<时间戳>_<label>.json)。",
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--model", "-m",
+        help="模型名 (默认用恢复文件里记录的 model，缺省回退 default_model)。",
+    ),
+    cwd: Optional[Path] = typer.Option(
+        None, "--cwd", help="agent 的工作目录 (默认当前目录)。"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="自动同意全部写操作。"),
+    allow_bash: bool = typer.Option(
+        True, "--allow-bash/--no-allow-bash",
+        help="启用 run_bash 工具 (与主命令一致；恢复会话同样可关)。",
+    ),
+    timeout: float = typer.Option(120.0, "--timeout", help="每次模型请求的超时秒数。"),
+) -> None:
+    from .agent.session import load_session
+
+    loaded = load_session(path)
+    if loaded is None:
+        err_console.print(f"[red]会话文件无法读取或已损坏: {path}[/red]")
+        raise typer.Exit(code=2)
+    _run_repl(
+        model=model or (loaded.model_name or None),
+        cwd=cwd,
+        yes=yes,
+        allow_bash=allow_bash,
+        max_iters=None,
+        save_session=True,
+        system=None,
+        timeout=timeout,
+        resume_path=path,
+        resume_session=loaded,
+    )
+
+
 @app.callback()
 def _root(
     ctx: typer.Context,
@@ -452,6 +494,8 @@ def _run_repl(
     system: Optional[str],
     timeout: float,
     minimal: bool = False,
+    resume_path: Path | str | None = None,
+    resume_session: Session | None = None,
 ) -> None:
     # 1. Resolve model
     try:
@@ -599,7 +643,34 @@ def _run_repl(
         model_is_video=bool(getattr(getattr(_repl_entry, "capabilities", None), "video", False)),
     )
     _approval_ctx_holder["ctx"] = agent_ctx
-    registry = build_default_registry(include_bash=allow_bash, minimal=minimal)
+
+    # ── 后台任务 + 右侧状态面板 ──────────────────────────────────────────
+    # bg_manager: 长命令后台执行；完成通知进队列，由 REPL 主线程在轮末/空回车
+    # 时取出——追加为 user 消息并唤醒 AI 继续处理（会话只在主线程变更）。
+    # 需在 registry 之前创建：run_bash 超时移交后台（U9）要把它注入工具。
+    import queue as _queue
+
+    _bg_notifications: "_queue.Queue[str]" = _queue.Queue()
+
+    def _on_bg_complete(notice_text: str, task) -> None:
+        _bg_notifications.put(notice_text)
+        try:
+            head = notice_text.splitlines()[2] if len(notice_text.splitlines()) > 2 else ""
+            console.print(f"[dim][后台] 任务完成 {head}（AI 将在下一步自动处理；直接回车可立即唤醒）[/dim]")
+        except Exception:
+            pass
+
+    from .agent.tools.background_tool import BackgroundTaskManager
+    from .agent.tools.background_task_tool import BackgroundTaskTool
+
+    bg_manager = BackgroundTaskManager(on_complete=_on_bg_complete)
+
+    registry = build_default_registry(
+        include_bash=allow_bash, minimal=minimal, bash_background=bg_manager,
+    )
+    # 极简模式：后台任务工具不注册（manager 保留，回车唤醒通道照常）。
+    if not minimal:
+        registry.register(BackgroundTaskTool(bg_manager))
     # Tools with big outputs tailor their truncation hint to whether a
     # subagent tool exists to delegate to (registered a few lines below in
     # non-minimal mode).
@@ -738,27 +809,8 @@ def _run_repl(
     todo_store._on_change = live_writer.flush
 
     # ── 后台任务 + 右侧状态面板 ──────────────────────────────────────────
-    # bg_manager: 长命令后台执行；完成通知进队列，由 REPL 主线程在轮末/空回车
-    # 时取出——追加为 user 消息并唤醒 AI 继续处理（会话只在主线程变更）。
-    import queue as _queue
-
-    _bg_notifications: "_queue.Queue[str]" = _queue.Queue()
-
-    def _on_bg_complete(notice_text: str, task) -> None:
-        _bg_notifications.put(notice_text)
-        try:
-            head = notice_text.splitlines()[2] if len(notice_text.splitlines()) > 2 else ""
-            console.print(f"[dim][后台] 任务完成 {head}（AI 将在下一步自动处理；直接回车可立即唤醒）[/dim]")
-        except Exception:
-            pass
-
-    from .agent.tools.background_tool import BackgroundTaskManager
-    from .agent.tools.background_task_tool import BackgroundTaskTool
-
-    bg_manager = BackgroundTaskManager(on_complete=_on_bg_complete)
-    # 极简模式：后台任务工具不注册（manager 保留，回车唤醒通道照常）。
-    if not minimal:
-        registry.register(BackgroundTaskTool(bg_manager))
+    # bg_manager / _bg_notifications / _on_bg_complete 已在 registry 创建前
+    # 定义（run_bash 超时移交需要）；这里只挂接右侧状态面板。
 
     def _pending_wake() -> bool:
         """Drain one background notification into the session; True = wake."""
@@ -854,6 +906,21 @@ def _run_repl(
         # honors a key at all.
         "cache_key": derive_cache_key(repl_prefix_hash) if repl_prefix_hash else None,
     }
+
+    # U12: 会话恢复 —— system 前缀用刚构建的当前前缀（本目录本配置的最新
+    # 值），其后的对话历史从已加载的 Session 逐条还原（cmd_resume 只读一次
+    # 盘，直接传入 loaded）。元数据以新环境键优先、旧值补充。
+    if resume_session is not None:
+        session.messages.extend(
+            m for m in resume_session.messages if m.role != "system"
+        )
+        for k, v in resume_session.metadata.items():
+            session.metadata.setdefault(k, v)
+        _label = Path(resume_path).name if resume_path else resume_session.model_name
+        console.print(
+            f"[green]✓ 已恢复会话 {_label} —— "
+            f"{sum(1 for m in session.messages if m.role != 'system')} 条历史消息[/green]"
+        )
 
     # 4. Banner
     cache_line = f"summary   : {repl_summary_reason or '(none)'}"
@@ -1001,9 +1068,24 @@ def _run_repl(
                 except Exception:
                     return []
 
+            def _list_custom_commands() -> list[tuple[str, str]]:
+                # E6: 自定义 slash 命令补全（描述 + argument-hint）。
+                try:
+                    from .agent.commands import discover_custom_commands
+
+                    return [
+                        (c.name, f"{c.description} {c.argument_hint}".strip())
+                        for c in discover_custom_commands(cwd_resolved)
+                    ]
+                except Exception:
+                    return []
+
             _completer = merge_completers(
                 [
-                    SlashCommandCompleter(model_names_provider=_list_model_names),
+                    SlashCommandCompleter(
+                        model_names_provider=_list_model_names,
+                        custom_commands_provider=_list_custom_commands,
+                    ),
                     AtFileCompleter(_get_file_index),
                 ],
                 deduplicate=True,
@@ -1781,7 +1863,9 @@ def _default_system_prompt(*, allow_bash: bool) -> str:
     or any other value that varies across sessions. Such content would
     invalidate the provider prefix-cache for every call. ``cwd`` is exposed
     to tools via :class:`AgentContext` and lives in ``session.metadata`` for
-    debugging, not in the messages.
+    debugging, not in the messages. （例外：cwd/platform/shell 这类"同项目
+    同机器字节不变"的常量由 prompt.builder._env_info_block 以常量块形式进
+    project_summary 段——它们不随会话变化，不影响前缀缓存命中。）
     """
     bash_line = "" if not allow_bash else (
         "- run_bash(command): 在 cwd 中执行 shell 命令。默认 30 秒超时。\n"

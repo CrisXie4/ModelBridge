@@ -157,11 +157,15 @@ class ProjectSummary:
     def to_markdown(self) -> str:
         """Render as a Markdown block suitable for ``project_summary``.
 
-        IMPORTANT: this output is fed into the **stable prompt prefix**. It
-        must NOT include the absolute path, the user's home directory, a
-        timestamp, or anything else that varies across machines or runs —
-        such content would invalidate every provider prefix-cache hit.
-        Use ``project_name`` (a portable label) instead of ``project_path``.
+        IMPORTANT: this output is fed into the **stable prompt prefix**. The
+        scan-derived content here must stay machine-independent — no absolute
+        path, home directory, or timestamp — so the summary cache and the
+        provider prefix-cache stay valid. Use ``project_name`` (a portable
+        label) instead of ``project_path``.
+
+        例外：常量环境披露（cwd/platform/shell，同一项目+同一台机器内字节
+        不变）由 ``prompt.builder._env_info_block`` 在装配时追加到本段之后，
+        不在本方法的输出里。
         """
         parts: list[str] = []
         parts.append(f"## {self.project_name}")
@@ -239,6 +243,28 @@ class ProjectSummary:
             total_files=int(d.get("total_files", 0) or 0),
             file_tree_hash=str(d.get("file_tree_hash", "")),
         )
+
+
+# ---------------------------------------------------------------------------
+# Git 仓库根探测（U11：规则文件向上遍历的边界）
+# ---------------------------------------------------------------------------
+
+def find_git_root(start: Path | str) -> Path | None:
+    """从 ``start`` 向上找最近的 git 仓库根（含 ``.git`` 目录**或文件**——
+    worktree/submodule 的 ``.git`` 是文件）；找不到返回 ``None``。
+
+    规则加载（prompt.rules_loader）用它作为向上遍历的上界：只在同一仓库
+    内收集 AGENT.md / AGENTS.md 等，绝不越出仓库边界。到达文件系统根仍无
+    ``.git`` → 返回 None（调用方按单层行为处理）。
+    """
+    current = Path(start).expanduser().resolve()
+    while True:
+        if (current / ".git").exists():
+            return current
+        parent = current.parent
+        if parent == current:  # 文件系统根
+            return None
+        current = parent
 
 
 # ---------------------------------------------------------------------------

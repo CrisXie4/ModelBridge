@@ -11,10 +11,17 @@ window — they return a clear "truncated" notice when that happens.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 from ... import images
+from ...editor.line_endings import (
+    apply_line_endings,
+    detect_line_endings,
+    normalize_to_lf,
+    read_text_raw,
+)
 from ...schemas import ChatMessage
 from ..context import AgentContext
 from ..security import PathDenied
@@ -67,6 +74,19 @@ class ReadFileTool(Tool):
         if resolved.is_dir():
             return self.err(f"{resolved} 是目录，请使用 list_dir。")
 
+        # U8 账本：同一文件与上次读取时 (mtime, size) 完全一致 → 返回短
+        # stub 而不是重发全文（重复读取是上下文的大头浪费）。stub 指回上次
+        # 结果，模型无需重复内容即可继续。
+        state = AgentContext.file_fingerprint(resolved)
+        if state is not None and ctx.file_read_state(resolved) == state:
+            return self.ok(
+                f"[{resolved} 自上次 read_file 后未变化 (mtime/size 相同) — "
+                "请直接使用上次读取的内容，无需重复获取全文。]",
+                structured={
+                    "path": str(resolved), "unchanged": True, "bytes": state[1],
+                },
+            )
+
         # Images: read them as *pictures*, not garbled text. A vision model
         # gets the image as an image block (injected as a follow-up user
         # message, since role=tool can't carry images); a non-vision model
@@ -82,6 +102,9 @@ class ReadFileTool(Tool):
             data = resolved.read_bytes()
         except OSError as e:
             return self.err(f"读取失败: {e}")
+
+        # 文本读取成功 → 记账（图片/视频走独立消费路径，不记账）。
+        ctx.note_file_read(resolved)
 
         try:
             text = data.decode("utf-8")
@@ -257,6 +280,12 @@ class WriteFileTool(Tool):
             return self.err(str(e))
 
         exists = resolved.exists()
+        # U8 账本防陈旧（仅覆盖已有文件时）：读过但已被外部改动 → 拒绝覆盖。
+        if exists and ctx.is_externally_modified(resolved):
+            return self.err(
+                "文件在最近一次 read_file 之后已被外部修改（大小/mtime 变化）。",
+                hint="先重新 read_file 获取最新内容，再整体覆盖。",
+            )
         # Build a small diff preview for the approval prompt.
         preview = _preview_write(resolved, content) if exists else f"[新建文件] {resolved}"
 
@@ -272,9 +301,23 @@ class WriteFileTool(Tool):
 
         try:
             resolved.parent.mkdir(parents=True, exist_ok=True)
-            resolved.write_text(content, encoding="utf-8")
+            # 行尾保真：覆盖已有文件时沿用其原行尾（多数派判定），新文件按
+            # 模型给的内容原样写。所有写盘都 newline=""——默认 write_text
+            # 会把 \n 翻译成 os.linesep，在 Windows 上把 LF-only 文件整体
+            # 改写成 CRLF（制造全文件 git diff 噪声）。
+            data = content
+            if exists:
+                try:
+                    eol = detect_line_endings(read_text_raw(resolved))
+                except (OSError, UnicodeDecodeError):
+                    eol = None  # 读不出原行尾（不可读/非 UTF-8）→ 按原样写
+                if eol is not None:
+                    data = apply_line_endings(content, eol)
+            resolved.write_text(data, encoding="utf-8", newline="")
         except OSError as e:
             return self.err(f"写入失败: {e}")
+        # 写入成功 → 刷新账本：自己的写入不算“外部改动”，后续编辑照常。
+        ctx.note_file_read(resolved)
 
         return self.ok(
             f"已{'覆盖' if exists else '创建'} {resolved} ({len(content)} 字符)",
@@ -436,15 +479,189 @@ def _preview_write(resolved: Path, new_content: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# str_replace
+# str_replace —— 容错匹配阶梯（U7）
 # ---------------------------------------------------------------------------
+
+class _AmbiguousMatch(Exception):
+    """某一级匹配到 ≥2 处 —— 不再降级，直接判歧义（对齐 ZCode findEditMatch）。"""
+
+    def __init__(self, strategy: str, count: int) -> None:
+        super().__init__(f"{strategy}: {count} matches")
+        self.strategy = strategy
+        self.count = count
+
+
+_CURLY_DOUBLE = ("“", "”")
+_CURLY_SINGLE = ("‘", "’")
+_UNESCAPE_MAP = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "'": "'", "`": "`", "\\": "\\", "$": "$"}
+
+
+def _normalize_quotes(v: str) -> str:
+    """弯引号 → 直引号（长度不变，索引可 1:1 映射回原文）。"""
+    return (
+        v.replace("“", '"').replace("”", '"')
+        .replace("‘", "'").replace("’", "'")
+    )
+
+
+def _unescape_visible(v: str) -> str:
+    r"""\n \t \r \" \' \` \\ \$ 等可见转义 → 真实字符（对齐 ZCode
+    unescapeVisibleCharacters）—— 模型把换行写成字面 \n 时也能命中。"""
+    return re.sub(
+        r"\\([ntr\"'`\\$])",
+        lambda m: _UNESCAPE_MAP[m.group(1)],
+        v,
+    )
+
+
+def _find_spans(haystack: str, needle: str) -> list[tuple[int, int]]:
+    """needle 在 haystack 中的所有出现区间。"""
+    if not needle:
+        return []
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    while True:
+        i = haystack.find(needle, pos)
+        if i < 0:
+            break
+        spans.append((i, i + len(needle)))
+        pos = i + max(len(needle), 1)
+    return spans
+
+
+def _needle_lines(old_lf: str) -> list[str]:
+    lines = old_lf.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()  # 尾随换行不参与整行匹配
+    return lines
+
+
+def _line_trimmed_candidates(text: str, old_lf: str) -> list[str]:
+    """整行 trim 匹配：行数相同、逐行 strip() 相等的块（返回实际块文本）。"""
+    lines = text.split("\n")
+    needle = [line.strip() for line in _needle_lines(old_lf)]
+    n = len(needle)
+    if n == 0:
+        return []
+    out: list[str] = []
+    for i in range(0, len(lines) - n + 1):
+        block = lines[i:i + n]
+        if all(block[j].strip() == needle[j] for j in range(n)):
+            out.append("\n".join(block))
+    return out
+
+
+def _strip_common_indent(lines: list[str]) -> list[str]:
+    non_empty = [line for line in lines if line.strip()]
+    if not non_empty:
+        return list(lines)
+    cut = min(len(line) - len(line.lstrip(" \t")) for line in non_empty)
+    return [line if not line.strip() else line[cut:] for line in lines]
+
+
+def _indent_flexible_candidates(text: str, old_lf: str) -> list[str]:
+    """缩进宽松匹配：剥掉各自行首公共缩进后逐行相等的块（≥2 行才启用）。"""
+    lines = text.split("\n")
+    needle = _strip_common_indent(_needle_lines(old_lf))
+    n = len(needle)
+    if n < 2:
+        return []
+    target = "\n".join(needle)
+    out: list[str] = []
+    for i in range(0, len(lines) - n + 1):
+        block = lines[i:i + n]
+        if "\n".join(_strip_common_indent(block)) == target:
+            out.append("\n".join(block))
+    return out
+
+
+def _apply_curly_style(actual_old: str, new_text: str) -> str:
+    """弯引号风格保真（仅在"纯弯"片段上生效）：实际命中文本含弯引号且**不含**
+    对应直引号时，把 new_text 里的直引号映射回弯引号——双引号按开/闭交替，
+    单引号字母夹注（don't → don’t）优先、其余交替。混排片段（同种引号直弯
+    并存）不做映射，new_text 原样写回——风格归属不明时以模型字面为准。"""
+    has_curly_d = any(c in actual_old for c in _CURLY_DOUBLE)
+    has_straight_d = '"' in actual_old
+    has_curly_s = any(c in actual_old for c in _CURLY_SINGLE)
+    has_straight_s = "'" in actual_old
+    chars = list(new_text)
+    d_toggle = True   # True → 下一个 " 是开引号
+    s_toggle = True
+    for i, ch in enumerate(chars):
+        if ch == '"' and has_curly_d and not has_straight_d:
+            chars[i] = "“" if d_toggle else "”"
+            d_toggle = not d_toggle
+        elif ch == "'" and has_curly_s and not has_straight_s:
+            nxt = chars[i + 1] if i + 1 < len(chars) else ""
+            prev = chars[i - 1] if i else ""
+            if prev.isalpha() and nxt.isalpha():
+                chars[i] = "’"  # don't → don’t 的字母夹注
+            else:
+                chars[i] = "‘" if s_toggle else "’"
+                s_toggle = not s_toggle
+    return "".join(chars)
+
+
+def _match_ladder(
+    text: str, old_lf: str, new_lf: str,
+) -> tuple[str, str, str] | None:
+    """exact 优先的容错匹配阶梯（对齐 ZCode edit-matchers 的 strategies）。
+
+    返回 ``(级别, 实际命中文本, 实际替换文本)``；全部未命中返回 None。
+    每级命中 ≥2 处抛 :class:`_AmbiguousMatch`（判歧义，不再降级）。
+    exact 级命中即原样返回 —— 行为与纯精确匹配逐字节一致，阶梯只是
+    纯加宽成功面：模型抄写有出入（弯引号、转义、缩进）时降级命中，
+    替换按"实际命中的文本"写回。
+    """
+    # 1) exact
+    spans = _find_spans(text, old_lf)
+    if len(spans) > 1:
+        raise _AmbiguousMatch("exact", len(spans))
+    if len(spans) == 1:
+        return ("exact", old_lf, new_lf)
+
+    # 2) 弯引号归一（长度不变，span 1:1 映射回原文）
+    q_spans = _find_spans(_normalize_quotes(text), _normalize_quotes(old_lf))
+    if len(q_spans) > 1:
+        raise _AmbiguousMatch("quote_normalized", len(q_spans))
+    if q_spans:
+        s, e = q_spans[0]
+        actual = text[s:e]
+        return ("quote_normalized", actual, _apply_curly_style(actual, new_lf))
+
+    # 3) 可见转义归一（\n 等字面转义 → 真实字符；替换文本同样反转义）
+    unescaped = _unescape_visible(old_lf)
+    if unescaped != old_lf:
+        spans = _find_spans(text, unescaped)
+        if len(spans) > 1:
+            raise _AmbiguousMatch("escape_normalized", len(spans))
+        if spans:
+            return ("escape_normalized", unescaped, _unescape_visible(new_lf))
+
+    # 4) 整行 trim
+    cands = _line_trimmed_candidates(text, old_lf)
+    if len(cands) > 1:
+        raise _AmbiguousMatch("line_trimmed", len(cands))
+    if cands:
+        return ("line_trimmed", cands[0], new_lf)
+
+    # 5) 缩进宽松（≥2 行）
+    cands = _indent_flexible_candidates(text, old_lf)
+    if len(cands) > 1:
+        raise _AmbiguousMatch("indentation_flexible", len(cands))
+    if cands:
+        return ("indentation_flexible", cands[0], new_lf)
+
+    return None
+
 
 class StrReplaceTool(Tool):
     name = "str_replace"
     description = (
         "在文件中把 old_str 替换成 new_str。old_str 必须在文件中**唯一**匹配，"
         "否则会失败 — 这是 Claude Code 风格的精确编辑工具，比 write_file 安全。"
-        "需要用户确认。"
+        "精确匹配失败时按容错阶梯降级（弯引号/转义/整行 trim/缩进宽松），"
+        "每级仍强制唯一命中。需要用户确认。"
     )
 
     def json_schema(self) -> dict[str, Any]:
@@ -480,24 +697,50 @@ class StrReplaceTool(Tool):
         if not resolved.exists() or resolved.is_dir():
             return self.err(f"目标文件不存在或不是文件: {resolved}")
 
+        # U8 账本防陈旧：读过但已被外部（用户/linter）改动 → 拒绝并请重读。
+        if ctx.is_externally_modified(resolved):
+            return self.err(
+                "文件在最近一次 read_file 之后已被外部修改（大小/mtime 变化）。",
+                hint="先重新 read_file 获取最新内容，再基于新内容做替换。",
+            )
+
         try:
-            text = resolved.read_text(encoding="utf-8")
+            # 原样读入（不折叠行尾）；匹配在 LF 归一化副本上进行 —— 模型给的
+            # old_str/new_str 可能带 \n（自己构造）也可能带 \r\n（从 read_file
+            # 的原样输出复制），归一化后两种都能命中同一处。
+            raw = read_text_raw(resolved)
         except (OSError, UnicodeDecodeError) as e:
             return self.err(f"读取失败: {e}")
 
-        occurrences = text.count(old_str)
-        if occurrences == 0:
+        text = normalize_to_lf(raw)
+        old_lf = normalize_to_lf(old_str)
+        new_lf = normalize_to_lf(new_str)
+
+        # exact 优先的容错匹配阶梯（U7）：每级强制唯一命中，非 exact 级按
+        # "实际命中的文本"写回 —— old_str 只是定位器，替换不引入风格漂移。
+        try:
+            matched = _match_ladder(text, old_lf, new_lf)
+        except _AmbiguousMatch as e:
             return self.err(
-                "old_str 未在文件中找到。",
-                hint="保证 old_str 与文件中的内容完全一致 (包括缩进与换行)。",
-            )
-        if occurrences > 1:
-            return self.err(
-                f"old_str 在文件中出现 {occurrences} 次，需要唯一匹配。",
+                f"old_str 在文件中出现 {e.count} 次，需要唯一匹配"
+                f"（匹配级别：{e.strategy}）。",
                 hint="把 old_str 扩展为更长的上下文片段，让它仅匹配一处。",
             )
+        if matched is None:
+            return self.err(
+                "old_str 未在文件中找到。",
+                hint=(
+                    "保证 old_str 与文件中的内容完全一致 (包括缩进与换行)；"
+                    "已自动尝试弯引号/转义/整行 trim/缩进宽松降级仍无命中。"
+                ),
+            )
+        _strategy, actual_old, effective_new = matched
 
-        new_text = text.replace(old_str, new_str, 1)
+        # 写回时沿用文件原行尾（多数派判定），且 newline="" 禁止 os.linesep
+        # 翻译 —— 否则 Windows 会把 LF-only 文件整体改写成 CRLF。
+        new_text = apply_line_endings(
+            text.replace(actual_old, effective_new, 1), detect_line_endings(raw)
+        )
 
         if not ctx.confirm(
             tool=self.name,
@@ -509,9 +752,11 @@ class StrReplaceTool(Tool):
             return self.err("用户拒绝写入。")
 
         try:
-            resolved.write_text(new_text, encoding="utf-8")
+            resolved.write_text(new_text, encoding="utf-8", newline="")
         except OSError as e:
             return self.err(f"写入失败: {e}")
+        # 写入成功 → 刷新账本：自己的写入不算“外部改动”，连续编辑照常。
+        ctx.note_file_read(resolved)
 
         diff_summary = f"已替换 1 处 (~{len(old_str)} → {len(new_str)} 字符)"
         return self.ok(diff_summary, structured={"path": str(resolved), "old_len": len(old_str), "new_len": len(new_str)})

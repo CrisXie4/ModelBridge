@@ -85,9 +85,24 @@ class UseSkillTool(Tool):
         if len(body) > _MAX_SKILL_CHARS:
             body = body[:_MAX_SKILL_CHARS] + "\n…[已截断]"
 
+        # E7: ${CLAUDE_SKILL_DIR}/${ZCODE_SKILL_DIR} 同义展开 + 目录披露 ——
+        # 只有加载时才有明确的 skill 基准目录；技能引用同目录脚本/模板时
+        # 模型需要知道相对路径的基准（对齐 ZCode expandSkillContextVariables
+        # 与 skill handler 的 "Base directory" 尾注）。
+        base_dir = str(skill.path.parent)
+        body = body.replace("${CLAUDE_SKILL_DIR}", base_dir).replace(
+            "${ZCODE_SKILL_DIR}", base_dir
+        )
+
         return self.ok(
-            f"# Skill: {skill.name}\n\n{body}",
-            structured={"skill_name": skill.name, "scope": skill.scope, "path": str(skill.path)},
+            f"# Skill: {skill.name}\n\n{body}\n\n"
+            f"本 skill 目录：{base_dir}\n（技能内的相对路径均相对该目录。）",
+            structured={
+                "skill_name": skill.name,
+                "scope": skill.scope,
+                "path": str(skill.path),
+                "base_dir": base_dir,
+            },
         )
 
 

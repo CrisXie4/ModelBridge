@@ -9,7 +9,8 @@ import warnings
 from typing import TYPE_CHECKING
 
 from ..config import models_generation
-from ..models import ModelEntry, ProviderType
+from ..models import ModelEntry, ProviderType, TransportType
+from .anthropic_messages import AnthropicMessagesProvider
 from .deepseek import DeepSeekProvider
 from .doubao import DoubaoProvider
 from .ernie import ERNIEProvider
@@ -89,6 +90,7 @@ def _provider_cache_key(entry: ModelEntry) -> tuple:
     return (
         entry.name,
         entry.provider,
+        entry.type,
         entry.model,
         entry.base_url,
         entry.api_key,
@@ -101,7 +103,11 @@ def _provider_cache_key(entry: ModelEntry) -> tuple:
 
 
 def get_provider(entry: ModelEntry) -> "BaseProvider":
-    """Instantiate (or reuse) the correct adapter for a model entry."""
+    """Instantiate (or reuse) the correct adapter for a model entry.
+
+    ``type: anthropic_messages``（E3）优先按传输层分发到
+    :class:`AnthropicMessagesProvider`；其余走 ProviderType → 适配器注册表。
+    """
     global _PROVIDER_CACHE_GEN
     gen = models_generation()
     key = _provider_cache_key(entry)
@@ -112,7 +118,10 @@ def get_provider(entry: ModelEntry) -> "BaseProvider":
         cached = _PROVIDER_CACHE.get(key)
         if cached is not None:
             return cached
-    cls = get_provider_class(entry.provider)
+    if entry.type == TransportType.ANTHROPIC_MESSAGES:
+        cls: type["BaseProvider"] = AnthropicMessagesProvider
+    else:
+        cls = get_provider_class(entry.provider)
     provider = cls(entry)
     with _PROVIDER_CACHE_LOCK:
         _PROVIDER_CACHE[key] = provider

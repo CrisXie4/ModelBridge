@@ -17,6 +17,8 @@ the OpenAI spec.
 from __future__ import annotations
 
 import json
+import random
+import re
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -27,9 +29,11 @@ import httpx
 
 from ..cache.affinity import sanitize_cache_key
 from ..error_hints import (
+    classify_business_code,
     classify_error_type,
     hint_for_exception,
     hint_for_http_error,
+    is_retryable_error,
 )
 from ..models import ModelEntry, ProviderType
 from ..raw_logger import save_raw_exchange
@@ -41,6 +45,115 @@ from ..schemas import (
 )
 from ..secrets import reveal
 from ..utils import resolve_api_key
+
+
+# ---------------------------------------------------------------------------
+# 业务错误体识别（U10）
+#
+# 部分 OpenAI-compatible 厂商（智谱系）只在 HTTP 200 的 JSON/SSE error frame
+# 里报业务错误，且字段名不统一（msg/error_code/code、request_id/requestId/id）。
+# 判据对齐 ZCode readProviderBusinessFailureFromBody + detectProviderBusinessSse
+# FrameFailure：success:false / 非零 code·error_code / event:error / [NNNN]
+# 方括号文案。正常数据帧与 usage-only 帧永远不受影响（纯加法）。
+# ---------------------------------------------------------------------------
+
+_BRACKETED_CODE = re.compile(r"^\[(\d{4})\]")
+
+#: Retry-After 视为"合理"的上限（秒）——超过 5min 的等待对交互式 REPL 没有
+#: 意义，回落到本地指数退避（E1③）。
+_RETRY_AFTER_MAX_S = 300.0
+
+
+def _parse_retry_after(value: Any) -> float | None:
+    """解析 ``Retry-After`` 响应头（仅秒数形式；HTTP-date 返回 None）。
+
+    非法/非正数一律 None —— 宁可走本地退避，不要 sleep 出负数或天文数字。
+    """
+    if value is None:
+        return None
+    try:
+        secs = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if secs <= 0 or secs != secs:  # NaN 防御
+        return None
+    return secs
+
+
+def _first_str(*values: Any) -> str:
+    for v in values:
+        if isinstance(v, str) and v.strip():
+            return v
+    return ""
+
+
+def _first_code(*values: Any) -> str:
+    """取第一个非零/非空的 code（int 或非 "0" 数字串）。"""
+    for v in values:
+        if v is None or isinstance(v, bool):
+            continue
+        if isinstance(v, int) and v != 0:
+            return str(v)
+        if isinstance(v, str) and v.strip() and v.strip() != "0":
+            return v.strip()
+    return ""
+
+
+def detect_business_error(data: Any) -> dict[str, str] | None:
+    """识别业务错误体；正常帧 / usage 帧 / 非 dict 返回 ``None``。"""
+    if not isinstance(data, dict):
+        return None
+    raw_err = data.get("error")
+    err: dict = raw_err if isinstance(raw_err, dict) else {}
+    code = _first_code(
+        data.get("error_code"), err.get("error_code"),
+        data.get("code"), err.get("code"),
+    )
+    message = _first_str(
+        data.get("msg"), data.get("message"),
+        err.get("msg"), err.get("message"),
+    )
+    has_choices = isinstance(data.get("choices"), list) and len(data["choices"]) > 0
+    # 有非空 choices 且 success 非 false 的帧一律按正常数据处理 —— 部分
+    # OpenAI-compatible 网关在成功响应体里也放 HTTP 风格 code:200 或非零
+    # 业务码，不能因为结构化 code 就把正常帧拒掉（与方括号分支的豁免一致）。
+    if has_choices and data.get("success") is not False:
+        return None
+    bracketed = _BRACKETED_CODE.match(message)
+    if not code and bracketed and not has_choices:
+        # 智谱系 SSE error chunk 有时只有 "[1302][...][request_id]" 文案；
+        # 只认这个强格式前缀，避免把普通限流文案误判成业务码。
+        code = bracketed.group(1)
+    failed = data.get("success") is False or bool(code)
+    if not failed:
+        return None
+    request_id = _first_str(
+        data.get("request_id"), data.get("requestId"), data.get("id"),
+        err.get("request_id"), err.get("requestId"), err.get("id"),
+    )
+    return {"code": code, "message": message, "request_id": request_id}
+
+
+def provider_error_from_business(
+    biz: dict[str, str], *, provider: str, status_code: int | None = 200,
+) -> ProviderError:
+    """把 :func:`detect_business_error` 的结果转成带分类 hint 的 ProviderError。"""
+    code = biz.get("code") or ""
+    message = biz.get("message") or ""
+    error_type, hint, _retryable = classify_business_code(code, message)
+    rid = biz.get("request_id") or None
+    if rid:
+        hint = f"{hint} [request_id={rid} — 报障必填]"
+    shown = f"{code} {message}".strip() or "厂商返回业务错误"
+    return ProviderError(
+        shown,
+        provider=provider,
+        status_code=status_code,
+        error_type=error_type,
+        hint=hint,
+        raw=biz,
+        request_id=rid,
+    )
 
 
 class BaseProvider(ABC):
@@ -147,6 +260,13 @@ class BaseProvider(ABC):
         return m.to_wire()
 
     def parse_chat_response(self, data: dict[str, Any]) -> ChatResponse:
+        # U10: 200 也可能带业务错误体（success:false / 非零 code·error_code）
+        # —— 先识别并转成带分类 hint 的 ProviderError，再走正常 choices 解析。
+        biz = detect_business_error(data)
+        if biz is not None:
+            raise provider_error_from_business(
+                biz, provider=self.name, status_code=200
+            )
         choices = data.get("choices")
         if not isinstance(choices, list) or not choices:
             raise ProviderError(
@@ -198,6 +318,9 @@ class BaseProvider(ABC):
         body: str | None = None,
         exc: BaseException | None = None,
     ) -> ProviderError:
+        # 注意：多个厂商子类覆写本方法（前置自家提示），签名保持三参不变；
+        # Retry-After 由调用方在返回的 ProviderError 上直接挂
+        # ``retry_after`` 属性（E1③），不走参数。
         if exc is not None:
             return ProviderError(
                 str(exc) or type(exc).__name__,
@@ -208,7 +331,7 @@ class BaseProvider(ABC):
             )
         sc = status_code or 0
         msg = self._extract_error_message(body) or f"HTTP {sc}"
-        return ProviderError(
+        err = ProviderError(
             f"{sc} {msg}",
             provider=self.name,
             status_code=sc,
@@ -218,6 +341,29 @@ class BaseProvider(ABC):
             ),
             raw=body,
         )
+        # U10 兜底链：错误体里如有业务码 → 换用分类 hint（入表的业务码给出
+        # 限流可重试/额度终止/上下文超限等明确指引）；request_id 提出来进
+        # ProviderError 与 hint（报障必填）。
+        try:
+            data = json.loads(body) if body else None
+        except (ValueError, TypeError):
+            data = None
+        biz = detect_business_error(data) if isinstance(data, dict) else None
+        if biz is not None:
+            if biz.get("code"):
+                biz_err = provider_error_from_business(
+                    biz, provider=self.name, status_code=sc
+                )
+                err.error_type = biz_err.error_type
+                err.hint = biz_err.hint
+            if biz.get("request_id"):
+                err.request_id = biz["request_id"]
+                if not biz.get("code"):  # hint 已由 provider_error_from_business 带上
+                    err.hint = (
+                        f"{err.hint or ''} "
+                        f"[request_id={biz['request_id']} — 报障必填]"
+                    ).strip()
+        return err
 
     @staticmethod
     def _extract_error_message(body: str | None) -> str | None:
@@ -230,17 +376,54 @@ class BaseProvider(ABC):
         if isinstance(j, dict):
             err = j.get("error")
             if isinstance(err, dict):
-                m = err.get("message")
-                if isinstance(m, str):
+                for key in ("message", "msg"):
+                    m = err.get(key)
+                    if isinstance(m, str) and m:
+                        return m
+            for key in ("message", "msg"):
+                m = j.get(key)
+                if isinstance(m, str) and m:
                     return m
-            m = j.get("message")
-            if isinstance(m, str):
-                return m
         return None
 
     # ------------------------------------------------------------------
     # Public entry
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # 有限重试骨架（E1/U5）—— HTTPProvider 与 Anthropic Messages adapter 共用
+    # ------------------------------------------------------------------
+
+    def _retry_delays(self) -> list[float]:
+        """预计算每次重试的退避秒数（指数 + jitter，封顶）。配置不可用视为关闭。"""
+        try:
+            from ..config import load_app_config
+
+            cfg = load_app_config().prompt
+            retries = max(0, int(cfg.model_retry_max_retries))
+            base_ms = max(0, int(cfg.model_retry_base_delay_ms))
+            max_ms = max(base_ms, int(cfg.model_retry_max_delay_ms))
+        except Exception:  # noqa: BLE001 — 配置读不出时保持旧行为（不重试）
+            return []
+        delays: list[float] = []
+        for i in range(retries):
+            backoff = (base_ms / 1000.0) * (2 ** i)
+            jittered = backoff * random.uniform(0.75, 1.25)
+            delays.append(min(jittered, max_ms / 1000.0))
+        return delays
+
+    @staticmethod
+    def _sleep_before_retry(err: ProviderError, delays: list[float], attempt: int) -> float:
+        """第 ``attempt``（1-based）次重试前的等待：Retry-After 优先（≤5min），
+        本地指数退避兜底。返回实际等待秒数。"""
+        delay = delays[attempt - 1] if 0 < attempt <= len(delays) else 0.0
+        # E1③: Retry-After 优先 —— 厂商标注了合理（≤5min）的等待时长时以它
+        # 为准，避免与厂商节奏打架。
+        ra = getattr(err, "retry_after", None)
+        if isinstance(ra, (int, float)) and 0 < float(ra) <= _RETRY_AFTER_MAX_S:
+            delay = float(ra)
+        time.sleep(delay)
+        return delay
 
     @abstractmethod
     def chat(
@@ -258,6 +441,39 @@ class HTTPProvider(BaseProvider):
     """httpx-based concrete base used by every OpenAI-compatible adapter."""
 
     def chat(
+        self,
+        request: ChatRequest,
+        *,
+        timeout: float = 60.0,
+        save_raw: bool = False,
+        verbose_label: str = "chat",
+    ) -> ChatResponse:
+        """Execute a chat completion with bounded transient-error retries.
+
+        只重试"等一下重试有意义"的失败（429 / 5xx / 超时 / 连接与传输类，
+        由 :func:`error_hints.is_retryable_error` 判定）；其余 4xx 语义错误
+        与 decode 错误原样抛出。指数退避（base * 2^n，±25% jitter，单次封顶
+        max_delay_ms），次数/间隔来自 ``prompt.model_retry_*`` 配置——默认
+        保守的重试 2 次，``model_retry_max_retries: 0`` 关闭。stream_chat
+        不在此包装（SSE 中途恢复是另一套机制）。
+        """
+        delays = self._retry_delays()
+        attempt = 0
+        while True:
+            try:
+                return self._chat_once(
+                    request,
+                    timeout=timeout,
+                    save_raw=save_raw,
+                    verbose_label=verbose_label,
+                )
+            except ProviderError as e:
+                if attempt >= len(delays) or not is_retryable_error(e):
+                    raise
+                attempt += 1
+                self._sleep_before_retry(e, delays, attempt)
+
+    def _chat_once(
         self,
         request: ChatRequest,
         *,
@@ -290,6 +506,10 @@ class HTTPProvider(BaseProvider):
 
             if resp.status_code >= 400:
                 err = self.normalize_error(status_code=resp.status_code, body=text)
+                # E1③: Retry-After 挂到错误对象（重试包装优先于本地退避使用）。
+                err.retry_after = _parse_retry_after(
+                    resp.headers.get("Retry-After")
+                )
                 error_dict = err.to_dict()
                 raise err
 
@@ -354,9 +574,17 @@ class HTTPProvider(BaseProvider):
         start = time.perf_counter()
 
         client = _shared_http_client(endpoint)
+        # E1①: 流空闲看门狗 —— 显式 per-request Timeout。httpx 的 read 超时
+        # 语义就是"两次收到数据之间的最大间隔"，即逐块看门狗：厂商流挂起时
+        # 最多 idle 秒抛 ReadTimeout（timeout 类，可重试），REPL 不再永久
+        # 阻塞。idle 取请求超时与 30s 的较大者（≤1s 的极小请求也至少给流
+        # 30s 的块间隔）。
+        stream_timeout = httpx.Timeout(
+            connect=10.0, read=max(30.0, float(timeout)), write=30.0, pool=10.0,
+        )
         try:
             stream_cm = client.stream(
-                "POST", endpoint, headers=headers, json=body, timeout=timeout
+                "POST", endpoint, headers=headers, json=body, timeout=stream_timeout
             )
         except httpx.HTTPError as exc:
             raise self.normalize_error(exc=exc) from exc
@@ -364,7 +592,11 @@ class HTTPProvider(BaseProvider):
         with stream_cm as resp:
             if resp.status_code >= 400:
                 body_text = resp.read().decode("utf-8", errors="replace")
-                raise self.normalize_error(status_code=resp.status_code, body=body_text)
+                err = self.normalize_error(status_code=resp.status_code, body=body_text)
+                err.retry_after = _parse_retry_after(
+                    resp.headers.get("Retry-After")
+                )
+                raise err
 
             try:
                 for raw_line in resp.iter_lines():
@@ -385,6 +617,10 @@ class HTTPProvider(BaseProvider):
                         # their own lines; tolerate and move on.
                         continue
                     for ev in acc.consume(chunk):
+                        if ev.kind == "error" and ev.error is not None:
+                            # 部分 OpenAI-compatible 厂商只在 HTTP 200 的
+                            # SSE error frame 里报业务错误 —— 中止流并抛出。
+                            raise ev.error
                         yield ev
             except httpx.HTTPError as exc:
                 raise self.normalize_error(exc=exc) from exc
@@ -461,6 +697,9 @@ class StreamEvent:
     finish_reason: str | None = None
     usage: dict[str, Any] | None = None
     response: ChatResponse | None = None
+    # kind == "error" 时携带已分类的 ProviderError（U10：HTTP 200 的 SSE
+    # 业务错误帧），由 stream_chat 中止流并抛出。
+    error: ProviderError | None = None
 
 
 @dataclass
@@ -483,6 +722,18 @@ class _StreamAccumulator:
         events: list[StreamEvent] = []
         if "model" in chunk and isinstance(chunk["model"], str):
             self.model_id = chunk["model"]
+
+        # U10: HTTP 200 的 SSE 业务错误帧（无 choices）——识别后以 kind=
+        # "error" 事件上抛（stream_chat 中止流并抛 ProviderError），不再
+        # 静默忽略导致流被"正常"结束成空响应。
+        biz = detect_business_error(chunk)
+        if biz is not None:
+            events.append(StreamEvent(
+                kind="error",
+                text=biz.get("message") or "业务错误",
+                error=provider_error_from_business(biz, provider=self.provider),
+            ))
+            return events
 
         # OpenAI emits a trailing chunk with usage and empty choices.
         u = chunk.get("usage")

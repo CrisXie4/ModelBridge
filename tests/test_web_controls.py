@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import pytest
 
+# web 路由属可选依赖（pyproject 的 web extra）：未装 fastapi 时整文件跳过，
+# 与 test_web_api.py 的处理一致。文件内每个用例都经
+# modelbridge.web.routers（其 __init__ 导入 chat → fastapi）或直接用 fastapi。
+pytest.importorskip("fastapi")
+
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
@@ -27,7 +32,9 @@ def _seed_config(home, servers):
 # Skills
 # ---------------------------------------------------------------------------
 
-def test_skills_list_carries_enabled_flag():
+def test_skills_list_carries_enabled_flag(home):
+    # 与同文件其他用例一致使用隔离的 MBRIDGE_HOME —— 否则会读到运行机器上
+    # 真实 ~/.modelbridge/skills.json 的禁用列表，非干净环境下误报。
     from modelbridge.web.routers.skills import list_skills
 
     out = list_skills()

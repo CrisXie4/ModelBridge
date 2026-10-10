@@ -174,3 +174,67 @@ def classify_error_type(exc_or_status: Any) -> str:
     if isinstance(exc_or_status, httpx.HTTPError):
         return "transport"
     return "unknown"
+
+
+#: 这些 error_type 表示"等一下重试可能成功"的网络/服务端侧瞬时失败。
+#: 429 不在其中——classify_error_type 把它归入 http_4xx，由
+#: :func:`is_retryable_error` 按 status_code 单独识别。
+RETRYABLE_ERROR_TYPES: frozenset[str] = frozenset(
+    {"timeout", "connect", "transport", "http_5xx"}
+)
+
+#: 业务码 → (error_type, hint, retryable)。语义对齐 ZCode
+#: failure-provider-business-codes.ts：
+#: * 1261   —— 上下文超限（提示压缩；loop 的溢出恢复按文案识别）；
+#: * 1302/1303/1305 —— 限流类，稍后重试有意义；
+#: * 1316-1321 —— 长期额度/套餐终止型，重试无意义；
+#: * 其余非零业务码 —— 保守视为一次性业务错误（不自动重试）。
+BUSINESS_CODE_HINTS: dict[str, tuple[str, str, bool]] = {
+    "1261": (
+        "context_exceeded",
+        "业务码 1261：输入超过上下文长度 — 上下文超限，请压缩上下文"
+        "（等待自动压缩或手动 /compact）后重试。",
+        False,
+    ),
+    "1302": ("business_rate_limited", "业务码 1302：触发限流 — 稍等片刻重试通常可恢复。", True),
+    "1303": ("business_rate_limited", "业务码 1303：触发限流 — 稍等片刻重试通常可恢复。", True),
+    "1305": ("business_rate_limited", "业务码 1305：触发限流 — 稍等片刻重试通常可恢复。", True),
+    **{
+        code: (
+            "business_quota_exhausted",
+            f"业务码 {code}：长期额度/配额已耗尽或套餐受限 — 重试无效，"
+            "请充值、升级套餐或等待额度重置。",
+            False,
+        )
+        for code in ("1316", "1317", "1318", "1319", "1320", "1321")
+    },
+}
+
+
+def classify_business_code(code: str, message: str = "") -> tuple[str, str, bool]:
+    """把厂商业务码映射为 (error_type, hint, retryable)。
+
+    未入表的码走保守兜底：一次性业务错误，不自动重试。
+    """
+    entry = BUSINESS_CODE_HINTS.get(code)
+    if entry is not None:
+        return entry
+    shown = f"业务码 {code}" if code else "业务错误"
+    detail = f"：{message[:120]}" if message else ""
+    return ("business_error", f"{shown}{detail} — 请检查请求与账号状态。", False)
+
+
+def is_retryable_error(err: Any) -> bool:
+    """判断一个 ``ProviderError`` 是否值得自动重试。
+
+    可重试：429（限流）、5xx、超时、连接与传输类错误——等一下重试有意义；
+    以及被业务码表标记为可重试的限流类业务错误（1302/1303/1305）。
+    不可重试：其余 4xx（鉴权/参数/上下文超限等语义错误）、decode 错误与
+    额度终止型业务码，原样抛给上层。
+    """
+    if getattr(err, "status_code", None) == 429:
+        return True
+    etype = getattr(err, "error_type", "")
+    if etype in RETRYABLE_ERROR_TYPES:
+        return True
+    return etype == "business_rate_limited"

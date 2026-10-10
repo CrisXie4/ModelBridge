@@ -23,129 +23,20 @@ import json
 from typing import Iterable
 
 from ..cost.estimator import estimate_tokens
+from ..model_catalog import MODEL_CATALOG
 from ..models import ModelEntry
 from ..schemas import ChatMessage, text_of
 
 
-# Tokens. **Per-provider values, sourced from each vendor's docs as of 2026-07.**
-# Cross-checked via ModelScope API where available; see per-entry comments.
-#
-# DeepSeek (V4/V4.1 era; V3 + chat/reasoner EOL'd 2026-07-24, removed)
-#   - V4 family: 1M; V4.1-Flash (deepseek-flash, 2026-09-10): 1M / 384K out
-# 腾讯混元
-#   - Hy3 (GA) / Hy3 preview: 256K
-# 字节豆包 (火山方舟)
-#   - doubao-seed 家族 (1.6/1.8/2.0/evolving): 256K
-# 百度文心 (千帆)
-#   - ernie-4.5-turbo-128k / speed-128k: 128K; 4.0-turbo-8k: 8K; x1: 32K
-# 讯飞星火
-#   - X2: 192K; X2-Flash / X2-Agent: 256K (星辰 MaaS)
-# 阶跃星辰
-#   - step-3: 64K; step-2-16k: 16K; step-2-mini: 32K
-# 商汤日日新
-#   - SenseNova-V5 系列: 128K
-# Qwen / 阿里云百炼
-#   - qwen3.8-max / qwen3.7-max / qwen3.7-plus: 1M (2026 旗舰/通用)
-#   - qwen-plus / qwen3-coder-*: 1M
-#   - qwen-max / qwen3-max: 256K
-#   - qwen-turbo: 1M
-#   - qwen-long: 10M (long-context variant)
-# Kimi / Moonshot (K2.x era; K2 base EOL'd 2026-05-25, removed)
-#   - kimi-k3: 1M (2026 flagship, default reasoning)
-#   - kimi-k2.5 / k2.6 / k2-thinking / k2-thinking-turbo / k2.7-code: 256K
-# MiMo / 小米 (released 2026-03; V2 系列已于 2026-06-30 下线)
-#   - mimo-v2.5-pro / mimo-v2.5: 1M (v2.5 原生全模态 + 1M 上下文)
-#   - mimo-v2-omni: 256K, mimo-v2-tts: 128K (V2 系列，已下线，保留兼容旧配置)
-# GLM / 智谱 (5.x era; old 4-plus/4-flash/4-flashx/4.5/z1 removed)
-#   - glm-5.2: 1M (2026-Q2 flagship)
-#   - glm-5.1 / glm-5 / 4.7 / 4.6: 200K
-#   - glm-4-long: 1M
-# MiniMax (M3 era; M2 + abab6.5 + 01 removed)
-#   - minimax-m3: 1M (2026-06, native multimodal)
-#   - minimax-m2.7 / m2.5: 200K (官方 text-generation 页)
+# Tokens. 数据源已收敛到 :mod:`modelbridge.model_catalog`（E2）—— 下面的
+# dict 是目录（context window / reasoning 档位 / 输入格式 / vision·pdf 能力）
+# 的派生视图，不再是独立数据表；窗口事实请改目录。解析（精确 →
+# longest-prefix → 本地/未知兜底）与旧硬编码表行为逐条等价；官方 model id
+# 大小写变体（MiniMax-M3 等）由大小写不敏感匹配天然覆盖。
 DEFAULT_CONTEXT_WINDOWS: dict[str, int] = {
-    # DeepSeek (V4/V4.1 era)
-    "deepseek-flash":          1_000_000,    # = DeepSeek-V4.1-Flash (1M / 384K out)
-    "deepseek-v4":             1_000_000,
-    "deepseek-v4-pro":         1_000_000,
-    "deepseek-v4-flash":       1_000_000,    # 旧名仍可调用，由 V4.1 Flash 承接
-
-    # 腾讯混元
-    "hy3":                     262_144,    # GA 正式版 (2026-08)
-    "hy3-preview":             262_144,    # "Hy3 preview" 256K context
-
-    # 字节豆包 / 火山方舟 (seed 系列按家族前缀继承 256K)
-    "doubao-seed":             262_144,    # seed-1.6 / 1.8 / evolving / 2.0 家族
-    "doubao-1.5-pro-256k":     262_144,    # 上一代长上下文款
-
-    # 百度文心 / 千帆 (型号后缀即窗口大小)
-    "ernie-4.5-turbo-128k":    131_072,
-    "ernie-4.0-turbo-8k":        8_192,
-    "ernie-speed-128k":        131_072,
-    "ernie-x1-turbo-32k":       32_768,    # 推理系列
-
-    # 讯飞星火 (星辰 MaaS, X2 系列)
-    "x2":                      196_608,    # X2 192K
-    "x2-flash":                262_144,    # 256K
-    "x2-agent":                262_144,    # 256K
-
-    # 阶跃星辰 StepFun
-    "step-3":                   65_536,    # 全模态旗舰
-    "step-2-16k":               16_384,
-    "step-2-mini":              32_768,    # best-effort；以官方文档为准
-
-    # 商汤日日新 (V5 家族前缀)
-    "sensenova-v5":            131_072,
-
-    # Qwen / DashScope 百炼
-    "qwen3.8-max":             1_000_000,    # 2026-08 GA 旗舰; vendor sheet 1M
-    "qwen3.7-max":             1_000_000,    # vendor sheet: 0<Token≤1M 阶梯
-    "qwen3.7-plus":            1_000_000,    # vendor sheet: 0<Token≤256K / 256K-1M 两档
-    "qwen-plus":               1_000_000,
-    "qwen-plus-latest":        1_000_000,
-    "qwen3-plus":              1_000_000,
-    "qwen3.6-plus":            1_000_000,
-    "qwen-max":                  262_144,
-    "qwen-max-latest":           262_144,
-    "qwen3-max":                 262_144,
-    "qwen3.7-max-preview":     1_000_000,
-    "qwen-turbo":              1_000_000,
-    "qwen-turbo-latest":       1_000_000,
-    "qwen3-coder-plus":        1_000_000,
-    "qwen3-coder-flash":       1_000_000,
-    "qwen-long":              10_000_000,    # 10M long-context variant
-
-    # Kimi / Moonshot (K2.x era + K3)
-    "kimi-k3":                   1_000_000,    # 2026 flagship, 1M context
-    "kimi-k2.5":                 262_144,
-    "kimi-k2.6":                 262_144,
-    "kimi-k2-thinking":          262_144,
-    "kimi-k2-thinking-turbo":    262_144,
-    "kimi-k2.7-code":            262_144,    # 2026-06 release; "256K context" per ModelScope README
-
-    # MiMo / 小米 (V2.5 era; V2 系列已于 2026-06-30 下线)
-    "mimo-v2.5-pro":           1_000_000,    # 1M context, 42B 激活
-    "mimo-v2.5":               1_000_000,    # 原生全模态 + 1M 上下文
-    "mimo-v2-omni":              262_144,    # V2 系列，已下线（保留兼容旧配置）
-    "mimo-v2-tts":               131_072,    # V2 系列，已下线（保留兼容旧配置）
-
-    # GLM / 智谱
-    "glm-5.2":                 1_000_000,    # 2026-Q2 release; "Solid 1M Context" per ModelScope README
-    "glm-5.1":                   200_000,    # vendor sheet: 200K
-    "glm-5":                     200_000,
-    "glm-4.7":                   200_000,
-    "glm-4.6":                   200_000,
-    "glm-4-long":              1_000_000,
-
-    # MiniMax (M3 era; 官方 platform.minimax.io text-generation 页)
-    "minimax-m3":              1_000_000,    # 1M context
-    "minimax-m2.7":              204_800,    # 200K context
-    "minimax-m2.5":              204_800,    # 200K context
-    # 官方 model id 大小写（首字母大写含点），同样支持
-    "MiniMax-M3":              1_000_000,
-    "MiniMax-M2.7":              204_800,
-    "MiniMax-M2.5":              204_800,
+    e.pattern: e.context_window for e in MODEL_CATALOG if not e.regex
 }
+
 
 DEFAULT_LOCAL_WINDOW = 8_192        # most quantized local models
 DEFAULT_UNKNOWN_WINDOW = 32_768     # safe assumption for unknown cloud models

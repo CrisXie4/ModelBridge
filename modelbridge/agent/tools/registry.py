@@ -9,6 +9,7 @@ from typing import Any
 from ..context import AgentContext
 from .base import Tool, ToolCall, ToolResult
 from .bash_tool import RunBashTool
+from .background_tool import BackgroundTaskManager
 from .file_tools import (
     GrepTool,
     ListDirTool,
@@ -62,7 +63,12 @@ class ToolRegistry:
             )
 
 
-def build_default_registry(*, include_bash: bool = False, minimal: bool = False) -> ToolRegistry:
+def build_default_registry(
+    *,
+    include_bash: bool = False,
+    minimal: bool = False,
+    bash_background: BackgroundTaskManager | None = None,
+) -> ToolRegistry:
     """Default toolset: read/list always on; write/edit always on; bash opt-in.
 
     ``minimal=True`` strips the toolset to the 极简模式 allowlist —
@@ -73,7 +79,9 @@ def build_default_registry(*, include_bash: bool = False, minimal: bool = False)
 
     ``include_bash=False`` *also* removes the bash tool from the schema list
     sent to the model, keeping the model from even attempting it when
-    disabled.
+    disabled. ``bash_background`` wires the run_bash timeout handoff (U9):
+    a timed-out non-sleep command is adopted into the background instead of
+    being killed.
 
     Image reading is handled by ``read_file`` itself (it returns an image
     block when the file is an image and the model is vision-capable), so there
@@ -91,7 +99,7 @@ def build_default_registry(*, include_bash: bool = False, minimal: bool = False)
     if not minimal:
         reg.register(StrReplaceTool())
     if include_bash:
-        reg.register(RunBashTool())
+        reg.register(RunBashTool(manager=bash_background))
     return reg
 
 

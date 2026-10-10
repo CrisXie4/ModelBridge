@@ -17,6 +17,7 @@ inside the sticky-footer scroll region naturally.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from rich.console import Console
@@ -30,6 +31,7 @@ from ..context.windows import (
     estimate_tokens_by_role,
 )
 from ..models import ModelEntry
+from ..utils import get_app_dir
 from .context import AgentContext
 from .session import Session
 from .tools import ToolRegistry
@@ -51,11 +53,15 @@ class CommandResult:
     model (we treat unrecognised slash commands as user text — but in
     practice the dispatcher always sets ``handled=True`` for ``/`` input
     and shows the help menu on unknown).
+
+    ``forward_text``（E6 自定义命令）：非 None 时 loop 把它作为**展开后的
+    用户输入**走普通模型流程（替代原始 slash 文本）。
     """
 
     handled: bool = True
     exit_repl: bool = False
     clear_history: bool = False
+    forward_text: str | None = None
 
 
 @dataclass
@@ -110,11 +116,121 @@ def handle_slash(text: str, sctx: SlashContext) -> CommandResult:
 
     handler = _COMMANDS.get(name)
     if handler is None:
+        # E6: 未命中内建表 → 查自定义命令（~/.modelbridge/commands 与
+        # <project>/.modelbridge/commands，项目覆盖同名全局）。命中时模板
+        # 经 $ARGUMENTS/$1..$N 展开为用户消息文本，交由 loop 转发模型。
+        custom = _find_custom_command(name, project_path=sctx.project_path)
+        if custom is not None:
+            expanded = expand_custom_command(custom, args)
+            sctx.console.print(f"[dim][自定义命令 /{custom.name} → 模型][/dim]")
+            return CommandResult(handled=False, forward_text=expanded)
         sctx.console.print(f"[red]未知命令: /{name}[/red]")
         _help(sctx, args=[])
         return CommandResult()
 
     return handler(sctx, args=args)
+
+
+# ---------------------------------------------------------------------------
+# 自定义 slash 命令（E6）
+#
+# ``~/.modelbridge/commands/*.md`` 与 ``<project>/.modelbridge/commands/*.md``：
+# 文件名（去 .md，小写）即命令名；可选 YAML frontmatter 提供
+# ``description`` / ``argument-hint``；正文是模板，``$ARGUMENTS`` 展开为
+# 全部参数、``$1..$9`` 展开为位置参数（缺位空串），模板无占位且有参数时
+# 自动追加参数块（对齐 Claude Code / ZCode 展开语义）。同名项目覆盖全局；
+# 内建命令表零改动，未命中内建时才查自定义。
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class CustomCommand:
+    name: str
+    description: str
+    argument_hint: str
+    template: str
+    path: Path
+
+
+def _parse_command_markdown(path: Path) -> CustomCommand | None:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    description = ""
+    argument_hint = ""
+    body = text
+    if text.lstrip().startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) == 3:
+            for line in parts[1].splitlines():
+                key, _, value = line.partition(":")
+                key = key.strip().lower()
+                value = value.strip()
+                if key == "description":
+                    description = value
+                elif key == "argument-hint":
+                    argument_hint = value
+            body = parts[2]
+    name = path.stem.lower()
+    if not name:
+        return None
+    return CustomCommand(
+        name=name,
+        description=description or f"自定义命令 /{name}",
+        argument_hint=argument_hint,
+        template=body.strip(),
+        path=path,
+    )
+
+
+def discover_custom_commands(
+    project_path: Path | str | None = None,
+) -> list[CustomCommand]:
+    """扫描全局与项目 commands 目录；同名项目覆盖全局。"""
+    dirs: list[Path] = []
+    g = get_app_dir() / "commands"
+    if g.is_dir():
+        dirs.append(g)
+    if project_path is not None:
+        p_dir = Path(project_path) / ".modelbridge" / "commands"
+        if p_dir.is_dir():
+            dirs.append(p_dir)
+
+    found: dict[str, CustomCommand] = {}
+    for d in dirs:
+        try:
+            files = sorted(d.glob("*.md"))
+        except OSError:
+            continue
+        for f in files:
+            cmd = _parse_command_markdown(f)
+            if cmd is not None:
+                found[cmd.name] = cmd  # 后扫的 project 覆盖同名 global
+    return list(found.values())
+
+
+def _find_custom_command(
+    name: str, project_path: Path | str | None,
+) -> CustomCommand | None:
+    for cmd in discover_custom_commands(project_path):
+        if cmd.name == name.lower():
+            return cmd
+    return None
+
+
+def expand_custom_command(cmd: CustomCommand, args: list[str]) -> str:
+    """模板展开（对齐 ZCode contracts 的展开语义）。"""
+    joined = " ".join(args)
+    used = "$ARGUMENTS" in cmd.template
+    body = cmd.template.replace("$ARGUMENTS", joined)
+    for i in range(1, 10):
+        token = f"${i}"
+        if token in body:
+            used = True
+        body = body.replace(token, args[i - 1] if i <= len(args) else "")
+    if args and not used:
+        body = f"{body.rstrip()}\n\nUser arguments:\n{joined}"
+    return body
 
 
 # ---------------------------------------------------------------------------
@@ -172,8 +288,43 @@ def _compact(sctx: SlashContext, *, args: list[str]) -> CommandResult:
         sctx.session,
         keep_turns=cfg.auto_compact_keep_turns,
         model_name=sctx.model_name,
+        # U8 账本生命周期：被摘要掉的历史里可能包含 read_file 结果，提交即
+        # 清账（防止 stub 让模型拿不到文件）。
+        on_commit=(
+            (lambda: sctx.agent_ctx.file_reads.clear())
+            if sctx.agent_ctx is not None else None
+        ),
     )
     sctx.console.print(format_notice(result))
+    return CommandResult()
+
+
+def _resume(sctx: SlashContext, *, args: list[str]) -> CommandResult:
+    """``/resume <路径>`` — 从会话 JSON 恢复历史（U12）。
+
+    就地替换当前 Session 的 messages（含保存时的 system 前缀，保证恢复的
+    上下文逐字还原），metadata 增量并入；其他组件持有 Session 对象引用，
+    不能换对象只能换内容。
+    """
+    from .session import load_session
+
+    if not args:
+        sctx.console.print("[red]用法: /resume <会话 JSON 路径>[/red]")
+        return CommandResult()
+    loaded = load_session(args[0])
+    if loaded is None:
+        sctx.console.print(f"[red]会话文件无法读取或已损坏: {args[0]}[/red]")
+        return CommandResult()
+    sctx.session.messages = loaded.messages
+    sctx.session.metadata.update(loaded.metadata)
+    # U8 账本随历史同生共死：旧会话的读取账本对新恢复的历史无效（指纹可能
+    # 恰好命中，stub 会让模型拿不到文件），恢复即清空。
+    if sctx.agent_ctx is not None:
+        sctx.agent_ctx.file_reads.clear()
+    n = len(sctx.session.messages)
+    sctx.console.print(
+        f"[green]✓ 已恢复会话（model={loaded.model_name}，{n} 条消息）。[/green]"
+    )
     return CommandResult()
 
 
@@ -1002,6 +1153,7 @@ _COMMANDS: dict[str, CommandFn] = {
     "clear": _clear,
     "cls":   _clear,
     "compact": _compact,
+    "resume": _resume,
     "new":    _new,
     "context": _context,
     "ctx":     _context,
@@ -1045,6 +1197,7 @@ _HELP_ROWS: list[tuple[str, str]] = [
     ("/rules",             "显示当前已加载的规则文件 (AGENT.md / CLAUDE.md / ...)"),
     ("/prompt",            "显示 PromptBuilder 组装结果与 prefix_hash"),
     ("/save",              "立即把会话写到 ~/.modelbridge/sessions/"),
+    ("/resume <路径>",     "从会话 JSON 恢复历史 (mbridge resume 亦同)"),
     ("/compact",           "手动压缩历史上下文 (把较早的对话摘要化，保留近 N 轮)"),
     ("/new",               "新建会话 (先存档当前会话再清空历史)"),
     ("/policy",            "显示路径策略 (allowed_dirs / blocked / cwd / allow_bash)"),

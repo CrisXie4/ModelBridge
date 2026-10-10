@@ -126,3 +126,74 @@ def test_discover_skills_tolerates_oserror_on_sub_stat(tmp_path, monkeypatch):
     skills = discover_skills(project_path=tmp_path)
     names = {s.name for s in skills}
     assert "real-skill" in names
+
+
+# --- frontmatter BOM 剥离（Windows 记事本保存的 SKILL.md） -------------------
+
+def test_parse_skill_strips_utf8_bom(tmp_path):
+    """'\ufeff---' 不以 '---' 开头 —— BOM 不剥离时合法 SKILL.md 被静默跳过。"""
+    d = tmp_path / ".modelbridge" / "skills" / "noted"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "\ufeff---\nname: noted\ndescription: 记事本保存的技能\n---\n步骤\n",
+        encoding="utf-8",
+    )
+    sk = parse_skill(d / "SKILL.md", scope="project")
+    assert sk is not None
+    assert sk.name == "noted"
+    assert sk.description == "记事本保存的技能"
+
+
+def test_discover_skills_finds_bom_prefixed_skill(tmp_path):
+    d = tmp_path / ".claude" / "skills" / "bom-skill"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_bytes(
+        "\ufeff---\nname: bom-skill\ndescription: 带 BOM 的技能\n---\n正文\n".encode("utf-8")
+    )
+    names = {s.name for s in discover_skills(project_path=tmp_path)}
+    assert "bom-skill" in names
+
+
+# --- 兼容根（.claude/skills、.agents/skills） --------------------------------
+
+def test_discover_skills_from_claude_compat_root(tmp_path):
+    _write_skill(tmp_path, "cc-deploy", "Claude 根里的部署", scope_dir=".claude/skills")
+    names = {s.name for s in discover_skills(project_path=tmp_path)}
+    assert "cc-deploy" in names
+
+
+def test_discover_skills_from_agents_compat_root(tmp_path):
+    _write_skill(tmp_path, "ag-review", "AGENTS 根里的审查", scope_dir=".agents/skills")
+    names = {s.name for s in discover_skills(project_path=tmp_path)}
+    assert "ag-review" in names
+
+
+def test_native_root_wins_over_compat_roots(tmp_path):
+    """同名 skill：原生 .modelbridge/skills 覆盖兼容根。"""
+    _write_skill(tmp_path, "deploy", "COMPAT 部署", scope_dir=".claude/skills")
+    _write_skill(tmp_path, "deploy", "AGENTS 部署", scope_dir=".agents/skills")
+    _write_skill(tmp_path, "deploy", "NATIVE 部署")
+    deploy = find_skill("deploy", project_path=tmp_path)
+    assert deploy is not None
+    assert deploy.description == "NATIVE 部署"
+
+
+def test_project_compat_wins_over_global_native(tmp_path, monkeypatch):
+    """跨作用域既有优先级不因兼容根而变：project 兼容根 > global 原生根。"""
+    home = tmp_path / "home"
+    monkeypatch.setenv("MBRIDGE_HOME", str(home))
+    _write_skill(home, "deploy", "GLOBAL 部署", scope_dir="skills")
+    _write_skill(tmp_path, "deploy", "PROJECT-CLAUDE 部署", scope_dir=".claude/skills")
+    deploy = find_skill("deploy", project_path=tmp_path)
+    assert deploy is not None
+    assert deploy.description == "PROJECT-CLAUDE 部署"
+
+
+def test_global_compat_roots_scanned(tmp_path, monkeypatch):
+    """全局兼容根 ~/.claude/skills、~/.agents/skills 也参与发现。"""
+    home = tmp_path / "home"
+    monkeypatch.setenv("MBRIDGE_HOME", str(home))
+    _write_skill(home, "g-cc", "全局 Claude", scope_dir=".claude/skills")
+    _write_skill(home, "g-ag", "全局 AGENTS", scope_dir=".agents/skills")
+    names = {s.name for s in discover_skills(project_path=tmp_path)}
+    assert {"g-cc", "g-ag"}.issubset(names)

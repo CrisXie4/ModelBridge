@@ -114,3 +114,30 @@ def test_dry_run_matches_but_does_not_write(tmp_path):
     assert res.dry_run
     # File on disk is unchanged.
     assert (tmp_path / "foo.py").read_text(encoding="utf-8") == "a = 1\nb = 2\nc = 3\n"
+
+
+# --- 行尾保真（patch 不改写行尾） --------------------------------------------
+# 断言基于 read_bytes()：Windows 上 os.linesep == "\r\n"，修复前默认
+# write_text 会把 LF-only 文件整体改写成 CRLF，这些测试会真实失败。
+
+def test_modify_preserves_lf_line_endings(tmp_path):
+    (tmp_path / "foo.py").write_bytes(b"a = 1\nb = 2\nc = 3\n")
+    res = _apply(MODIFY, tmp_path)
+    assert res.all_ok
+    assert (tmp_path / "foo.py").read_bytes() == b"a = 1\nb = 20\nc = 3\n"
+
+
+def test_modify_preserves_crlf_line_endings(tmp_path):
+    """CRLF 文件打 patch：上下文行保持 CRLF，改动行也以 CRLF 落盘。"""
+    (tmp_path / "foo.py").write_bytes(b"a = 1\r\nb = 2\r\nc = 3\r\n")
+    res = _apply(MODIFY, tmp_path)
+    assert res.all_ok
+    assert (tmp_path / "foo.py").read_bytes() == b"a = 1\r\nb = 20\r\nc = 3\r\n"
+
+
+def test_create_writes_lf_line_endings(tmp_path):
+    """新建文件（/dev/null diff）统一 LF 落盘，不做 os.linesep 翻译。"""
+    diff = "--- /dev/null\n+++ b/sub/new.py\n@@ -0,0 +1,2 @@\n+hello\n+world\n"
+    res = _apply(diff, tmp_path)
+    assert res.all_ok
+    assert (tmp_path / "sub" / "new.py").read_bytes() == b"hello\nworld\n"

@@ -83,7 +83,7 @@ def _setup(monkeypatch, provider):
     calls: list[dict] = []
     notices: list[str] = []
 
-    def fake_compact(session, *, model_name, on_system=None, force=False):
+    def fake_compact(session, *, model_name, on_system=None, force=False, on_commit=None):
         calls.append({"force": force})
         return None
 
@@ -132,3 +132,66 @@ def test_unrelated_provider_error_skips_recovery(monkeypatch):
     assert result.stopped_reason == "provider_error"
     assert provider.calls == 1
     assert {"force": True} not in calls
+
+
+# --- E4/E5: 用量锚点落账 + max_tokens 随剩余窗口收缩 -------------------------
+
+def test_loop_persists_usage_anchor(monkeypatch):
+    """每轮把 resp.usage 写进 session.metadata（E4 锚点）。"""
+    from modelbridge.schemas import ChatResponse as _CR
+
+    class _UsageProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, request, *, timeout, verbose_label=None):  # noqa: ARG002
+            self.calls += 1
+            return _CR(content="done", finish_reason="stop",
+                       usage={"prompt_tokens": 1200, "completion_tokens": 34})
+
+    provider = _UsageProvider()
+    session, ctx, registry, calls, notices = _setup(monkeypatch, provider)
+    run_agent_turn(
+        session=session, ctx=ctx, registry=registry, model_name="fake",
+        on_system=notices.append,
+    )
+    anchor = session.metadata.get("usage_anchor")
+    assert anchor == {"prompt_tokens": 1200, "completion_tokens": 34}
+    assert session.anchored_usage_tokens() == 1234
+
+
+def test_max_tokens_shrinks_with_remaining_window(monkeypatch):
+    """E5: 请求级 max_tokens = min(配置值, window − 用量 − 余量)。"""
+    from modelbridge.schemas import ChatResponse as _CR
+
+    captured: list = []
+
+    class _CaptureProvider:
+        def chat(self, request, *, timeout, verbose_label=None):  # noqa: ARG002
+            captured.append(request)
+            return _CR(content="done", finish_reason="stop",
+                       usage={"prompt_tokens": 30_000, "completion_tokens": 0})
+
+    monkeypatch.setattr(loop, "get_provider", lambda e: _CaptureProvider())
+    monkeypatch.setattr(
+        loop, "get_model_entry",
+        lambda n: ModelEntry(
+            name="fake", provider=ProviderType.OPENAI_COMPATIBLE,
+            model="f", base_url="http://x/v1",
+            extra={"max_tokens": 8192, "context_window": 32_768},
+        ),
+    )
+    ctx = AgentContext(policy=PathPolicy([], []), cwd=Path.cwd(), approve=auto_yes)
+    session = Session(model_name="fake")
+    session.add_user("go")
+
+    run_agent_turn(
+        session=session, ctx=ctx, registry=ToolRegistry(), model_name="fake",
+    )
+    # 首轮无锚点 → 估算用量很小 → 不收缩（配置值原样）。
+    assert captured[0].max_tokens == 8192
+    # 首轮之后锚点 30K：剩余 32768−30000−1000=1768 → 收缩到 1768。
+    run_agent_turn(
+        session=session, ctx=ctx, registry=ToolRegistry(), model_name="fake",
+    )
+    assert captured[1].max_tokens == 1768

@@ -51,6 +51,7 @@ The module is split into:
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Callable
 
@@ -123,6 +124,28 @@ _SUMMARY_MAX_TOKENS = 4096
 _PRUNE_HEAD_CHARS = 1500
 _PRUNE_TAIL_CHARS = 400
 
+#: 自动压缩连续失败熔断阈值（同型照搬 ai_completer 的
+#: ``_MAX_CONSECUTIVE_FAILURES`` 与 ZCode policy 的
+#: ``MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES``）：摘要器连续失败达到阈值后，
+#: 自动压缩静默跳过，直至一次成功压缩（auto 提交或手动 /compact）重置。
+#: 否则 loop 在每个 tool step 边界与每轮结束都会重调 —— 摘要器持续失败时
+#: 每步都白付一次最长 120s 的失败调用并刷屏失败通知。
+_MAX_AUTO_COMPACT_FAILURES = 3
+
+#: 失败计数存进 ``session.metadata``，随会话持久化（Session.save）。
+_FAILURES_METADATA_KEY = "auto_compact_consecutive_failures"
+
+#: microcompact（E4，第一级免模型减压）常量 —— 对齐 ZCode microcompact.ts：
+#: 触发点 = 全量压缩触发 tokens 的 90%，再扣 2000 tokens 缓冲（两者取小）；
+#: 保留最近 5 条工具结果；净省不足 256 tokens 视为不值得动。
+_MICROCOMPACT_THRESHOLD_RATIO = 0.9
+_MICROCOMPACT_BUFFER_TOKENS = 2_000
+_MICROCOMPACT_KEEP_RECENT = 5
+_MICROCOMPACT_MIN_SAVED_TOKENS = 256
+_MICROCOMPACT_CLEARED_MARK = (
+    "[工具结果已清理（microcompact）：内容已不再保留，如需要请重新调用工具]"
+)
+
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -162,6 +185,39 @@ def should_compact(
     if message_count < min_messages:
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# Consecutive-failure circuit breaker (auto path only)
+# ---------------------------------------------------------------------------
+
+def _consecutive_failures(session: Session) -> int:
+    try:
+        return int(session.metadata.get(_FAILURES_METADATA_KEY, 0))
+    except (AttributeError, TypeError, ValueError):
+        return 0
+
+
+def _reset_failure_count(session: Session) -> None:
+    """压缩成功提交后解除熔断（auto 与手动 /compact 都经这里重置）。"""
+    try:
+        session.metadata.pop(_FAILURES_METADATA_KEY, None)
+    except AttributeError:
+        pass
+
+
+def _note_failure(session: Session, on_system: Callable[[str], None] | None) -> None:
+    """记录一次自动压缩失败；恰好达到阈值时提示一次（之后静默跳过）。"""
+    try:
+        n = _consecutive_failures(session) + 1
+        session.metadata[_FAILURES_METADATA_KEY] = n
+    except Exception:  # noqa: BLE001 — 计数失败绝不影响主流程
+        return
+    if n == _MAX_AUTO_COMPACT_FAILURES and on_system is not None:
+        on_system(
+            f"[自动压缩已连续失败 {n} 次 — 暂停自动压缩，"
+            "直至一次成功压缩或手动 /compact]"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -288,8 +344,75 @@ def _render_run(run: list[ChatMessage]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Model-free tool-result pruning
+# microcompact —— 第一级免模型减压（E4）
 # ---------------------------------------------------------------------------
+
+def _looks_like_error_result(content: str, *, error: bool = False) -> bool:
+    """错误类工具结果在 microcompact 中受保护（模型常要基于报错继续行动）。
+
+    首选显式标志：``ChatMessage.error`` 由写入历史时记录（loop 传
+    ``result.is_error``），覆盖所有 ``Tool.err`` 失败输出（OpenAI 协议无
+    错误字段、消息体只是普通文本，文案启发式覆盖不全）。文案启发式仅作
+    旧会话（无标志时代）的兜底。
+    """
+    if error:
+        return True
+    head = content.lstrip()
+    if head.startswith("错误") or "Traceback" in content:
+        return True
+    m = re.match(r"\[exit=(\d+)\]", head)
+    return bool(m and m.group(1) != "0")
+
+
+def microcompact_session(
+    session: Session,
+    *,
+    keep_turns: int,
+    keep_recent: int = _MICROCOMPACT_KEEP_RECENT,
+) -> tuple[int, int]:
+    """免模型前置减压（E4 第一级）：清掉中段最老的工具结果，保留最近 N 条。
+
+    只改 ``role=tool`` 历史结果的内容（换成占位标记，条数与顺序不变，会话
+    结构合法）；错误类结果受保护；净省不足
+    :data:`_MICROCOMPACT_MIN_SAVED_TOKENS` 时不改会话（宁可不减也不丢小信
+    息）。返回 ``(清理条数, 估算净省 tokens)``。
+    """
+    msgs = session.messages
+    prefix_end = _prefix_end(msgs)
+    tail_start = _tail_start(msgs, prefix_end, keep_turns)
+
+    candidates: list[int] = []
+    for i in range(prefix_end, tail_start):
+        m = msgs[i]
+        if m.role != "tool" or not isinstance(m.content, str):
+            continue
+        if "已剪裁" in m.content or "已清理" in m.content:
+            continue  # 已被剪裁/清理过的结果不再处理
+        if _looks_like_error_result(m.content, error=m.error):
+            continue
+        candidates.append(i)
+
+    if len(candidates) <= keep_recent:
+        return 0, 0
+    to_clear = candidates[:-keep_recent]
+    # 先算净省、后改会话：不足最小值时保持原样（宁可不减也不丢小信息）。
+    saved_chars = sum(
+        max(0, len(msgs[i].content or "") - len(_MICROCOMPACT_CLEARED_MARK))
+        for i in to_clear
+    )
+    saved_tokens = saved_chars // 3
+    if saved_tokens < _MICROCOMPACT_MIN_SAVED_TOKENS:
+        return 0, 0
+    for i in to_clear:
+        msgs[i] = ChatMessage(
+            role="tool",
+            tool_call_id=msgs[i].tool_call_id,
+            name=msgs[i].name,
+            content=_MICROCOMPACT_CLEARED_MARK,
+            error=msgs[i].error,  # 保护标志随消息保留
+        )
+    return len(to_clear), saved_tokens
+
 
 def prune_tool_results(
     messages: list[ChatMessage],
@@ -380,6 +503,7 @@ def compact_session(
     summarize_fn: SummarizerFn | None = None,
     prune_chars: int = 0,
     on_started: Callable[[], None] | None = None,
+    on_commit: Callable[[], None] | None = None,
 ) -> CompactResult:
     """Condense older history in place.
 
@@ -421,6 +545,11 @@ def compact_session(
         if pruned_chars:
             # Pruning alone relieved pressure — commit the pruned middle.
             msgs[prefix_end:tail_start] = middle
+            if on_commit is not None:
+                try:
+                    on_commit()
+                except Exception:
+                    pass  # 提交回调绝不拖垮压缩结果
             return CompactResult(
                 ok=True,
                 removed_count=0,
@@ -499,6 +628,17 @@ def compact_session(
     # summarized away environment facts (date, git branch). Clearing it
     # makes the next turn re-emit a fresh <system-update> baseline.
     session.metadata.pop("system_context_snapshot", None)
+    # 成功提交即解除自动压缩的连续失败熔断 —— 手动 /compact 不走
+    # maybe_auto_compact，所以重置必须放在这里才能同时覆盖两条路。
+    _reset_failure_count(session)
+    # 提交回调（U8 账本生命周期）：被摘要掉的历史里可能包含 read_file 的
+    # 结果，对应的读取账本随之失效 —— 调用方经此清账，防止模型拿不到文件
+    # 却被 stub 挡住。回调异常不拖垮压缩结果。
+    if on_commit is not None:
+        try:
+            on_commit()
+        except Exception:
+            pass
     return CompactResult(
         ok=True,
         removed_count=removed_count,
@@ -549,6 +689,7 @@ def maybe_auto_compact(
     model_name: str,
     on_system: Callable[[str], None] | None = None,
     force: bool = False,
+    on_commit: Callable[[], None] | None = None,
 ) -> CompactResult | None:
     """Check config + usage; compact when the threshold is crossed.
 
@@ -556,9 +697,15 @@ def maybe_auto_compact(
     (every step boundary) and the REPL (after each turn). Reads config,
     measures current usage against the active model's window, and calls
     :func:`compact_session` when warranted. ``force=True`` (overflow
-    recovery) bypasses the threshold / min-message gates but still respects
-    ``auto_compact`` as the master switch. Never raises — any failure
-    surfaces as a notice via ``on_system`` and the session is left intact.
+    recovery) bypasses the threshold / min-message gates **and the failure
+    circuit breaker** but still respects ``auto_compact`` as the master
+    switch. Never raises — any failure surfaces as a notice via ``on_system``
+    and the session is left intact.
+
+    熔断：摘要器连续失败 ≥ :data:`_MAX_AUTO_COMPACT_FAILURES` 次后，自动
+    压缩静默跳过（loop 每个 step 边界都会调到这里，不能再白付一次最长
+    120s 的失败调用）；计数见 ``session.metadata``，由 :func:`compact_session`
+    的成功提交（含手动 /compact）重置。
     """
     try:
         from ..config import load_app_config
@@ -566,21 +713,67 @@ def maybe_auto_compact(
         cfg = load_app_config().prompt
         if not cfg.auto_compact:
             return None
+        # 熔断闸门（最便宜的检查之一，放在最前）：开着就静默跳过。
+        if (
+            not force
+            and _consecutive_failures(session) >= _MAX_AUTO_COMPACT_FAILURES
+        ):
+            return None
         # Cheap gate first — a session under the minimum message count can
         # never compact, and skipping here avoids both the model lookup and
         # any spurious failure notice on tiny sessions.
         if not force and len(session.messages) < cfg.auto_compact_min_messages:
             return None
         entry: ModelEntry = get_model_entry(model_name)
-        used = estimate_session_tokens(session.messages)
+        # E4: 真实用量锚点优先（provider 权威值 prompt+completion），无锚点
+        # 回退字符估算。
+        used = session.anchored_usage_tokens()
+        if used is None:
+            used = estimate_session_tokens(session.messages)
         window = context_window_for(entry)
-        pct = (used / window * 100) if window else 0.0
+        # E5: 压缩分母预留输出 tokens —— input+output 共享窗口，压缩只能让
+        # 出输入侧；80% 触发压缩后一次大输出不再把请求直接推过 100%。
+        reserve = min(max(0, int(cfg.auto_compact_output_reserve_tokens)), window)
+        effective_window = max(0, window - reserve)
+        pct = (used / effective_window * 100) if effective_window else 0.0
+
+        # E4 第一级：microcompact 免模型减压 —— 达全量触发点的子比例（90%
+        # 再扣 2000 tokens 缓冲，对齐 ZCode microcompact.ts）即触发；工具
+        # 输出占大头时清完就够，跳过摘要模型调用。
+        threshold_used = effective_window * cfg.auto_compact_threshold_pct / 100.0
+        micro_trigger = max(
+            0.0,
+            min(
+                threshold_used * _MICROCOMPACT_THRESHOLD_RATIO,
+                threshold_used - _MICROCOMPACT_BUFFER_TOKENS,
+            ),
+        )
+        micro_cleared = 0
+        micro_saved_tokens = 0
+        if not force and threshold_used > 0 and used >= micro_trigger:
+            micro_cleared, micro_saved_chars = microcompact_session(
+                session, keep_turns=cfg.auto_compact_keep_turns
+            )
+            if micro_cleared:
+                micro_saved_tokens = micro_saved_chars
+                used = session.anchored_usage_tokens() or estimate_session_tokens(
+                    session.messages
+                )
+                pct = (used / effective_window * 100) if effective_window else 0.0
+
         if not force and not should_compact(
             used_pct=pct,
             message_count=len(session.messages),
             threshold_pct=cfg.auto_compact_threshold_pct,
             min_messages=cfg.auto_compact_min_messages,
         ):
+            if micro_cleared:
+                # 减压后已低于全量触发点 —— 不再发起摘要模型调用。
+                return CompactResult(
+                    ok=True,
+                    pruned_count=micro_cleared,
+                    saved_tokens=micro_saved_tokens,
+                )
             return None
         result = compact_session(
             session,
@@ -592,11 +785,17 @@ def maybe_auto_compact(
                 if on_system is not None
                 else None
             ),
+            on_commit=on_commit,
         )
+        if not result.ok:
+            # 摘要器失败（compact_session 已回滚并返回 ok=False）— 计数，
+            # 达到阈值时提示一次暂停。
+            _note_failure(session, on_system)
         if on_system is not None and not result.skipped:
             on_system(format_notice(result, auto=True))
         return result
     except Exception as e:
+        _note_failure(session, on_system)
         if on_system is not None:
             on_system(f"[自动压缩失败：{e}；历史未改动]")
         return None

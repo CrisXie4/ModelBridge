@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from modelbridge.agent.tools.registry import build_default_registry
 from modelbridge.agent.tools.skill_tool import UseSkillTool
 from modelbridge.skills.prefs import load_disabled
@@ -81,6 +83,9 @@ def _route_module(monkeypatch, tmp_path):
 
 
 def test_ui_prefs_router_roundtrip(monkeypatch, tmp_path):
+    # web 路由属可选依赖（pyproject 的 web extra）：未装 fastapi 时跳过本用例，
+    # 与 test_web_api.py 的处理一致（_route_module 导入 web 包会连带 fastapi）。
+    pytest.importorskip("fastapi")
     mod = _route_module(monkeypatch, tmp_path)
     first = mod.get_ui_prefs()
     assert "rail_ratio" in first["prefs"]

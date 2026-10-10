@@ -58,6 +58,9 @@ class TransportType(str, Enum):
     """Underlying transport / wire protocol."""
 
     OPENAI_COMPATIBLE = "openai-compatible"
+    # Anthropic Messages 协议（E3）：GLM Coding Plan /api/anthropic 先行；
+    # DeepSeek / Kimi / MiniMax 的 /anthropic 兼容端点可复用同一 adapter。
+    ANTHROPIC_MESSAGES = "anthropic_messages"
 
 
 class ModelLevel(str, Enum):
@@ -303,6 +306,10 @@ class PromptConfig(BaseModel):
     auto_compact_threshold_pct: int = 80
     auto_compact_keep_turns: int = 6
     auto_compact_min_messages: int = 20
+    # E5: 压缩触发的分母预留输出 tokens —— input+output 共享窗口，压缩只能
+    # 让出输入侧，分母 = context_window − min(本值, window)。老配置无此键走
+    # 默认值，行为只向"不溢出"方向收紧。
+    auto_compact_output_reserve_tokens: int = 8192
     # Model-free pruning of oversized *historical* tool results during
     # compaction: text longer than this many chars is rewritten to
     # head+marker+tail before summarization (recent tail stays verbatim).
@@ -314,6 +321,24 @@ class PromptConfig(BaseModel):
     # into the cache-stable system prefix. Disable via
     # ``prompt.system_context_updates: false``.
     system_context_updates: bool = True
+    # finish_reason=length 自动续写：回答被 max_tokens 截断时自动追加一条
+    # "从截断处继续" user 消息接着写完（上限 3 次，见 agent.loop）。思考型
+    # 模型的 reasoning_content 吃掉输出预算时尤其常见。Disable via
+    # ``prompt.auto_continue_on_length: false``.
+    auto_continue_on_length: bool = True
+    # 模型请求有限重试：HTTPProvider.chat 对可重试错误（429/5xx/超时/连接
+    # 与传输类，error_hints.is_retryable_error 判定）做指数退避重试，间隔
+    # base * 2^n 带 ±25% jitter，单次间隔封顶 max_delay_ms。0 = 关闭。
+    # 默认保守的 2 次；老配置没有这些键时直接走默认值，无需迁移。
+    model_retry_max_retries: int = 2
+    model_retry_base_delay_ms: int = 500
+    model_retry_max_delay_ms: int = 8000
+    # 项目规则文件（AGENT.md / AGENTS.md / CLAUDE.md …）从 --cwd 向上遍历到
+    # git 仓库根逐层收集，就近优先——monorepo 子目录启动时仓库根的规则不再
+    # 静默失效。只在同一仓库内走（project.scanner.find_git_root 定界）；仓库
+    # 根运行/无 git 环境行为不变。Disable via
+    # ``prompt.rules_walk_to_git_root: false``.
+    rules_walk_to_git_root: bool = True
 
 
 # Current config.yaml schema version. Bump when a breaking structural change

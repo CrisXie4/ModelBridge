@@ -74,3 +74,41 @@ def test_no_project_path_misses_project_skill(tmp_path):
     # UseSkillTool() without project_path → only global skills searched
     result = UseSkillTool().execute({"name": "release"}, ctx)
     assert result.is_error
+
+
+# --- E7: 目录披露 + ${CLAUDE_SKILL_DIR} 展开 ---------------------------------
+
+def test_use_skill_discloses_base_directory(tmp_path):
+    _write_skill(tmp_path, "deploy", "部署到生产", body="步骤内容。")
+    ctx = _ctx(auto_yes, tmp_path)
+    result = UseSkillTool(project_path=tmp_path).execute({"name": "deploy"}, ctx)
+    assert not result.is_error
+    expected_dir = str(tmp_path / ".modelbridge" / "skills" / "deploy")
+    assert f"本 skill 目录：{expected_dir}" in result.content
+    assert result.structured["base_dir"] == expected_dir
+
+
+def test_use_skill_expands_claude_skill_dir_variable(tmp_path):
+    body = "运行 ${CLAUDE_SKILL_DIR}/scripts/build.sh；备用 ${ZCODE_SKILL_DIR}/run.sh"
+    _write_skill(tmp_path, "builder", "构建", body=body)
+    ctx = _ctx(auto_yes, tmp_path)
+    result = UseSkillTool(project_path=tmp_path).execute({"name": "builder"}, ctx)
+    expected_dir = str(tmp_path / ".modelbridge" / "skills" / "builder")
+    assert not result.is_error
+    assert "${CLAUDE_SKILL_DIR}" not in result.content
+    assert "${ZCODE_SKILL_DIR}" not in result.content
+    assert f"{expected_dir}/scripts/build.sh" in result.content
+
+
+def test_parse_skill_reads_when_to_use(tmp_path):
+    from modelbridge.skills.discovery import parse_skill
+
+    d = tmp_path / ".modelbridge" / "skills" / "wtu"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: wtu\ndescription: 描述\nwhen_to_use: 用户要求部署时\n---\n正文\n",
+        encoding="utf-8",
+    )
+    sk = parse_skill(d / "SKILL.md", scope="project")
+    assert sk is not None
+    assert sk.when_to_use == "用户要求部署时"

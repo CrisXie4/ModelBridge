@@ -108,6 +108,9 @@ PROFILES: dict[ProviderType, ProviderProfile] = {
         model_examples=["glm-5.2", "glm-5.1"],
         default_level=ModelLevel.CHEAP,
         default_capabilities=_CLOUD_CAPS,
+        notes="GLM Coding Plan 订阅 key：models.yaml 里设 type: anthropic_messages "
+              "+ base_url: https://open.bigmodel.cn/api/anthropic（E3 Anthropic "
+              "Messages 传输，glm-5.3-flash 支持 vision/PDF）。",
     ),
     ProviderType.MINIMAX: ProviderProfile(
         provider=ProviderType.MINIMAX,
@@ -117,7 +120,7 @@ PROFILES: dict[ProviderType, ProviderProfile] = {
         model_examples=["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"],
         default_level=ModelLevel.AGENT,
         default_capabilities=_CLOUD_CAPS,
-        notes="OpenAI 兼容 https://api.minimaxi.com/v1；Anthropic 兼容 /anthropic。国内 minimaxi.com / 国际 minimax.io，账号互不通用。model id 官方写法首字母大写含点(MiniMax-M3)；M3 当前 50% 促销。⚠ MiniMax-H3 (2026-07-31 发布) 是全模态视频生成模型 (文/图生视频、2K、15s、¥0.8/秒)，走视频生成 V2 异步 API，不能配置为对话模型。",
+        notes="OpenAI 兼容 https://api.minimaxi.com/v1；Anthropic 兼容 /anthropic（type: anthropic_messages + base_url 加 /anthropic 即用 E3 传输）。国内 minimaxi.com / 国际 minimax.io，账号互不通用。model id 官方写法首字母大写含点(MiniMax-M3)；M3 当前 50% 促销。⚠ MiniMax-H3 (2026-07-31 发布) 是全模态视频生成模型 (文/图生视频、2K、15s、¥0.8/秒)，走视频生成 V2 异步 API，不能配置为对话模型。",
     ),
     ProviderType.HUNYUAN: ProviderProfile(
         provider=ProviderType.HUNYUAN,

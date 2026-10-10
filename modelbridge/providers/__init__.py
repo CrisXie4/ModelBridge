@@ -13,6 +13,7 @@ Per-provider adapters live in their own modules
 """
 
 from ..schemas import ChatRequest, ChatResponse, ProviderError
+from .anthropic_messages import AnthropicMessagesProvider
 from .base import BaseProvider, HTTPProvider, StreamEvent
 from .deepseek import DeepSeekProvider
 from .doubao import DoubaoProvider
@@ -33,6 +34,7 @@ from .stepfun import StepFunProvider
 
 __all__ = [
     "BaseProvider",
+    "AnthropicMessagesProvider",
     "HTTPProvider",
     "StreamEvent",
     "ChatRequest",

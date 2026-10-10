@@ -74,12 +74,22 @@ class MergedRules:
 # Discovery
 # ---------------------------------------------------------------------------
 
-def discover_rule_files(project_path: Path | str | None) -> list[RuleFile]:
+def discover_rule_files(
+    project_path: Path | str | None,
+    *,
+    walk_to_git_root: bool | None = None,
+) -> list[RuleFile]:
     """Walk the search locations and return rule files actually on disk.
 
-    Order: project root → project ``.modelbridge/`` → user global.
+    Order: project root → project ``.modelbridge/`` → 祖先目录（U11：从
+    ``project_path`` 向上到 git 仓库根，就近优先）→ user global.
     Missing locations are silently skipped — callers can detect the
     "nothing found" case by checking ``len(...) == 0``.
+
+    U11: ``walk_to_git_root=None``（默认）读配置 ``prompt.rules_walk_to_git_root``
+    （默认开）。向上遍历只在同一 git 仓库内进行（project.scanner.find_git_root
+    定界，``.git`` 目录或文件都算 worktree 标记）；无 git 根 / 仓库根启动时
+    祖先集合为空，行为与旧版完全一致。
     """
     found: list[RuleFile] = []
 
@@ -99,6 +109,34 @@ def discover_rule_files(project_path: Path | str | None) -> list[RuleFile]:
                             path=p, scope="project_nested",
                             label=f"{NESTED_DIR_NAME}/{name}", size=_safe_size(p),
                         ))
+
+            # U11: 向上遍历到 git 仓库根（就近优先，绝不越出仓库边界）。
+            enabled = walk_to_git_root
+            if enabled is None:
+                try:
+                    enabled = bool(load_app_config().prompt.rules_walk_to_git_root)
+                except Exception:  # noqa: BLE001 — 配置读不出按默认开
+                    enabled = True
+            if enabled:
+                from ..project.scanner import find_git_root
+
+                git_root = find_git_root(proj)
+                if git_root is not None and git_root != proj:
+                    depth = 0
+                    ancestor = proj.parent
+                    while True:
+                        depth += 1
+                        for name in PROJECT_RULE_FILES:
+                            p = ancestor / name
+                            if p.is_file():
+                                found.append(RuleFile(
+                                    path=p, scope="project_ancestor",
+                                    label=f"{'../' * depth}{name}",
+                                    size=_safe_size(p),
+                                ))
+                        if ancestor == git_root:
+                            break
+                        ancestor = ancestor.parent
 
     # User-global rules.md (system.md is handled separately).
     cfg = load_app_config()

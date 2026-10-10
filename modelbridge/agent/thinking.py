@@ -22,6 +22,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from ..model_catalog import MODEL_CATALOG
+
 
 # Named-level aliases: short labels that map to intensity 1-10.
 NAMED_LEVELS: dict[str, int] = {
@@ -71,38 +73,17 @@ class ThinkingProfile:
         return self.min_tokens + (self.max_tokens - self.min_tokens) * (level - 1) // 9
 
 
-# Per-model thinking profiles (token budget ranges for level 1 vs level 10).
-# Only models that support thinking are listed; absence is a feature, not a
-# bug — it tells the REPL "this model doesn't think".
+# Per-model thinking profiles —— E2 起从 :mod:`modelbridge.model_catalog`
+# 的 reasoning 档位派生（目录是唯一数据源）；不在目录里 = 不支持思考，
+# profile_for 返回 None（这是特性：告诉 REPL 该模型不会思考）。
 MODEL_THINKING_PROFILES: dict[str, ThinkingProfile] = {
-    # ---- Kimi / Moonshot — thinking is a core feature ----
-    "kimi-k3":                ThinkingProfile(min_tokens=512, max_tokens=32768, default_level=7),
-    "kimi-k2-thinking":       ThinkingProfile(min_tokens=512, max_tokens=32768, default_level=7),
-    "kimi-k2-thinking-turbo": ThinkingProfile(min_tokens=512, max_tokens=32768, default_level=9),
-    "kimi-k2.7-code":         ThinkingProfile(min_tokens=512, max_tokens=32768, default_level=7),
-    # ---- Qwen / DashScope — supports thinking_budget ----
-    "qwen3-coder-plus":       ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
-    "qwen3-coder-flash":      ThinkingProfile(min_tokens=512, max_tokens=8192,  default_level=4),
-    "qwen3-max":              ThinkingProfile(min_tokens=512, max_tokens=32768, default_level=6),
-    "qwen3.6-plus":           ThinkingProfile(min_tokens=512, max_tokens=32768, default_level=6),
-    "qwen-max-latest":        ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
-    # ---- DeepSeek — V4/V4.1 family: thinking + reasoning_content; the wire
-    # only accepts reasoning_effort high/max (level 10 / budget=max → 'max',
-    # everything else → 'high'). V4.1-Flash（deepseek-flash，2026-09-10）沿用
-    # 同一套线规；FIM 补全仅非思考模式可用 ----
-    "deepseek-flash":       ThinkingProfile(min_tokens=512, max_tokens=8192,  default_level=4),
-    "deepseek-v4":          ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
-    "deepseek-v4-pro":      ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
-    "deepseek-v4-flash":    ThinkingProfile(min_tokens=512, max_tokens=8192,  default_level=4),
-    # ---- 字节豆包 — seed 系列默认深度思考 (thinking 开关) ----
-    "doubao-seed":          ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
-    # ---- 百度文心 — x1 推理系列 ----
-    "ernie-x1":             ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
-    # ---- MiMo / 小米 — thinking + tool_calls ----
-    "mimo-v2.5":              ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
-    "mimo-v2.5-pro":          ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=6),
-    # ---- GLM / 智谱 — 5.x series supports thinking ----
-    "glm-5.2":                ThinkingProfile(min_tokens=512, max_tokens=16384, default_level=5),
+    e.pattern: ThinkingProfile(
+        min_tokens=e.reasoning.min_tokens,
+        max_tokens=e.reasoning.max_tokens,
+        default_level=e.reasoning.default_level,
+    )
+    for e in MODEL_CATALOG
+    if e.reasoning is not None and not e.regex
 }
 
 

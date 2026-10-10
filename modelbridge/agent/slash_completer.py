@@ -68,11 +68,23 @@ class SlashCommandCompleter(Completer):
         self,
         *,
         model_names_provider: Callable[[], list[str]] | None = None,
+        custom_commands_provider: Callable[[], list[tuple[str, str]]] | None = None,
     ) -> None:
         self._help = slash_command_help()
         # Lazy provider so the completer doesn't trigger a config load on
         # construction (only when the user actually types `/model <prefix>`).
         self._model_names_provider = model_names_provider
+        # E6: 自定义命令提供方（惰性）—— 返回 [(name, description), ...]。
+        # 内建命令优先；未命中内建表的自定义命令按名补进补全面。
+        self._custom_commands_provider = custom_commands_provider
+
+    def _custom_commands(self) -> list[tuple[str, str]]:
+        if self._custom_commands_provider is None:
+            return []
+        try:
+            return list(self._custom_commands_provider() or [])
+        except Exception:
+            return []  # 发现失败不影响内建补全
 
     def get_completions(
         self, document: Document, complete_event
@@ -89,7 +101,19 @@ class SlashCommandCompleter(Completer):
         # Phase 1: still inside the command name (no space entered yet).
         if " " not in body:
             name_part = body.lstrip()  # tolerate "//" double-slash typos
+            builtin_names = set(self._help)
             for cmd, desc in self._help.items():
+                if not name_part or cmd.startswith(name_part):
+                    yield Completion(
+                        text=cmd,
+                        start_position=-len(name_part),
+                        display="/" + cmd,
+                        display_meta=desc[:40] if desc else "",
+                    )
+            # E6: 自定义命令（与内建同名时内建优先 —— 内建已在上面的表里）。
+            for cmd, desc in self._custom_commands():
+                if cmd in builtin_names:
+                    continue
                 if not name_part or cmd.startswith(name_part):
                     yield Completion(
                         text=cmd,

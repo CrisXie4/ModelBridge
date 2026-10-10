@@ -24,6 +24,8 @@ key. Sections 6–7 are the variable tail.
 from __future__ import annotations
 
 import hashlib
+import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -70,6 +72,39 @@ PREFIX_SECTIONS: tuple[str, ...] = (
     "project_summary",
     "tools_schema",
 )
+
+
+# ---------------------------------------------------------------------------
+# Constant env-info block (cwd / platform / shell)
+# ---------------------------------------------------------------------------
+
+def _env_info_block(project_path: Path | None) -> str:
+    """常量环境信息块，追加进 stable prefix 的 ``project_summary`` 段。
+
+    披露模型本来就无法自行得知、却直接决定 run_bash 语法能否成功的事实：
+    工作目录、平台、目标 shell。与 prefix-cache 约束兼容：这三项是
+    "同一项目 + 同一台机器" 内字节不变的常量，前缀仍逐字节稳定、缓存照常
+    命中（ZCode 同型实现见 context/sections/env-info.ts）。git branch /
+    status 等可变值**刻意不进这里**——它们属于动态 ``<system-update>``
+    （见 context.system_context）。
+
+    Shell 取值与 executor.runner 的 ``subprocess(shell=True)`` 语义一致：
+    Windows 用 COMSPEC（默认 cmd.exe），POSIX 一律 /bin/sh。
+    """
+    if project_path is None:
+        return ""
+    if sys.platform == "win32":
+        shell = os.path.basename(os.environ.get("COMSPEC") or "cmd.exe")
+    else:
+        shell = "/bin/sh"
+    return "\n".join(
+        [
+            "### 运行环境",
+            f"- 工作目录: `{project_path}`",
+            f"- 平台: `{sys.platform}`",
+            f"- Shell: `{shell}`",
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -325,8 +360,14 @@ class PromptBuilder:
 
         # 4) project_summary
         if self.project_summary_text:
+            summary_body = self.project_summary_text.strip()
+            # 常量环境信息（cwd/platform/shell）随 summary 进 stable prefix：
+            # 同项目同机器字节不变，prefix-cache 仍命中（见 _env_info_block）。
+            env_block = _env_info_block(self.project_path)
+            if env_block:
+                summary_body = f"{summary_body}\n\n{env_block}"
             sections["project_summary"] = (
-                "# Project Summary\n\n" + self.project_summary_text.strip() + "\n"
+                "# Project Summary\n\n" + summary_body + "\n"
             )
             sources["project_summary"].append(str(self.project_path or "<inline>"))
 

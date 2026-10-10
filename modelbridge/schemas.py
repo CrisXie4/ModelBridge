@@ -46,6 +46,11 @@ class ChatMessage(BaseModel):
     tool_call_id: str | None = None
     reasoning_content: str | None = None
     raw: dict[str, Any] | None = None
+    # 工具失败标志（评审修复）：role=tool 消息写入历史时由
+    # ``Session.add_tool_result(error=...)`` 记录 —— OpenAI 协议无错误字段，
+    # 消息体是普通文本；microcompact 据此保护失败结果不被清理（不再依赖
+    # 文案启发式）。不出现在 to_wire（协议本身无此字段）。
+    error: bool = False
 
     def to_wire(self) -> dict[str, Any]:
         """Render this message for an OpenAI-style request body.
@@ -174,15 +179,23 @@ class ProviderError(Exception):
         error_type: str | None = None,
         hint: str | None = None,
         raw: Any = None,
+        request_id: str | None = None,
+        retry_after: float | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.provider = provider
         self.status_code = status_code
-        # one of: http_4xx, http_5xx, timeout, connect, decode, transport, unknown
+        # one of: http_4xx, http_5xx, timeout, connect, decode, transport, unknown,
+        #         business_error, business_rate_limited, business_quota_exhausted,
+        #         context_exceeded
         self.error_type = error_type
         self.hint = hint
         self.raw = raw
+        # 厂商请求 ID（request_id/requestId/id 兜底链，U10）——报障必填。
+        self.request_id = request_id
+        # Retry-After 响应头（秒，E1③）——重试包装优先于本地退避使用。
+        self.retry_after = retry_after
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -191,6 +204,8 @@ class ProviderError(Exception):
             "error_type": self.error_type,
             "message": self.message,
             "hint": self.hint,
+            "request_id": self.request_id,
+            "retry_after": self.retry_after,
         }
 
 

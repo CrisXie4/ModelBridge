@@ -37,6 +37,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .diff_parser import FileDiff, Hunk, ParsedDiff
+from .line_endings import (
+    apply_line_endings,
+    detect_line_endings,
+    normalize_to_lf,
+    read_text_raw,
+)
 
 
 # How many lines either side of the hunk's claimed start to search.
@@ -161,7 +167,11 @@ def _apply_create(
     if not dry_run:
         try:
             abs_path.parent.mkdir(parents=True, exist_ok=True)
-            abs_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+            # 新建文件按 diff 内容原样写（\n 即 LF），newline="" 禁止
+            # os.linesep 翻译 —— 否则 Windows 上新建文件一律变 CRLF。
+            abs_path.write_text(
+                "\n".join(new_lines) + "\n", encoding="utf-8", newline=""
+            )
         except OSError as e:
             return FileApplyResult(
                 path=target_rel, status="failed", operation="create",
@@ -241,12 +251,17 @@ def _apply_modify(
             reason=f"目标文件不存在: {target_rel}", hunks_total=len(fd.hunks),
         )
     try:
-        original = abs_path.read_text(encoding="utf-8")
+        # 原样读入（不折叠行尾）以便探测并保真原文件的行尾风格；hunk 的
+        # 锚点匹配照旧在 LF 归一化文本上进行（diff_parser 已把 hunk 行
+        # 归一化成 \n，见其模块注释）。
+        raw = read_text_raw(abs_path)
     except (OSError, UnicodeDecodeError) as e:
         return FileApplyResult(
             path=target_rel, status="failed", operation="modify",
             reason=f"读取原文件失败: {e}", hunks_total=len(fd.hunks),
         )
+    original = normalize_to_lf(raw)
+    file_eol = detect_line_endings(raw)
 
     # Preserve trailing newline behaviour.
     had_trailing_nl = original.endswith("\n")
@@ -285,10 +300,14 @@ def _apply_modify(
     new_text = "\n".join(new_lines)
     if had_trailing_nl:
         new_text += "\n"
+    # 行尾保真：把原文件的行尾风格应用回去，再以 newline="" 原样写盘。
+    # 默认 write_text 会把 \n 翻译成 os.linesep —— Windows 上 LF-only
+    # 文件会被整体改写成 CRLF，制造全文件 diff 噪声。
+    new_text = apply_line_endings(new_text, file_eol)
 
     if not dry_run:
         try:
-            abs_path.write_text(new_text, encoding="utf-8")
+            abs_path.write_text(new_text, encoding="utf-8", newline="")
         except OSError as e:
             return FileApplyResult(
                 path=target_rel, status="failed", operation="modify",

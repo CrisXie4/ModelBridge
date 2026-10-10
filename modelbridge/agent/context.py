@@ -105,6 +105,45 @@ class AgentContext:
     # True when a subagent tool is registered for this session — lets tools
     # tailor truncation hints ("delegate to a subagent") to what's available.
     delegable: bool = False
+    # 文件读取账本（U8，对齐 ZCode readFileState）：绝对路径字符串 →
+    # (st_mtime_ns, st_size)。read_file 记账；str_replace / write_file 命中
+    # "读过但已被外部改动"的文件时报错请重读；重复读同一未变文件返回短
+    # stub 省上下文。未读过的文件行为完全不变。仅记文本读取（图片/视频
+    # 走独立消费路径不记账）。
+    file_reads: dict[str, tuple[int, int]] = field(default_factory=dict)
+
+    # ------------------------------------------------------------------
+    # 文件读取账本（U8）
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def file_fingerprint(path: Path) -> tuple[int, int] | None:
+        """磁盘指纹 (st_mtime_ns, st_size)；stat 失败返回 None。"""
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def file_read_state(self, path: Path) -> tuple[int, int] | None:
+        """该路径的记账指纹；从未读过返回 None。"""
+        return self.file_reads.get(str(path))
+
+    def note_file_read(self, path: Path) -> None:
+        """记录/刷新一次文件读取（stat 失败则静默跳过，不影响主流程）。"""
+        fp = self.file_fingerprint(path)
+        if fp is not None:
+            self.file_reads[str(path)] = fp
+
+    def is_externally_modified(self, path: Path) -> bool:
+        """True = 读过，但磁盘上的 (mtime, size) 已与记账时不一致。
+
+        未读过的文件返回 False —— 账本只加防护，不改变未读文件的行为。
+        """
+        recorded = self.file_reads.get(str(path))
+        if recorded is None:
+            return False
+        return self.file_fingerprint(path) != recorded
 
     def confirm(
         self,
